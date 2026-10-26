@@ -5,3 +5,11 @@ node_modules/
 src-tauri/binaries/
 dist/
 fixtures-raw/
+
+# tauri scaffold
+logs
+*.log
+dist-ssr
+*.local
+.DS_Store
+src-tauri/gen/schemas/

@@ -1,0 +1,631 @@
+/* Токены и классы из макета docs/superpowers/specs/mockups/flow-v2.html. Шрифты вложены (OFL). */
+@font-face {
+  font-family: "Unbounded";
+  src: url("./assets/fonts/Unbounded-Variable.ttf") format("truetype");
+  font-weight: 200 900;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Onest";
+  src: url("./assets/fonts/Onest-Variable.ttf") format("truetype");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+:root {
+  --desk: #dce3e1; /* фон «рабочего стола» */
+  --paper: #fbfcfb; /* окно программы */
+  --ink: #13312f; /* основной текст, тёмная хвоя */
+  --muted: #5e7472;
+  --line: #d3dcda;
+  --go: #f5c342; /* единственный яркий цвет: действие и прогресс */
+  --ok: #2e8b57;
+  --off: #a7b3b1;
+  --soft: #eef3f2;
+  --bad: #a8442f;
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  height: 100%;
+}
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 15px/1.5 "Onest", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+}
+input,
+button {
+  font: inherit;
+  color: inherit;
+}
+input {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+#app {
+  height: 100%;
+}
+.win {
+  height: 100%;
+  display: grid;
+  grid-template-columns: 170px 1fr;
+}
+
+/* Левая колонка: где человек сейчас */
+.steps {
+  background: var(--ink);
+  color: #cfe0dd;
+  padding: 22px 16px;
+  display: flex;
+  flex-direction: column;
+}
+.steps .brand {
+  font: 700 13px/1.2 "Unbounded", sans-serif;
+  color: #fff;
+  margin-bottom: 26px;
+}
+.steps ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: s;
+}
+.steps li {
+  counter-increment: s;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 0;
+  font-size: 13.5px;
+  opacity: 0.55;
+}
+.steps li::before {
+  content: counter(s);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  flex: none;
+}
+.steps li.done {
+  opacity: 0.85;
+}
+.steps li.done::before {
+  content: "✓";
+  background: #2e5c58;
+  border-color: #2e5c58;
+}
+.steps li.now {
+  opacity: 1;
+  color: #fff;
+  font-weight: 600;
+}
+.steps li.now::before {
+  background: var(--go);
+  border-color: var(--go);
+  color: var(--ink);
+}
+.steps .foot {
+  margin-top: auto;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #9fb8b4;
+  overflow-wrap: anywhere;
+}
+.steps .foot .update {
+  color: var(--go);
+  margin-top: 8px;
+}
+
+/* Правая часть */
+.body {
+  padding: 26px 28px 22px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.body h2 {
+  font: 500 21px/1.2 "Unbounded", sans-serif;
+  margin: 0 0 6px;
+  letter-spacing: -0.01em;
+}
+.body .lead {
+  color: var(--muted);
+  margin: 0 0 20px;
+  font-size: 14px;
+  max-width: 60ch;
+}
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin-right: -12px;
+  padding-right: 12px;
+}
+.push {
+  margin-top: auto;
+  padding-top: 18px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.field {
+  display: block;
+  margin-bottom: 12px;
+  max-width: 360px;
+}
+.field span {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.input {
+  width: 100%;
+  border: 1.5px solid var(--line);
+  border-radius: 9px;
+  padding: 10px 12px;
+  background: #fff;
+  outline: none;
+}
+.input:focus,
+.code input:focus {
+  border-color: var(--ink);
+}
+.code {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.code input {
+  width: 40px;
+  height: 48px;
+  border: 1.5px solid var(--line);
+  border-radius: 9px;
+  text-align: center;
+  font: 600 20px "Onest", sans-serif;
+  background: #fff;
+  outline: none;
+  padding: 0;
+}
+
+.btn {
+  background: var(--go);
+  color: var(--ink);
+  border: 0;
+  border-radius: 10px;
+  padding: 11px 18px;
+  font: 600 14.5px "Onest", sans-serif;
+  cursor: pointer;
+}
+.btn:disabled {
+  background: var(--line);
+  color: var(--muted);
+  cursor: default;
+}
+.btn.ghost {
+  background: transparent;
+  border: 1.5px solid var(--line);
+  padding: 9.5px 16.5px;
+}
+.btn.small {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+.btn.ghost.small {
+  padding: 4.5px 10.5px;
+}
+.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.note {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.error {
+  color: var(--bad);
+  font-size: 13.5px;
+  margin: 4px 0 8px;
+}
+.banner {
+  background: var(--soft);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  margin-bottom: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.banner > span {
+  flex: 1;
+}
+
+/* Строки приложений */
+.group {
+  font: 500 13px/1.2 "Unbounded", sans-serif;
+  color: var(--muted);
+  margin: 16px 0 4px;
+}
+.group:first-child {
+  margin-top: 0;
+}
+.app {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+}
+.app:last-child {
+  border-bottom: 0;
+}
+label.app {
+  cursor: pointer;
+}
+.ico {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font: 700 13px "Unbounded", sans-serif;
+  flex: none;
+}
+.ico.tight {
+  font-size: 10px;
+  letter-spacing: -0.03em;
+}
+.app .t {
+  flex: 1;
+  min-width: 0;
+}
+.app .t b {
+  display: block;
+  font-weight: 600;
+  font-size: 14.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.app .t small {
+  color: var(--ok);
+  font-size: 12.5px;
+  display: block;
+}
+.app .t small.muted {
+  color: var(--muted);
+}
+.app .t small.bad {
+  color: var(--bad);
+}
+.app.no {
+  opacity: 0.55;
+  cursor: default;
+}
+.app.no .t small {
+  color: var(--muted);
+}
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+.box {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1.5px solid var(--line);
+  background: #fff;
+  flex: none;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.box:checked {
+  background: var(--ink);
+  border-color: var(--ink);
+}
+.box:checked::after {
+  content: "✓";
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+}
+.box:disabled {
+  cursor: default;
+}
+.box:focus-visible,
+.btn:focus-visible,
+.link:focus-visible,
+.device:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.empty {
+  color: var(--muted);
+  font-size: 14px;
+  padding: 10px 0;
+}
+.search {
+  border: 1.5px dashed var(--line);
+  margin: 6px 0 4px;
+}
+.linkform {
+  margin-top: 16px;
+}
+.linkform .note {
+  margin: 0 0 6px;
+}
+.addlink {
+  display: flex;
+  gap: 8px;
+}
+.addlink .input {
+  flex: 1;
+  padding: 8px 12px;
+}
+
+.spin {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--off);
+  border-top-color: transparent;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: -1px;
+  animation: spin 0.9s linear infinite;
+}
+.loading {
+  color: var(--muted);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* iPhone */
+.phone {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  background: var(--soft);
+  border-radius: 12px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.phone svg {
+  flex: none;
+}
+.phone .t {
+  flex: 1;
+}
+.devices {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.device {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  text-align: left;
+  background: #fff;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+.device.on {
+  border-color: var(--ink);
+  background: var(--soft);
+}
+.device .t {
+  flex: 1;
+}
+.question {
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.question b {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.question .opts {
+  display: flex;
+  gap: 8px;
+}
+.question .opts .btn.ghost[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--soft);
+}
+.question p {
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.bar {
+  height: 6px;
+  background: var(--line);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 6px;
+  position: relative;
+}
+.bar i {
+  display: block;
+  height: 100%;
+  background: var(--go);
+  transition: width 0.3s;
+}
+.bar.indeterminate i {
+  width: 35%;
+  position: absolute;
+  animation: slide 1.4s ease-in-out infinite;
+}
+@keyframes slide {
+  from {
+    left: -35%;
+  }
+  to {
+    left: 100%;
+  }
+}
+.state {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.state.bad {
+  color: var(--bad);
+  white-space: normal;
+  max-width: 260px;
+  text-align: right;
+}
+.right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* Готово */
+.big-ok {
+  font: 700 44px/1 "Unbounded", sans-serif;
+  color: var(--ok);
+  margin: 6px 0 14px;
+}
+.big-ok.partial {
+  color: var(--ink);
+}
+.saved {
+  background: var(--soft);
+  border-radius: 12px;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  margin-top: 14px;
+}
+
+/* Предупреждение */
+.warn {
+  font-size: 16px;
+  line-height: 1.55;
+  max-width: 52ch;
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spin,
+  .bar.indeterminate i {
+    animation: none;
+  }
+  .bar.indeterminate i {
+    left: 0;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+/* Задача 8b */
+.body h2:focus {
+  outline: none;
+}
+.steps .foot .openlib {
+  margin-top: 8px;
+}
+.steps .foot .link {
+  color: #cfe0dd;
+  font-size: 12px;
+  text-align: left;
+}
+.steps .foot .error {
+  color: #ffb4a8;
+  font-size: 12px;
+  margin: 4px 0 0;
+}
+.openlib .error {
+  margin: 6px 0 0;
+}
+.state.ok {
+  color: var(--ok);
+}
+
+/* «Все копии» в левой колонке: не шаг, а отдельное место */
+.copies-link {
+  all: unset;
+  cursor: pointer;
+  margin-top: 18px;
+  padding: 7px 0;
+  font-size: 13.5px;
+  opacity: 0.8;
+}
+.copies-link:hover,
+.copies-link.now {
+  opacity: 1;
+  color: #fff;
+}
+.copies-link.now {
+  font-weight: 600;
+}
+.copies-link:focus-visible,
+.pick:focus-visible {
+  outline: 2px solid var(--go);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Строка Apple ID: вся строка — кнопка выбора, «Забыть» справа */
+.pick {
+  all: unset;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+}
+.pick:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.ico.acct {
+  background: var(--ink);
+}
+.app.on .t b {
+  color: var(--ok);
+}

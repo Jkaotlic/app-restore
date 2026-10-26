@@ -1,0 +1,133 @@
+import type { AccountMatchDto, InstallState, JobDto, PhoneDto, PurchasesProgress, RowDto } from "./types";
+
+export interface JobView {
+  text: string;
+  /** null — без полосы; число — проценты; "indeterminate" — идёт, сколько осталось неизвестно. */
+  bar: number | "indeterminate" | null;
+  retry: boolean;
+}
+
+const MB = 1024 * 1024;
+
+/** Строка задания на экране «iPhone». */
+export function jobView(s: JobDto, fromSaved: string | null): JobView {
+  switch (s.kind) {
+    case "queued":
+      return { text: "В очереди", bar: 0, retry: false };
+    case "downloading":
+      return { text: `Скачано ${Math.round(s.bytes / MB)} МБ`, bar: "indeterminate", retry: false };
+    case "saved":
+      return { text: "Скачано, ждём iPhone", bar: null, retry: false };
+    case "installing":
+      return { text: `Устанавливается, ${s.percent}%`, bar: s.percent, retry: false };
+    case "installed":
+      return { text: fromSaved ? `Поставлена сохранённая копия ${fromSaved}` : "Установлено", bar: null, retry: false };
+    case "failed":
+      return { text: s.error.text, bar: null, retry: true };
+  }
+}
+
+/** Дальше задание само не сдвинется: установлено или ошибка. */
+export function isFinished(s: JobDto): boolean {
+  return s.kind === "installed" || s.kind === "failed";
+}
+
+/** Строка на экране «Готово». С другим Apple ID говорим, в какой ID войти при первом запуске. */
+export function doneText(s: JobDto, fromSaved: string | null, sameAppleId: boolean | null, email: string | null): string {
+  const base = jobView(s, fromSaved).text;
+  if (s.kind !== "installed" || sameAppleId !== false) return base;
+  return `${base}. При первом запуске войдите в ${email ?? "Apple ID, с которого скачивали"}`;
+}
+
+export function phoneView(p: PhoneDto): { title: string; subtitle: string; isIpad: boolean } {
+  const isIpad = p.device_class === "iPad";
+  const os = p.ios_version ? `${isIpad ? "iPadOS" : "iOS"} ${p.ios_version}` : "";
+  const head = isIpad ? "iPad" : "Подключён";
+  return { title: p.name, subtitle: os ? `${head}, ${os}` : head, isIpad };
+}
+
+/** «На iPhone: X · Доступно: Y». Без телефона только «Доступно». */
+export function versionLine(r: Pick<RowDto, "installed_version" | "available_version">, withPhone: boolean): string | null {
+  const parts: string[] = [];
+  if (withPhone && r.installed_version !== null) parts.push(`На iPhone: ${r.installed_version || "есть"}`);
+  if (r.available_version) parts.push(`Доступно: ${r.available_version}`);
+  return parts.length ? parts.join(" · ") : null;
+}
+
+/** Подпись состояния на телефоне. */
+export function installCaption(s: InstallState, withPhone: boolean): string | null {
+  if (!withPhone) return null;
+  if (s === "installed") return "Уже стоит на iPhone";
+  if (s === "update_available") return "Есть версия новее";
+  return null;
+}
+
+export function purchasesProgressText(p: PurchasesProgress | null): string {
+  return p ? `Загружаем покупки: страница ${p.page} из ${p.pages}` : "Загружаем покупки";
+}
+
+/** Подсказка над выбором устройства; null — выбирать нечего или уже выбрано. */
+export function chooserNote(phones: PhoneDto[]): string | null {
+  if (phones.length > 1) return "Подключено несколько устройств. Выберите, куда ставить.";
+  if (phones.length === 1 && !phones[0].target) {
+    return phones[0].device_class === "iPad" ? "Это iPad. Подключите iPhone или выберите iPad" : "Выберите, куда ставить.";
+  }
+  return null;
+}
+
+/** Ответ «Нет, другой» на вопрос про Apple ID. */
+export function otherIdText(email: string | null): string {
+  const id = email ? `Apple ID ${email}` : "Apple ID, с которого скачивали";
+  return `Приложения установятся. При первом запуске iPhone попросит войти в ${id}. Обновлений через App Store у них не будет — их там больше нет.`;
+}
+
+/** «Дальше» на шаге iPhone: устройство выбрано и на вопрос ответили. */
+export function canProceed(phones: PhoneDto[], sameAppleId: boolean | null): boolean {
+  return sameAppleId !== null && phones.some((p) => p.target);
+}
+
+/** Ставим на iPhone: решает только выбранное устройство, а не то, как прошли шаг iPhone. */
+export function installsToIphone(phones: PhoneDto[]): boolean {
+  return phones.find((p) => p.target)?.device_class === "iPhone";
+}
+
+/** «Продолжить без iPhone» — только пока устройство не выбрано; с ним идут через «Дальше». */
+export function showSkip(phones: PhoneDto[]): boolean {
+  return !phones.some((p) => p.target);
+}
+
+/** На «Готово» спросить про Apple ID: шаг iPhone пропустили, телефон появился, ответа нет. */
+export function askAppleIdOnDone(withPhone: boolean, sameAppleId: boolean | null, phones: PhoneDto[]): boolean {
+  return !withPhone && sameAppleId === null && phones.some((p) => p.target);
+}
+
+/** Что показать на шаге iPhone про Apple ID: ничего, прежний вопрос или предупреждение. */
+export type AccountBlock = { kind: "none" } | { kind: "question" } | { kind: "different"; text: string };
+
+/** `m` — итог `phone_account`; null — ещё не проверяли. `program` — Apple ID в программе. */
+export function accountBlock(m: AccountMatchDto | null, program: string | null): AccountBlock {
+  if (m?.kind === "same") return { kind: "none" };
+  if (m?.kind === "different") {
+    const id = program ?? "ваш Apple ID";
+    return {
+      kind: "different",
+      text: `На этом iPhone покупки с ${m.phone_masked}. Приложения с вашего Apple ID при запуске попросят войти в ${id}.`,
+    };
+  }
+  return { kind: "question" };
+}
+
+/** Ответ на «тот же Apple ID?» по итогу проверки: известен только при совпадении. */
+export function sameFromMatch(m: AccountMatchDto): boolean | null {
+  return m.kind === "same" ? true : null;
+}
+
+/** Куда после входа. После «Войти в Apple ID этого iPhone» — сразу на «Выбор», если аккаунт совпал. */
+export function afterLoginScreen(switched: boolean, m: AccountMatchDto | null): "choose" | "phone" {
+  return switched && m?.kind === "same" ? "choose" : "phone";
+}
+
+/** Подпись копии, чей Apple ID неизвестен (лежит в «Мои приложения» без папки аккаунта). */
+export function unknownAccountNote(r: { unknown_account: boolean }): string | null {
+  return r.unknown_account ? "Неизвестный Apple ID" : null;
+}

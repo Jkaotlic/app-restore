@@ -1,0 +1,2 @@
+{"level":"info","time":"2026-10-26T13:03:52+03:00","message":"preparing authentication; the first login may take a few minutes"}
+{"level":"error","error":"apple did not complete verification; try a fresh 2FA code","success":false,"time":"2026-10-26T13:03:54+03:00"}

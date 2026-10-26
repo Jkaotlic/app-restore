@@ -1,0 +1,16 @@
+# Pinned ipatool sidecar (https://github.com/majd/ipatool). Format: key=value.
+# ARCHIVE_* = sha256 of the release .tar.gz (matches GitHub asset digest).
+# BIN_*     = sha256 of the extracted binary inside the archive.
+VERSION=2.7.0
+ARCHIVE_macos_arm64_NAME=ipatool-2.7.0-macos-arm64.tar.gz
+ARCHIVE_macos_arm64_SHA256=5ae100d4520cf4b3f4374239e5925a9ad9a8dc02abc16bae27479e7ae99aca33
+BIN_macos_arm64_PATH=bin/ipatool-2.7.0-macos-arm64
+BIN_macos_arm64_SHA256=ba0f7992016c06a24501dfdd6bd55505ef179af15a4d17fc049f1d577c702fc7
+ARCHIVE_macos_amd64_NAME=ipatool-2.7.0-macos-amd64.tar.gz
+ARCHIVE_macos_amd64_SHA256=05f48994d8b3cfefe7ea1172a0ac0b28715888e9df0af38cf3e490d2ed592263
+BIN_macos_amd64_PATH=bin/ipatool-2.7.0-macos-amd64
+BIN_macos_amd64_SHA256=f37f1eb183214e36252f5f366845642e9eeca48b904ec0fa3e75f633e4816050
+ARCHIVE_windows_amd64_NAME=ipatool-2.7.0-windows-amd64.tar.gz
+ARCHIVE_windows_amd64_SHA256=b729608716908be287c2e6972f9e8cd05f879810ae5d182fc856c9e57cca0dd5
+BIN_windows_amd64_PATH=bin/ipatool-2.7.0-windows-amd64.exe
+BIN_windows_amd64_SHA256=7b83589b74ad533f5d5dbab0ca87a5cb76b123bcbeb2553d57e9c154e35d8755

@@ -1,0 +1,886 @@
+[
+  {
+    "track_id": 492224193,
+    "name": "СберБанк Онлайн",
+    "aliases": ["Сбербанк", "СБОЛ"],
+    "letter": "С",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD-%D1%81-%D1%81%D0%B0%D0%BB%D1%8E%D1%82%D0%BE%D0%BC/id492224193"
+  },
+  {
+    "track_id": 477153628,
+    "name": "Сбербанк Онлайн (старая версия)",
+    "aliases": [],
+    "letter": "С",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD/id477153628"
+  },
+  {
+    "track_id": 434391123,
+    "name": "Сбербанк Онлайн для iPad",
+    "aliases": [],
+    "letter": "С",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD-%D0%B4%D0%BB%D1%8F-ipad/id434391123",
+    "seller": "Сбербанк России"
+  },
+  {
+    "track_id": 1623494289,
+    "name": "Сбербанк Онлайн сайт",
+    "aliases": [],
+    "letter": "С",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD-%D1%81%D0%B0%D0%B9%D1%82/id1623494289"
+  },
+  {
+    "track_id": 1313814838,
+    "name": "Сбербанк Идея",
+    "aliases": [],
+    "letter": "С",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B8%D0%B4%D0%B5%D1%8F/id1313814838",
+    "seller": "Сбербанк России"
+  },
+  {
+    "track_id": 1241911264,
+    "name": "Сбербанк Инвестор",
+    "aliases": [],
+    "letter": "С",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%BE%D1%80/id1241911264"
+  },
+  {
+    "track_id": 899985834,
+    "name": "Сбербанк Бизнес Онлайн",
+    "aliases": [],
+    "letter": "С",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD/id899985834"
+  },
+  {
+    "track_id": 1166642457,
+    "name": "СберМаркет",
+    "aliases": [],
+    "letter": "С",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%BC%D0%B0%D1%80%D0%BA%D0%B5%D1%82-%D0%B4%D0%BE%D1%81%D1%82%D0%B0%D0%B2%D0%BA%D0%B0-%D0%BF%D1%80%D0%BE%D0%B4%D1%83%D0%BA%D1%82%D0%BE%D0%B2/id1166642457"
+  },
+  {
+    "track_id": 472951966,
+    "name": "ВТБ Онлайн",
+    "aliases": [],
+    "letter": "В",
+    "color": "#009FDF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D1%82%D0%B1-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD/id472951966"
+  },
+  {
+    "track_id": 1364026756,
+    "name": "ВТБ Мои Инвестиции",
+    "aliases": [],
+    "letter": "В",
+    "color": "#009FDF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D1%82%D0%B1-%D0%BC%D0%BE%D0%B8-%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%B8%D1%86%D0%B8%D0%B8/id1364026756"
+  },
+  {
+    "track_id": 1199445530,
+    "name": "ВТБ Бизнес Онлайн",
+    "aliases": [],
+    "letter": "В",
+    "color": "#009FDF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D1%82%D0%B1-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD/id1199445530"
+  },
+  {
+    "track_id": 1434061167,
+    "name": "ВТБ Путешествия",
+    "aliases": [],
+    "letter": "В",
+    "color": "#009FDF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D1%82%D0%B1-%D0%BF%D1%83%D1%82%D0%B5%D1%88%D0%B5%D1%81%D1%82%D0%B2%D0%B8%D1%8F/id1434061167"
+  },
+  {
+    "track_id": 353127685,
+    "name": "Альфа-Банк (Альфа-Мобайл)",
+    "aliases": [],
+    "letter": "А",
+    "color": "#EF3124",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B0%D0%BB%D1%8C%D1%84%D0%B0-%D0%B1%D0%B0%D0%BD%D0%BA/id353127685"
+  },
+  {
+    "track_id": 455652438,
+    "name": "Тинькофф (Т-Банк)",
+    "aliases": [],
+    "letter": "Т",
+    "color": "#FFDD2D",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/tinkoff/id455652438",
+    "seller": "Tinkoff Bank"
+  },
+  {
+    "track_id": 1183786286,
+    "name": "Тинькофф Инвестиции",
+    "aliases": [],
+    "letter": "Т",
+    "color": "#FFDD2D",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%82%D0%B8%D0%BD%D1%8C%D0%BA%D0%BE%D1%84%D1%84-%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%B8%D1%86%D0%B8%D0%B8/id1183786286",
+    "seller": "Tinkoff Bank"
+  },
+  {
+    "track_id": 1031837973,
+    "name": "Тинькофф Бизнес",
+    "aliases": [],
+    "letter": "Т",
+    "color": "#FFDD2D",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%82%D0%B8%D0%BD%D1%8C%D0%BA%D0%BE%D1%84%D1%84-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81/id1031837973"
+  },
+  {
+    "track_id": 1255182214,
+    "name": "Тинькофф Мобайл",
+    "aliases": [],
+    "letter": "Т",
+    "color": "#FFDD2D",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/tinkoff-mobile/id1255182214",
+    "seller": "Tinkoff Bank"
+  },
+  {
+    "track_id": 1406492297,
+    "name": "Газпромбанк",
+    "aliases": [],
+    "letter": "Г",
+    "color": "#0B5FA5",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B3%D0%B0%D0%B7%D0%BF%D1%80%D0%BE%D0%BC%D0%B1%D0%B0%D0%BD%D0%BA/id1406492297",
+    "seller": "Gazprombank AO"
+  },
+  {
+    "track_id": 1522503634,
+    "name": "Газпромбанк Инвестиции",
+    "aliases": [],
+    "letter": "Г",
+    "color": "#0B5FA5",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B3%D0%B0%D0%B7%D0%BF%D1%80%D0%BE%D0%BC%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%B8%D1%86%D0%B8%D0%B8/id1522503634",
+    "seller": "NEWTON INVESTMENTS LLC"
+  },
+  {
+    "track_id": 1117817509,
+    "name": "РСХБ Онлайн (Россельхозбанк)",
+    "aliases": [],
+    "letter": "Р",
+    "color": "#007A33",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%80%D1%81%D1%85%D0%B1-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD/id1117817509",
+    "seller": "Russian Agricultural Bank"
+  },
+  {
+    "track_id": 1313692875,
+    "name": "Россельхозбанк Бизнес Онлайн",
+    "aliases": [],
+    "letter": "Р",
+    "color": "#007A33",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%80%D0%BE%D1%81%D1%81%D0%B5%D0%BB%D1%8C%D1%85%D0%BE%D0%B7%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD/id1313692875"
+  },
+  {
+    "track_id": 1208055056,
+    "name": "Совкомбанк Халва",
+    "aliases": [],
+    "letter": "С",
+    "color": "#E2231A",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%BE%D0%B2%D0%BA%D0%BE%D0%BC%D0%B1%D0%B0%D0%BD%D0%BA-%D1%85%D0%B0%D0%BB%D0%B2%D0%B0/id1208055056"
+  },
+  {
+    "track_id": 1139686197,
+    "name": "Совкомбанк Бизнес/ЧатБанк",
+    "aliases": [],
+    "letter": "С",
+    "color": "#E2231A",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%BE%D0%B2%D0%BA%D0%BE%D0%BC%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81/id1139686197",
+    "seller": "Sovcombank OJSC"
+  },
+  {
+    "track_id": 1510556600,
+    "name": "Совкомбанк Инвестиции",
+    "aliases": [],
+    "letter": "С",
+    "color": "#E2231A",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%BE%D0%B2%D0%BA%D0%BE%D0%BC%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%B8%D1%86%D0%B8%D0%B8/id1510556600",
+    "seller": "Sovcombank OJSC"
+  },
+  {
+    "track_id": 497905150,
+    "name": "МТС Банк",
+    "aliases": [],
+    "letter": "М",
+    "color": "#E30611",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BC%D1%82%D1%81-%D0%B1%D0%B0%D0%BD%D0%BA/id497905150",
+    "seller": "MTS-BANK PAO"
+  },
+  {
+    "track_id": 1184367593,
+    "name": "МТС Банк (МТС Деньги)",
+    "aliases": [],
+    "letter": "М",
+    "color": "#E30611",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BC%D1%82%D1%81-%D0%B1%D0%B0%D0%BD%D0%BA-%D0%BC%D1%82%D1%81-%D0%B4%D0%B5%D0%BD%D1%8C%D0%B3%D0%B8/id1184367593",
+    "seller": "Mobile TeleSystems Public Joint Stock Company"
+  },
+  {
+    "track_id": 564177498,
+    "name": "ВКонтакте (VK)",
+    "aliases": [],
+    "letter": "В",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D0%B5-%D0%BE%D0%B1%D1%89%D0%B5%D0%BD%D0%B8%D0%B5-%D0%B2-%D1%81%D0%BE%D1%86%D1%81%D0%B5%D1%82%D0%B8/id564177498",
+    "seller": "V Kontakte OOO"
+  },
+  {
+    "track_id": 6447614666,
+    "name": "VK Видео",
+    "aliases": [],
+    "letter": "V",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/vk-%D0%B2%D0%B8%D0%B4%D0%B5%D0%BE/id6447614666",
+    "seller": "V Kontakte OOO"
+  },
+  {
+    "track_id": 656485245,
+    "name": "ВКонтакте для iPad",
+    "aliases": [],
+    "letter": "В",
+    "color": "#0077FF",
+    "ipad_only": true,
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D0%BA%D0%BE%D0%BD%D1%82%D0%B0%D0%BA%D1%82%D0%B5-%D0%B4%D0%BB%D1%8F-ipad/id656485245"
+  },
+  {
+    "track_id": 1219369741,
+    "name": "VK Админ",
+    "aliases": [],
+    "letter": "V",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/vk-%D0%B0%D0%B4%D0%BC%D0%B8%D0%BD-%D1%83%D0%BF%D1%80%D0%B0%D0%B2%D0%BB%D0%B5%D0%BD%D0%B8%D0%B5-%D0%B3%D1%80%D1%83%D0%BF%D0%BF%D0%B0%D0%BC%D0%B8/id1219369741",
+    "seller": "V Kontakte OOO"
+  },
+  {
+    "track_id": 1195015982,
+    "name": "РЖД Пассажирам",
+    "aliases": [],
+    "letter": "Р",
+    "color": "#E21A1A",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%80%D0%B6%D0%B4-%D0%BF%D0%B0%D1%81%D1%81%D0%B0%D0%B6%D0%B8%D1%80%D0%B0%D0%BC-%D0%B1%D0%B8%D0%BB%D0%B5%D1%82%D1%8B-%D0%B2%D0%BE%D0%BA%D0%B7%D0%B0%D0%BB/id1195015982"
+  },
+  {
+    "track_id": 1143031400,
+    "name": "Домклик (старый)",
+    "aliases": [],
+    "letter": "Д",
+    "color": "#00A651",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B4%D0%BE%D0%BC%D0%BA%D0%BB%D0%B8%D0%BA/id1143031400",
+    "seller": "Центр недвижимости от Сбербанка"
+  },
+  {
+    "track_id": 1660762523,
+    "name": "ДКлик",
+    "aliases": ["Домклик", "Дом Лака", "Дом Счастья"],
+    "letter": "Д",
+    "color": "#00A651",
+    "source": "https://hi-tech.mail.ru/news/63165-prilozhenie-domklik-poyavilos-v-app-store-kak-skachat/"
+  },
+  {
+    "track_id": 6636493710,
+    "name": "ОК Знакомства",
+    "aliases": ["OK Знакомства"],
+    "letter": "ОК",
+    "color": "#EE8208",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BE%D0%BA-%D0%B7%D0%BD%D0%B0%D0%BA%D0%BE%D0%BC%D1%81%D1%82%D0%B2%D0%B0/id6636493710",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 398465290,
+    "name": "Одноклассники",
+    "aliases": ["ОК", "OK.ru", "Одноклассники: социальная сеть"],
+    "letter": "ОК",
+    "color": "#EE8208",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D1%81%D0%B5-%D0%B2%D0%BA%D0%BB%D1%8E%D1%87%D0%B5%D0%BD%D0%BE/id398465290",
+    "seller": "Odnoklassniki Ltd"
+  },
+  {
+    "track_id": 1322528886,
+    "name": "ОК Видео",
+    "aliases": ["OK Видео"],
+    "letter": "ОК",
+    "color": "#EE8208",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BE%D0%BA-%D0%B2%D0%B8%D0%B4%D0%B5%D0%BE/id1322528886",
+    "seller": "Odnoklassniki Ltd"
+  },
+  {
+    "track_id": 1095345669,
+    "name": "ТамТам Мессенджер: видеозвонки",
+    "aliases": ["TamTam", "ТамТам"],
+    "letter": "ТТ",
+    "color": "#1D8FE1",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%82%D0%B0%D0%BC%D1%82%D0%B0%D0%BC-%D0%B1%D0%B5%D1%81%D0%BF%D0%BB%D0%B0%D1%82%D0%BD%D1%8B%D0%B5-%D1%87%D0%B0%D1%82%D1%8B-%D0%B8-%D0%BA%D0%B0%D0%BD%D0%B0%D0%BB%D1%8B/id1095345669",
+    "seller": "Odnoklassniki Ltd"
+  },
+  {
+    "track_id": 1435590453,
+    "name": "ТамТам Мессенджер",
+    "aliases": ["TamTam", "ТамТам"],
+    "letter": "ТТ",
+    "color": "#1D8FE1",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/odnoklassniki-ltd/id398465293"
+  },
+  {
+    "track_id": 511310430,
+    "name": "Почта Mail.ru",
+    "aliases": ["Mail.ru", "Почта Mail", "Mail: почта, облако, календарь", "VK Почта"],
+    "letter": "П",
+    "color": "#168DE2",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BF%D0%BE%D1%87%D1%82%D0%B0-mail-%D0%BF%D0%BB%D0%B0%D0%BD%D0%B8%D1%80%D0%BE%D0%B2%D1%89%D0%B8%D0%BA-%D0%B4%D0%BD%D1%8F/id511310430",
+    "seller": "V Kontakte OOO"
+  },
+  {
+    "track_id": 1563419339,
+    "name": "VK Почта",
+    "aliases": ["Почта Mail.ru"],
+    "letter": "ВП",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/vk-llc/id335315533",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 696551382,
+    "name": "Облако Mail.ru",
+    "aliases": ["Облако Mail", "Облако: диск и хранилище фото"],
+    "letter": "О",
+    "color": "#005FF9",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BE%D0%B1%D0%BB%D0%B0%D0%BA%D0%BE-%D0%B4%D0%B8%D1%81%D0%BA-%D0%B8-%D1%85%D1%80%D0%B0%D0%BD%D0%B8%D0%BB%D0%B8%D1%89%D0%B5-%D1%84%D0%BE%D1%82%D0%BE/id696551382",
+    "seller": "V Kontakte OOO"
+  },
+  {
+    "track_id": 598556821,
+    "name": "Мой Мир",
+    "aliases": ["Мой Мир@Mail.Ru", "Мой Мир: фото, игры, чат, юмор"],
+    "letter": "ММ",
+    "color": "#005FF9",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%C3%90%C2%A0%C3%91%C2%98%C3%90%C2%A0%C3%91%C2%95%C3%90%C2%A0%C3%A2%C2%84%C2%96-%C3%90%C2%A0%C3%91%C2%98%C3%90%C2%A0%C3%91%C2%91%C3%90%C2%A1%C3%90%C2%82-%C3%90%C2%A1%C3%A2%C2%80%C2%9E%C3%90%C2%A0%C3%91%C2%95%C3%90%C2%A1%C3%A2%C2%80%C2%9A%C3%90%C2%A0%C3%91%C2%95-%C3%90%C2%A0%C3%91%C2%91%C3%90%C2%A0%C3%91%C2%96%C3%90%C2%A1%C3%90%C2%82%C3%90%C2%A1%C3%A2%C2%80%C2%B9-%C3%90%C2%A1%C3%A2%C2%80%C2%A1%C3%90%C2%A0%C3%82%C2%B0%C3%90%C2%A1%C3%A2%C2%80%C2%9A-%C3%90%C2%A1%C3%90%C2%8B%C3%90%C2%A0%C3%91%C2%98%C3%90%C2%A0%C3%91%C2%95%C3%90%C2%A1%C3%90%C2%82/id598556821",
+    "seller": "Mail.Ru"
+  },
+  {
+    "track_id": 302707408,
+    "name": "ICQ",
+    "aliases": ["ICQ: видеозвонки, чаты"],
+    "letter": "ICQ",
+    "color": "#24A9E1",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D0%B8%D0%B4%D0%B5%D0%BE%D0%B7%D0%B2%D0%BE%D0%BD%D0%BA%D0%B8-%D0%BC%D0%B5%D1%81%D0%B5%D0%BD%D0%B4%D0%B6%D0%B5%D1%80-%D0%B2-icq/id302707408",
+    "seller": "ICQ"
+  },
+  {
+    "track_id": 665877304,
+    "name": "ICQ New",
+    "aliases": ["ICQ New: умный мессенджер"],
+    "letter": "ICQ",
+    "color": "#24A9E1",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/icq/id302707411"
+  },
+  {
+    "track_id": 1016489154,
+    "name": "Юла",
+    "aliases": ["Юла: объявления рядом с вами", "Youla"],
+    "letter": "Ю",
+    "color": "#7B2BF9",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%8E%D0%BB%D0%B0-%D0%B1%D0%B5%D1%81%D0%BF%D0%BB%D0%B0%D1%82%D0%BD%D1%8B%D0%B5-%D0%BE%D0%B1%D1%8A%D1%8F%D0%B2%D0%BB%D0%B5%D0%BD%D0%B8%D1%8F/id1016489154",
+    "seller": "V Kontakte OOO"
+  },
+  {
+    "track_id": 1343242452,
+    "name": "Дзен",
+    "aliases": ["Яндекс Дзен", "Дзен — видео, ролики, статьи", "Дзен: новости, статьи, видео"],
+    "letter": "Д",
+    "color": "#111111",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B4%D0%B7%D0%B5%D0%BD-%D0%B2%D0%B8%D0%B4%D0%B5%D0%BE-%D1%80%D0%BE%D0%BB%D0%B8%D0%BA%D0%B8-%D1%81%D1%82%D0%B0%D1%82%D1%8C%D0%B8/id1343242452",
+    "seller": "Dzen.Platforma"
+  },
+  {
+    "track_id": 1467719381,
+    "name": "Маруся",
+    "aliases": ["Маруся — голосовой помощник"],
+    "letter": "М",
+    "color": "#7B3FF2",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BC%D0%B0%D1%80%D1%83%D1%81%D1%8F-%D0%B3%D0%BE%D0%BB%D0%BE%D1%81%D0%BE%D0%B2%D0%BE%D0%B9-%D0%BF%D0%BE%D0%BC%D0%BE%D1%89%D0%BD%D0%B8%D0%BA/id1467719381",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 1054372220,
+    "name": "VK Музыка",
+    "aliases": ["BOOM", "VK Музыка: книги и подкасты", "Музыка ВКонтакте"],
+    "letter": "ВМ",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/vk-llc/id335315533",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 1441659687,
+    "name": "VK Мессенджер",
+    "aliases": ["VK Мессенджер: сообщения, чаты"],
+    "letter": "ВМ",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D0%BA-%D0%BC%D0%B5%D1%81%D1%81%D0%B5%D0%BD%D0%B4%D0%B6%D0%B5%D1%80-%D0%BE%D0%B1%D1%89%D0%B5%D0%BD%D0%B8%D0%B5-%D0%B7%D0%B2%D0%BE%D0%BD%D0%BA%D0%B8/id1441659687",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 6449223858,
+    "name": "VK Мессенджер (контакты и чат)",
+    "aliases": ["VK Мессенджер"],
+    "letter": "ВМ",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/v-kontakte-ooo/id427948433"
+  },
+  {
+    "track_id": 1615733452,
+    "name": "VK Клипы",
+    "aliases": ["Клипы ВКонтакте"],
+    "letter": "ВК",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/v-kontakte-ooo/id427948433"
+  },
+  {
+    "track_id": 6470376756,
+    "name": "VK Видео",
+    "aliases": ["VK Видео: фильмы, сериалы, шоу"],
+    "letter": "ВВ",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/vk-llc/id335315533",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 6444361252,
+    "name": "VK Видео: Live-стримы",
+    "aliases": ["VK Live", "VK Видео Live"],
+    "letter": "ВВ",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/vk-llc/id335315533",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 6449036810,
+    "name": "VK Знакомства",
+    "aliases": ["Знакомства VK"],
+    "letter": "ВЗ",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/vk-llc/id335315533",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 1612939275,
+    "name": "VK Calls",
+    "aliases": ["VK Звонки", "Звонки ВКонтакте"],
+    "letter": "ВЗ",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/vk-llc/id335315533",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 1459096573,
+    "name": "VK Teams",
+    "aliases": ["VK WorkSpace", "Mail.ru Teams", "myTeam"],
+    "letter": "VT",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/vk-llc/id335315533",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 1473826998,
+    "name": "VK WorkSpace (VK Teams)",
+    "aliases": ["VK Teams бизнес-мессенджер", "VK WorkSpace: бизнес-суперапп"],
+    "letter": "VW",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/vk-llc/id335315533",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 1513171161,
+    "name": "VK Play",
+    "aliases": ["VK Play App"],
+    "letter": "VP",
+    "color": "#0077FF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/vk-llc/id335315533",
+    "seller": "VK LLC"
+  },
+  {
+    "track_id": 1187815798,
+    "name": "Альфа-Инвестиции",
+    "aliases": ["Альфа-Директ", "Alfa Direct"],
+    "letter": "АИ",
+    "color": "#EF3124",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B0%D0%BB%D1%8C%D1%84%D0%B0-%D0%B4%D0%B8%D1%80%D0%B5%D0%BA%D1%82/id1187815798",
+    "seller": "AO ALFA-BANK"
+  },
+  {
+    "track_id": 555970430,
+    "name": "Альфа-Бизнес Мобайл",
+    "aliases": ["Альфа-Бизнес", "Альфа-Бизнес: мобильный банк"],
+    "letter": "АБ",
+    "color": "#EF3124",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B0%D0%BB%D1%8C%D1%84%D0%B0-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81-%D0%BC%D0%BE%D0%B1%D0%B8%D0%BB%D1%8C%D0%BD%D1%8B%D0%B9-%D0%B1%D0%B0%D0%BD%D0%BA/id555970430",
+    "seller": "AO ALFA-BANK"
+  },
+  {
+    "track_id": 1146857772,
+    "name": "Альфа-Капитал. Инвестиции",
+    "aliases": ["Альфа-Капитал"],
+    "letter": "АК",
+    "color": "#EF3124",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B0%D0%BB%D1%8C%D1%84%D0%B0-%D0%BA%D0%B0%D0%BF%D0%B8%D1%82%D0%B0%D0%BB-%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%B8%D1%86%D0%B8%D0%B8/id1146857772"
+  },
+  {
+    "track_id": 1323971242,
+    "name": "Открытие Брокер",
+    "aliases": ["Открытие Инвестиции", "Открытие Брокер. Инвестиции"],
+    "letter": "О",
+    "color": "#00AEEF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BE%D1%82%D0%BA%D1%80%D1%8B%D1%82%D0%B8%D0%B5-%D0%B1%D1%80%D0%BE%D0%BA%D0%B5%D1%80-%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%B8%D1%86%D0%B8%D0%B8/id1323971242",
+    "seller": "OTKRITIE Brokerage House JSC"
+  },
+  {
+    "track_id": 1478618457,
+    "name": "ВТБ Бизнес Lite",
+    "aliases": ["ВТБ Бизнес"],
+    "letter": "ВБ",
+    "color": "#009FDF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D1%82%D0%B1-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81-lite/id1478618457",
+    "seller": "VTB Bank (PJSC)"
+  },
+  {
+    "track_id": 1499803108,
+    "name": "ВТБ Бизнес QR",
+    "aliases": [],
+    "letter": "ВБ",
+    "color": "#009FDF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B2%D1%82%D0%B1-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81-qr/id1499803108",
+    "seller": "VTB Bank (PJSC)"
+  },
+  {
+    "track_id": 731900147,
+    "name": "Мобильный клиент ВТБ",
+    "aliases": ["ВТБ24", "ВТБ Мобильный клиент"],
+    "letter": "В",
+    "color": "#009FDF",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BC%D0%BE%D0%B1%D0%B8%D0%BB%D1%8C%D0%BD%D1%8B%D0%B9-%D0%BA%D0%BB%D0%B8%D0%B5%D0%BD%D1%82-%D0%B2%D1%82%D0%B1/id731900147",
+    "seller": "VTB Bank (PJSC)"
+  },
+  {
+    "track_id": 1556446996,
+    "name": "Тинькофф Подпись",
+    "aliases": ["Т-Подпись"],
+    "letter": "ТП",
+    "color": "#FFDD2D",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%82%D0%B8%D0%BD%D1%8C%D0%BA%D0%BE%D1%84%D1%84-%D0%BF%D0%BE%D0%B4%D0%BF%D0%B8%D1%81%D1%8C/id1556446996",
+    "seller": "Tinkoff Bank"
+  },
+  {
+    "track_id": 1585936041,
+    "name": "БКС Бизнес",
+    "aliases": [],
+    "letter": "Б",
+    "color": "#00A0E4",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B1%D0%BA%D1%81-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81/id1585936041",
+    "seller": "FG BCS"
+  },
+  {
+    "track_id": 1033882791,
+    "name": "БКС Мир инвестиций",
+    "aliases": ["БКС Брокер", "БКС Мир инвестиций - брокер"],
+    "letter": "Б",
+    "color": "#00A0E4",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B1%D0%BA%D1%81-%D0%BC%D0%B8%D1%80-%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%B8%D1%86%D0%B8%D0%B9-%D0%B1%D1%80%D0%BE%D0%BA%D0%B5%D1%80/id1033882791",
+    "seller": "Kompaniya Brokerkreditservis OOO"
+  },
+  {
+    "track_id": 434829194,
+    "name": "Финам Трейд (Инвестиции в акции)",
+    "aliases": ["Finam Trade", "FinamTrade", "Финам"],
+    "letter": "Ф",
+    "color": "#00A94F",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%B8%D1%86%D0%B8%D0%B8-%D0%B2-%D0%B0%D0%BA%D1%86%D0%B8%D0%B8/id434829194",
+    "seller": "FINAM Jsc"
+  },
+  {
+    "track_id": 1590363648,
+    "name": "FinamInvest",
+    "aliases": ["Финам Инвест", "FinamInvest: сфера инвестиций"],
+    "letter": "Ф",
+    "color": "#00A94F",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/finam-jsc/id434829197"
+  },
+  {
+    "track_id": 1445871345,
+    "name": "Финам Банк для Бизнеса",
+    "aliases": [],
+    "letter": "Ф",
+    "color": "#00A94F",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%84%D0%B8%D0%BD%D0%B0%D0%BC-%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B4%D0%BB%D1%8F-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81%D0%B0/id1445871345",
+    "seller": "FINAM Bank"
+  },
+  {
+    "track_id": 1552223631,
+    "name": "Финам Банк",
+    "aliases": ["FinamBank", "Финам Банк для инвесторов"],
+    "letter": "Ф",
+    "color": "#00A94F",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/finam-bank/id1445871344"
+  },
+  {
+    "track_id": 979116495,
+    "name": "Почта Банк",
+    "aliases": [],
+    "letter": "ПБ",
+    "color": "#0055A5",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BF%D0%BE%D1%87%D1%82%D0%B0-%D0%B1%D0%B0%D0%BD%D0%BA/id979116495",
+    "seller": "Pochta Bank PJSC"
+  },
+  {
+    "track_id": 1339106923,
+    "name": "Почта Банк Бизнес",
+    "aliases": [],
+    "letter": "ПБ",
+    "color": "#0055A5",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BF%D0%BE%D1%87%D1%82%D0%B0-%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81/id1339106923",
+    "seller": "Pochta Bank PJSC"
+  },
+  {
+    "track_id": 1135404935,
+    "name": "МКБ Онлайн",
+    "aliases": ["МКБ Мобайл", "Московский кредитный банк"],
+    "letter": "МК",
+    "color": "#E30613",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BC%D0%BA%D0%B1-%D0%BCo%D0%B1%D0%B0%D0%B9%D0%BB/id1135404935",
+    "seller": "CREDIT BANK OF MOSCOW (OPEN JOINT STOCK COMPANY)"
+  },
+  {
+    "track_id": 1264479292,
+    "name": "Ак Барс Онлайн",
+    "aliases": ["Ак Барс Онлайн 3.0"],
+    "letter": "АБ",
+    "color": "#00A650",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B0%D0%BA-%D0%B1%D0%B0%D1%80%D1%81-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD-3-0/id1264479292",
+    "seller": "AK BARS BANK PAO"
+  },
+  {
+    "track_id": 1274971646,
+    "name": "Ак Барс Мобильный для бизнеса",
+    "aliases": [],
+    "letter": "АБ",
+    "color": "#00A650",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B0%D0%BA-%D0%B1%D0%B0%D1%80%D1%81-%D0%BC%D0%BE%D0%B1%D0%B8%D0%BB%D1%8C%D0%BD%D1%8B%D0%B9-%D0%B4%D0%BB%D1%8F-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81%D0%B0/id1274971646",
+    "seller": "AK BARS BANK PAO"
+  },
+  {
+    "track_id": 1537791988,
+    "name": "Ак Барс Лайф 2.0",
+    "aliases": ["Ак Барс Лайф"],
+    "letter": "АБ",
+    "color": "#00A650",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B0%D0%BA-%D0%B1%D0%B0%D1%80%D1%81-%D0%BB%D0%B0%D0%B9%D1%84-2-0/id1537791988",
+    "seller": "AK BARS BANK PAO"
+  },
+  {
+    "track_id": 1447352042,
+    "name": "Уралсиб Бизнес",
+    "aliases": [],
+    "letter": "У",
+    "color": "#E4002B",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%83%D1%80%D0%B0%D0%BB%D1%81%D0%B8%D0%B1-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81/id1447352042",
+    "seller": "УРАЛСИБ (URALSIB)"
+  },
+  {
+    "track_id": 1438090038,
+    "name": "РОСБАНК Онлайн",
+    "aliases": ["Росбанк"],
+    "letter": "Р",
+    "color": "#E4002B",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%80%D0%BE%D1%81%D0%B1%D0%B0%D0%BD%D0%BA-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD/id1438090038",
+    "seller": "Rosbank"
+  },
+  {
+    "track_id": 1456582336,
+    "name": "Росбанк Малый бизнес",
+    "aliases": [],
+    "letter": "Р",
+    "color": "#E4002B",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%80%D0%BE%D1%81%D0%B1%D0%B0%D0%BD%D0%BA-%D0%BC%D0%B0%D0%BB%D1%8B%D0%B9-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81/id1456582336",
+    "seller": "Rosbank"
+  },
+  {
+    "track_id": 1533245658,
+    "name": "Росбанк Инвест",
+    "aliases": [],
+    "letter": "Р",
+    "color": "#E4002B",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%80%D0%BE%D1%81%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82/id1533245658",
+    "seller": "Rosbank"
+  },
+  {
+    "track_id": 1371351465,
+    "name": "Новый МТС Банк",
+    "aliases": ["МТС Банк"],
+    "letter": "М",
+    "color": "#E30611",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BD%D0%BE%D0%B2%D1%8B%D0%B9-%D0%BC%D1%82%D1%81-%D0%B1%D0%B0%D0%BD%D0%BA/id1371351465"
+  },
+  {
+    "track_id": 1389069457,
+    "name": "МТС Банк Бизнес",
+    "aliases": [],
+    "letter": "М",
+    "color": "#E30611",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/developer/mts-bank-pao/id1057609912"
+  },
+  {
+    "track_id": 1496310298,
+    "name": "МТС Банк Бизнес NEW",
+    "aliases": [],
+    "letter": "М",
+    "color": "#E30611",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BC%D1%82%D1%81-%D0%B1%D0%B0%D0%BD%D0%BA-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81-new/id1496310298",
+    "seller": "MTS-BANK PAO"
+  },
+  {
+    "track_id": 1138781518,
+    "name": "МегаФон Банк: платежи онлайн",
+    "aliases": ["МегаФон Банк"],
+    "letter": "МФ",
+    "color": "#00B956",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BC%D0%B5%D0%B3%D0%B0%D1%84%D0%BE%D0%BD-%D0%B1%D0%B0%D0%BD%D0%BA-%D0%BF%D0%BB%D0%B0%D1%82%D0%B5%D0%B6%D0%B8-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD/id1138781518",
+    "seller": "PJSC MegaFon"
+  },
+  {
+    "track_id": 1535767566,
+    "name": "ЮMoney: кошелёк, карты, кэшбэк",
+    "aliases": ["ЮМани", "YooMoney", "ЮMoney"],
+    "letter": "Ю",
+    "color": "#8B3FFD",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%8E%D0%BC%D0%B0%D0%BD%D0%B8-%D0%BA%D0%BE%D1%88%D0%B5%D0%BB%D1%91%D0%BA-%D1%88%D1%82%D1%80%D0%B0%D1%84%D1%8B-%D0%B3%D0%B8%D0%B1%D0%B4%D0%B4/id1535767566",
+    "seller": "“YooMoney”, NBСO LLC"
+  },
+  {
+    "track_id": 468731698,
+    "name": "Яндекс.Деньги",
+    "aliases": ["Яндекс.Деньги: карты, кэшбэк"],
+    "letter": "ЯД",
+    "color": "#FFCC00",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%8F%D0%BD%D0%B4%D0%B5%D0%BA%D1%81-%D0%B4%D0%B5%D0%BD%D1%8C%D0%B3%D0%B8-%D0%BA%D0%B0%D1%80%D1%82%D1%8B-%D0%BA%D1%8D%D1%88%D0%B1%D0%B5%D0%BA/id468731698",
+    "seller": "Yandex LLC"
+  },
+  {
+    "track_id": 899525659,
+    "name": "СберСпасибо",
+    "aliases": ["Сбер Спасибо"],
+    "letter": "СС",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D1%81%D0%BF%D0%B0%D1%81%D0%B8%D0%B1%D0%BE/id899525659",
+    "seller": "Сбербанк России"
+  },
+  {
+    "track_id": 1490584292,
+    "name": "СберСпасибо Х",
+    "aliases": [],
+    "letter": "СС",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D1%81%D0%BF%D0%B0%D1%81%D0%B8%D0%B1%D0%BE-%D1%85/id1490584292",
+    "seller": "Сбербанк России"
+  },
+  {
+    "track_id": 1554633917,
+    "name": "СберИнвестор X",
+    "aliases": [],
+    "letter": "СИ",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B8%D0%BD%D0%B2%D0%B5%D1%81%D1%82%D0%BE%D1%80-x/id1554633917",
+    "seller": "Сбербанк России"
+  },
+  {
+    "track_id": 1436860488,
+    "name": "СберСоветник",
+    "aliases": [],
+    "letter": "СС",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D1%81%D0%BE%D0%B2%D0%B5%D1%82%D0%BD%D0%B8%D0%BA/id1436860488",
+    "seller": "Сбербанк России"
+  },
+  {
+    "track_id": 1441007976,
+    "name": "СберЧат",
+    "aliases": [],
+    "letter": "СЧ",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D1%87%D0%B0%D1%82/id1441007976",
+    "seller": "Сбербанк России"
+  },
+  {
+    "track_id": 1489093542,
+    "name": "СберДиск",
+    "aliases": [],
+    "letter": "СД",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B4%D0%B8%D1%81%D0%BA/id1489093542",
+    "seller": "OBLACHNYE TEKHNOLOGII, OOO"
+  },
+  {
+    "track_id": 1368473180,
+    "name": "СберФайлы",
+    "aliases": [],
+    "letter": "СФ",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D1%84%D0%B0%D0%B9%D0%BB%D1%8B/id1368473180",
+    "seller": "Сбербанк России"
+  },
+  {
+    "track_id": 1484687078,
+    "name": "СберМобайл",
+    "aliases": ["СберМобайл"],
+    "letter": "СМ",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%BC%D0%BE%D0%B1%D0%B0%D0%B9%D0%BB/id1484687078",
+    "seller": "Sberbank-Telecom"
+  },
+  {
+    "track_id": 1500004834,
+    "name": "СберАвто",
+    "aliases": ["СберАвто: покупка, продажа"],
+    "letter": "СА",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B1%D0%B5%D1%80%D0%B0%D0%B2%D1%82%D0%BE-%D0%BF%D0%BE%D0%BA%D1%83%D0%BF%D0%BA%D0%B0-%D0%BF%D1%80%D0%BE%D0%B4%D0%B0%D0%B6%D0%B0/id1500004834",
+    "seller": "ООО \"СберАвто\""
+  },
+  {
+    "track_id": 1520007827,
+    "name": "Салют — Виртуальные ассистенты",
+    "aliases": ["Салют", "SberDevices", "Сбер Салют"],
+    "letter": "С",
+    "color": "#21A038",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D1%81%D0%B0%D0%BB%D1%8E%D1%82-%D0%B2%D0%B8%D1%80%D1%82%D1%83%D0%B0%D0%BB%D1%8C%D0%BD%D1%8B%D0%B5-%D0%B0%D1%81%D1%81%D0%B8%D1%81%D1%82%D0%B5%D0%BD%D1%82%D1%8B/id1520007827",
+    "seller": "SberDevices LLC"
+  },
+  {
+    "track_id": 1665845236,
+    "name": "Мегамаркет Продавцы",
+    "aliases": ["СберМегаМаркет", "Мегамаркет Seller"],
+    "letter": "М",
+    "color": "#A83FFB",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%BC%D0%B5%D0%B3%D0%B0%D0%BC%D0%B0%D1%80%D0%BA%D0%B5%D1%82-%D0%BF%D1%80%D0%BE%D0%B4%D0%B0%D0%B2%D1%86%D1%8B/id1665845236",
+    "seller": "S-MEGAMARKET TRADE LLC"
+  },
+  {
+    "track_id": 1372085024,
+    "name": "Госуслуги Бизнес",
+    "aliases": [],
+    "letter": "ГБ",
+    "color": "#0D4CD3",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B3%D0%BE%D1%81%D1%83%D1%81%D0%BB%D1%83%D0%B3%D0%B8-%D0%B1%D0%B8%D0%B7%D0%BD%D0%B5%D1%81/id1372085024",
+    "seller": "Минкомсвязь РФ"
+  },
+  {
+    "track_id": 580243869,
+    "name": "Аэрофлот — авиабилеты онлайн",
+    "aliases": ["Аэрофлот"],
+    "letter": "А",
+    "color": "#0A2F6E",
+    "source": "https://web.archive.org/web/2/https://apps.apple.com/ru/app/%D0%B0%D1%8D%D1%80%D0%BE%D1%84%D0%BB%D0%BE%D1%82-%D0%B0%D0%B2%D0%B8%D0%B0%D0%B1%D0%B8%D0%BB%D0%B5%D1%82%D1%8B-%D0%BE%D0%BD%D0%BB%D0%B0%D0%B9%D0%BD/id580243869",
+    "seller": "PJSC Aeroflot - Russian airlines"
+  }
+]

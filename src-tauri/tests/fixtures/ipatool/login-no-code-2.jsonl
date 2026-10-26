@@ -1,0 +1,2 @@
+{"level":"info","time":"2026-10-26T13:03:54+03:00","message":"preparing authentication; the first login may take a few minutes"}
+{"level":"info","time":"2026-10-26T13:03:56+03:00","message":"2FA code is required; run the command again and supply a code using the `--auth-code` flag"}
