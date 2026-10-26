@@ -1,0 +1,7 @@
+docs/superpowers/
+.superpowers/
+target/
+node_modules/
+src-tauri/binaries/
+dist/
+fixtures-raw/
