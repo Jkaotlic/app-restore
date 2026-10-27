@@ -563,6 +563,32 @@ fn stale(e: &crate::errors::AppError) -> bool {
     matches!(e, NotLoggedIn | AccountDisabled | AppleChangedLogin | WrongCredentials | CodeRejected | AuthCodeRequired)
 }
 
+/// Вход ipatool после шага со связкой ключей, доделанного в фоне: `auth info` (ждёт своей
+/// очереди, то есть конца шага), затем проверка у Apple, как в `switch_to`. Мёртвый вход
+/// не берём — адрес «нужен вход»; сеть недоступна — берём. «Забытый» не берём.
+pub async fn settled_login(session: &Session, sessions: &Arc<Sessions>) -> Option<Account> {
+    let acc = match session.info().await {
+        Ok(Some(a)) if !sessions.is_forgotten(&a.email) => a,
+        Ok(_) => return None,
+        Err(e) => {
+            crate::log::write("settled login", &e.to_string());
+            return None;
+        }
+    };
+    match session.check_token().await {
+        Err(e) if stale(&e) => {
+            sessions.mark_unsaved(&acc.email);
+            None
+        }
+        other => {
+            if let Err(e) = other {
+                crate::log::write("settled login: token check", &e.to_string());
+            }
+            Some(acc)
+        }
+    }
+}
+
 /// Перейти на аккаунт `email`, как одна операция:
 /// 1. нынешний вход (`current`, другой адрес) сохраняется снимком; не вышло — ничего не меняем,
 ///    `SaveSessionFailed`;
@@ -1236,6 +1262,22 @@ mod tests {
         // запись доделалась в фоне: ipatool уже во входе OTHER, а следующий запуск ждал её
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         assert_eq!(e.auth.state().account, Some(b"token-other".to_vec()));
+    }
+
+    /// Вход, дописанный в фоне после окна macOS, берётся только живым.
+    #[tokio::test]
+    async fn late_login_is_taken_only_if_alive() {
+        let e = env(None, CHUNK_MAC);
+        e.s.remember(OTHER);
+        let r = Arc::new(FakeRunner::new(vec![info(OTHER), token_ok()]));
+        assert_eq!(settled_login(&session(&r), &e.s).await.map(|a| a.email), Some(OTHER.to_string()));
+        let r = Arc::new(FakeRunner::new(vec![info(OTHER), logged_out()]));
+        assert_eq!(settled_login(&session(&r), &e.s).await, None, "запись есть, вход мёртв");
+        assert!(e.s.known().contains(&(OTHER.to_string(), false)), "«нужен вход»");
+        let r = Arc::new(FakeRunner::new(vec![info(OTHER), busy(), busy(), busy(), busy()]));
+        assert!(settled_login(&session(&r), &e.s).await.is_some(), "сеть — вход оставляем, как в switch_to");
+        let r = Arc::new(FakeRunner::new(vec![logged_out()]));
+        assert_eq!(settled_login(&session(&r), &e.s).await, None);
     }
 
     #[tokio::test]

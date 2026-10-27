@@ -30,6 +30,7 @@ async function wire(): Promise<void> {
   await listen<Account | null>("account", ({ payload }) => {
     state.account = payload;
     refreshSidebar();
+    currentScreen()?.onAccount?.();
   });
   await listen<PhonesEvent>("phones", ({ payload }) => {
     state.phones = payload.phones;

@@ -909,17 +909,17 @@ fn reconcile_account<R: Runtime>(app: &AppHandle<R>) {
     let h = app.clone();
     tauri::async_runtime::spawn(async move {
         let st = h.state::<AppState>();
-        let acc = match st.session.info().await {
-            Ok(a) => a.filter(|a| !st.sessions.is_forgotten(&a.email)),
-            Err(e) => {
-                log_err("reconcile account", &e);
-                return;
-            }
-        };
+        let acc = crate::accounts::settled_login(&st.session, &st.sessions).await;
+        if acc.is_some() {
+            // как после входа: копии старого вида — в папку покупателя (повтор безопасен)
+            let lib = st.library.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || lib.migrate()).await;
+        }
+        // проверка и смена без `await` между ними
         if st.current_email().is_some() {
             return; // человек уже вошёл заново — его вход главнее
         }
-        crate::log::write("reconcile account", if acc.is_some() { "ipatool signed in after the keychain step" } else { "ipatool not signed in" });
+        crate::log::write("reconcile account", if acc.is_some() { "ipatool signed in after the keychain step" } else { "no live login" });
         if let Some(a) = &acc {
             st.sessions.remember(&a.email);
         }

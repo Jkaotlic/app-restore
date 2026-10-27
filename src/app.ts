@@ -81,6 +81,8 @@ export interface Mounted {
   onPhones?(): void;
   onPurchasesProgress?(p: PurchasesProgress): void;
   onPurchases?(rows: RowsDto): void;
+  /** Вход программы сменился сам (событие `account`). */
+  onAccount?(): void;
   /** Вызывается при уходе с экрана. */
   leave?(): void;
 }

@@ -186,6 +186,8 @@ register("accounts", () => {
   );
   return {
     el,
+    // вход определился после окна Связки ключей: отметка «текущий» в списке — заново
+    onAccount: () => void load(),
     leave: () => {
       gone = true;
     },
