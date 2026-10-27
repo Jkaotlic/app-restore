@@ -20,8 +20,9 @@ pub enum IpaOutcome {
     Downloaded { path: PathBuf },
     /// Успешный `list-versions`: права на приложение есть.
     Versions { ids: Vec<String> },
-    /// Успешный `get-version-metadata`: версия для людей («12.15.0»).
-    VersionMetadata { display_version: String },
+    /// Успешный `get-version-metadata`: версия для людей («12.15.0») и дата выхода
+    /// (`releaseDate`, «2022-03-18T06:23:40Z»). Минимальной iOS ipatool 2.7.0 не отдаёт.
+    VersionMetadata { display_version: String, release_date: Option<String> },
     Ok,
 }
 
@@ -84,7 +85,8 @@ fn success_outcome(v: &Value) -> IpaOutcome {
     if let Some(ids) = v.get("externalVersionIdentifiers").and_then(Value::as_array) {
         IpaOutcome::Versions { ids: ids.iter().filter_map(|x| x.as_str().map(String::from)).collect() }
     } else if v.get("displayVersion").is_some() {
-        IpaOutcome::VersionMetadata { display_version: s(v, "displayVersion") }
+        let date = s(v, "releaseDate");
+        IpaOutcome::VersionMetadata { display_version: s(v, "displayVersion"), release_date: (!date.trim().is_empty()).then_some(date) }
     } else if let Some(out) = v.get("output").and_then(Value::as_str) {
         IpaOutcome::Downloaded { path: PathBuf::from(out) }
     } else if v.get("email").is_some() {
@@ -290,7 +292,11 @@ mod tests {
 
     #[test]
     fn version_metadata_fixture() {
-        assert_eq!(parse_fx("version-metadata"), Ok(IpaOutcome::VersionMetadata { display_version: "12.15.0".into() }));
+        assert_eq!(parse_fx("version-metadata"), Ok(IpaOutcome::VersionMetadata { display_version: "12.15.0".into(), release_date: Some("2022-03-18T06:23:40Z".into()) }));
+        assert_eq!(
+            parse_output("{\"displayVersion\":\"1.0\",\"success\":true}\n", 0),
+            Ok(IpaOutcome::VersionMetadata { display_version: "1.0".into(), release_date: None })
+        );
     }
 
     #[test]

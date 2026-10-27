@@ -339,7 +339,7 @@ impl Session {
         let Some(last) = ids.last() else { return Ok(None) };
         let args = ["get-version-metadata", "-i", &id, "--external-version-id", last].map(String::from).to_vec();
         match self.call_retry(args).await {
-            Ok(IpaOutcome::VersionMetadata { display_version }) => Ok(Some(display_version).filter(|v| !v.trim().is_empty())),
+            Ok(IpaOutcome::VersionMetadata { display_version, .. }) => Ok(Some(display_version).filter(|v| !v.trim().is_empty())),
             Err(e @ (AppError::NotLoggedIn | AppError::AccountDisabled | AppError::AppleChangedLogin)) => Err(e),
             Ok(o) => {
                 crate::log::write(&format!("version {track_id}"), &unexpected(&o).to_string());
@@ -353,19 +353,42 @@ impl Session {
         }
     }
 
+    /// Все версии приложения (external version id), от старой к новой, как отдаёт `list-versions`.
+    /// Прав нет — `Err(NotPurchased)`. Только чтение, с повторами.
+    pub async fn versions(&self, track_id: i64) -> Result<Vec<String>, AppError> {
+        match self.call_retry(["list-versions", "-i", &track_id.to_string()].map(String::from).to_vec()).await? {
+            IpaOutcome::Versions { ids } => Ok(ids),
+            o => Err(unexpected(&o)),
+        }
+    }
+
+    /// Версия для людей и дата выхода одной версии. Без повторов: такие запросы идут пачкой по
+    /// просьбе человека, и при 429 честнее остановиться и сказать, чем ждать и просить ещё.
+    pub async fn version_meta(&self, track_id: i64, version_id: &str) -> Result<crate::ios_compat::VersionMeta, AppError> {
+        let args = ["get-version-metadata", "-i", &track_id.to_string(), "--external-version-id", version_id].map(String::from).to_vec();
+        match self.call(args).await? {
+            IpaOutcome::VersionMetadata { display_version, release_date } => Ok(crate::ios_compat::VersionMeta { display: display_version, released: release_date }),
+            o => Err(unexpected(&o)),
+        }
+    }
+
     /// Скачивание по trackId (`-i`): `-b` не работает для удалённых из магазина приложений.
     #[cfg(test)]
     pub async fn download(&self, track_id: i64, out_dir: &Path) -> Result<PathBuf, AppError> {
-        self.download_marked(track_id, out_dir, &AtomicBool::new(false)).await
+        self.download_marked(track_id, out_dir, None, &AtomicBool::new(false)).await
     }
 
-    /// `download`; `started` — ipatool запущен (своя очередь дошла). До этого скачивание не
+    /// `download`; `version` — выбранная человеком версия (external version id), `None` —
+    /// последняя. `started` — ipatool запущен (своя очередь дошла). До этого скачивание не
     /// идёт, и простоем ожидание очереди не считается (`queue`).
-    pub async fn download_marked(&self, track_id: i64, out_dir: &Path, started: &AtomicBool) -> Result<PathBuf, AppError> {
+    pub async fn download_marked(&self, track_id: i64, out_dir: &Path, version: Option<&str>, started: &AtomicBool) -> Result<PathBuf, AppError> {
         let out = out_dir
             .to_str()
             .ok_or_else(|| AppError::Unknown { detail: "output path is not valid UTF-8".into() })?;
-        let args = ["download", "-i", &track_id.to_string(), "-o", out].map(String::from).to_vec();
+        let mut args = ["download", "-i", &track_id.to_string(), "-o", out].map(String::from).to_vec();
+        if let Some(v) = version {
+            args.extend(["--external-version-id".to_string(), v.to_string()]);
+        }
         match with_retry(&self.delays, || self.call_marked(Kind::Download, args.clone(), Some(started))).await? {
             IpaOutcome::Downloaded { path } => Ok(path),
             o => Err(unexpected(&o)),
@@ -569,7 +592,7 @@ mod tests {
         let s = session(&r, &[]);
         let started = AtomicBool::new(false);
         let t = tempfile::tempdir().unwrap();
-        let _ = s.download_marked(1, t.path(), &started).await;
+        let _ = s.download_marked(1, t.path(), None, &started).await;
         assert!(!started.load(Ordering::SeqCst), "после запуска флаг снят");
     }
 
@@ -795,6 +818,48 @@ mod tests {
         let r = Arc::new(FakeRunner::new(vec![empty]));
         assert_eq!(session(&r, &[]).latest_version(1).await, Ok(None));
         assert_eq!(r.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn versions_lists_ids_oldest_first() {
+        let r = Arc::new(FakeRunner::new(vec![fx("list-versions-owned"), fx("list-versions-not-owned")]));
+        let s = session(&r, &[]);
+        let ids = s.versions(492224193).await.unwrap();
+        assert_eq!(ids.first().map(String::as_str), Some("5730143"));
+        assert_eq!(ids.last().map(String::as_str), Some("847801982"));
+        assert_eq!(s.versions(334325516).await, Err(AppError::NotPurchased));
+        assert_eq!(r.calls()[0], strs(&["list-versions", "-i", "492224193", "--non-interactive", "--format", "json"]));
+    }
+
+    #[tokio::test]
+    async fn version_meta_on_live_fixture() {
+        let r = Arc::new(FakeRunner::new(vec![fx("version-metadata")]));
+        let m = session(&r, &[]).version_meta(492224193, "847801982").await.unwrap();
+        assert_eq!(m, crate::ios_compat::VersionMeta { display: "12.15.0".into(), released: Some("2022-03-18T06:23:40Z".into()) });
+        assert_eq!(
+            r.calls()[0],
+            strs(&["get-version-metadata", "-i", "492224193", "--external-version-id", "847801982", "--non-interactive", "--format", "json"])
+        );
+    }
+
+    /// Метаданные по версиям — по просьбе человека и пачкой: 429 не повторяется, а останавливает.
+    #[tokio::test]
+    async fn version_meta_does_not_retry_429() {
+        let too_many = RunResult { stdout: "{\"level\":\"error\",\"error\":\"unexpected status code 429\",\"success\":false}\n".into(), exit_code: 1, stderr: String::new() };
+        let r = Arc::new(FakeRunner::new(vec![too_many, fx("version-metadata")]));
+        assert_eq!(session(&r, &[]).version_meta(1, "2").await, Err(AppError::AppleUnavailable { status: Some(429) }));
+        assert_eq!(r.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn download_of_chosen_version_never_purchases() {
+        let r = Arc::new(FakeRunner::new(vec![fx("download-by-id")]));
+        session(&r, &[]).download_marked(492224193, Path::new("/tmp/out"), Some("812236754"), &AtomicBool::new(false)).await.unwrap();
+        assert_eq!(
+            r.calls()[0],
+            strs(&["download", "-i", "492224193", "-o", "/tmp/out", "--external-version-id", "812236754", "--non-interactive", "--format", "json"])
+        );
+        assert!(!r.calls()[0].iter().any(|a| a.contains("purchase")));
     }
 
     #[tokio::test]

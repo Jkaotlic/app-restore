@@ -17,6 +17,13 @@ const LOOKUP_URL: &str = "https://itunes.apple.com/lookup";
 pub struct Presence {
     pub ids: HashSet<i64>,
     pub sizes: HashMap<i64, u64>,
+    /// `minimumOsVersion` последней версии: «Нужна iOS X» на плитке.
+    pub min_os: HashMap<i64, String>,
+}
+
+/// `minimumOsVersion` записи Lookup/Search; пусто — `None`.
+fn min_os_of(r: &Value) -> Option<String> {
+    r.get("minimumOsVersion").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from)
 }
 
 #[async_trait]
@@ -101,6 +108,9 @@ fn parse(body: &str) -> Result<Presence, AppError> {
         if let Some(n) = size {
             p.sizes.insert(id, n);
         }
+        if let Some(m) = min_os_of(r) {
+            p.min_os.insert(id, m);
+        }
     }
     Ok(p)
 }
@@ -139,6 +149,8 @@ pub struct StoreApp {
     pub ipad_only: bool,
     /// Продавец (`sellerName`): по нему тоже отбирается выдача (`logic::relevant`).
     pub seller: String,
+    /// `minimumOsVersion` последней версии.
+    pub min_os: Option<String>,
 }
 
 /// Значение параметра адреса: всё, кроме `A-Z a-z 0-9 - _ . ~`, — `%XX` по байтам UTF-8.
@@ -180,7 +192,7 @@ fn parse_search(body: &str) -> Result<Vec<StoreApp>, AppError> {
                 .get("supportedDevices")
                 .and_then(Value::as_array)
                 .is_some_and(|d| !d.is_empty() && !d.iter().any(|x| x.as_str().is_some_and(|s| s.starts_with("iPhone"))));
-            Some(StoreApp { track_id, name, bundle_id: text(r, "bundleId"), version: text(r, "version"), size, ipad_only, seller: text(r, "sellerName") })
+            Some(StoreApp { track_id, name, bundle_id: text(r, "bundleId"), version: text(r, "version"), size, ipad_only, seller: text(r, "sellerName"), min_os: min_os_of(r) })
         })
         .collect())
 }
@@ -210,6 +222,7 @@ impl Lookup for HttpLookup {
             let p = parse(&body)?;
             present.ids.extend(p.ids);
             present.sizes.extend(p.sizes);
+            present.min_os.extend(p.min_os);
         }
         Ok(present)
     }
@@ -277,6 +290,18 @@ mod tests {
         // размер из того же ответа: строкой у Apple
         assert_eq!(got.sizes.get(&686449807), Some(&243731456));
         assert_eq!(got.sizes.get(&492224193), None);
+        // минимальная iOS последней версии — из того же ответа
+        assert_eq!(got.min_os.get(&686449807).map(String::as_str), Some("15.0"));
+        assert_eq!(got.min_os.get(&492224193), None);
+    }
+
+    #[test]
+    fn search_takes_minimum_ios() {
+        let got = parse_search(&fixture("search-ru-telegram.json")).unwrap();
+        let insta = got.iter().find(|a| a.track_id == 389801252).unwrap();
+        assert_eq!(insta.min_os.as_deref(), Some("16.3"));
+        let p = parse(r#"{"results":[{"trackId":1,"minimumOsVersion":" 12.0 "},{"trackId":2,"minimumOsVersion":""},{"trackId":3}]}"#).unwrap();
+        assert_eq!(p.min_os, [(1, "12.0".to_string())].into());
     }
 
     #[tokio::test]
@@ -336,10 +361,10 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                StoreApp { track_id: 1000000001, name: "Пример Банк".into(), bundle_id: "com.example.bank".into(), version: "3.2.1".into(), size: Some(104857600), ipad_only: false, seller: "Example LLC".into() },
-                StoreApp { track_id: 1000000002, name: "Пример Почта".into(), bundle_id: "com.example.mail".into(), version: "1.0".into(), size: Some(52428800), ipad_only: false, seller: String::new() },
-                StoreApp { track_id: 1000000003, name: "Пример для iPad".into(), bundle_id: "com.example.pad".into(), version: "2.0".into(), size: None, ipad_only: true, seller: String::new() },
-                StoreApp { track_id: 1000000006, name: "Посторонний".into(), bundle_id: "com.example.other".into(), version: "5.0".into(), size: None, ipad_only: false, seller: "Other Inc".into() },
+                StoreApp { track_id: 1000000001, name: "Пример Банк".into(), bundle_id: "com.example.bank".into(), version: "3.2.1".into(), size: Some(104857600), ipad_only: false, seller: "Example LLC".into(), min_os: None },
+                StoreApp { track_id: 1000000002, name: "Пример Почта".into(), bundle_id: "com.example.mail".into(), version: "1.0".into(), size: Some(52428800), ipad_only: false, seller: String::new(), min_os: None },
+                StoreApp { track_id: 1000000003, name: "Пример для iPad".into(), bundle_id: "com.example.pad".into(), version: "2.0".into(), size: None, ipad_only: true, seller: String::new(), min_os: None },
+                StoreApp { track_id: 1000000006, name: "Посторонний".into(), bundle_id: "com.example.other".into(), version: "5.0".into(), size: None, ipad_only: false, seller: "Other Inc".into(), min_os: None },
             ],
             "без trackId и без имени — пропущены"
         );

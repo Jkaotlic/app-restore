@@ -2157,7 +2157,7 @@ mod tests {
     }
 
     fn store_app(id: i64, name: &str) -> crate::lookup::StoreApp {
-        crate::lookup::StoreApp { track_id: id, name: name.into(), bundle_id: format!("com.example.s{id}"), version: "2.0".into(), size: Some(1000), ipad_only: false, seller: String::new() }
+        crate::lookup::StoreApp { track_id: id, name: name.into(), bundle_id: format!("com.example.s{id}"), version: "2.0".into(), size: Some(1000), ipad_only: false, seller: String::new(), min_os: None }
     }
 
     /// Живой Search API: `cargo test live_search -- --ignored --nocapture`.

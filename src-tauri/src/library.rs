@@ -483,6 +483,13 @@ fn read_info_plist(ipa: &Path) -> Result<(Option<String>, Option<String>), Strin
     Ok((get("CFBundleIdentifier"), get("CFBundleShortVersionString")))
 }
 
+/// `MinimumOSVersion` из Info.plist внутри ipa: с какой iOS копия запустится. `None` — нет ключа
+/// или не прочитать.
+pub fn read_min_os(ipa: &Path) -> Option<String> {
+    let d = info_plist(ipa).ok()?;
+    d.get("MinimumOSVersion").and_then(Value::as_string).map(str::trim).filter(|s| !s.is_empty()).map(String::from)
+}
+
 /// `UIDeviceFamily` из Info.plist внутри ipa: 1 — iPhone, 2 — iPad. Пусто, если не прочитать.
 pub fn read_device_family(ipa: &Path) -> Vec<u8> {
     info_plist(ipa).map(|d| family_of(&d)).unwrap_or_default()
@@ -900,7 +907,19 @@ pub(crate) mod testutil {
 
     /// То же с `UIDeviceFamily` (пустой список — без ключа).
     pub fn make_ipa_family(path: &Path, bundle: &str, version: &str, family: &[u8]) {
+        make_ipa_with(path, bundle, version, family, None);
+    }
+
+    /// ipa с `MinimumOSVersion` в Info.plist.
+    pub fn make_ipa_min_os(path: &Path, bundle: &str, version: &str, min_os: &str) {
+        make_ipa_with(path, bundle, version, &[], Some(min_os));
+    }
+
+    fn make_ipa_with(path: &Path, bundle: &str, version: &str, family: &[u8], min_os: Option<&str>) {
         let mut d = plist::Dictionary::new();
+        if let Some(m) = min_os {
+            d.insert("MinimumOSVersion".into(), m.into());
+        }
         if !family.is_empty() {
             let f = family.iter().map(|x| plist::Value::Integer((*x as i64).into())).collect();
             d.insert("UIDeviceFamily".into(), plist::Value::Array(f));
@@ -923,6 +942,18 @@ mod tests {
     use super::*;
 
     const ME: &str = "me@example.com";
+
+    #[test]
+    fn minimum_ios_from_info_plist() {
+        let t = tempfile::tempdir().unwrap();
+        let with = t.path().join("1_com.example.a_1.0.ipa");
+        super::testutil::make_ipa_min_os(&with, "com.example.a", "1.0", " 16.4 ");
+        assert_eq!(read_min_os(&with).as_deref(), Some("16.4"));
+        let without = t.path().join("2_com.example.b_1.0.ipa");
+        make_ipa(&without, "com.example.b", "1.0");
+        assert_eq!(read_min_os(&without), None);
+        assert_eq!(read_min_os(&t.path().join("нет.ipa")), None);
+    }
 
     /// Библиотека с входом в `ME`: (библиотека, папка аккаунта).
     fn acct(base: PathBuf) -> (Library, PathBuf) {

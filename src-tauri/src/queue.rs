@@ -6,6 +6,7 @@ use crate::device::DeviceHub;
 use crate::errors::AppError;
 use crate::ipatool::session::Session;
 use crate::library::Library;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -42,8 +43,9 @@ impl SpaceProbe for FsSpace {
 }
 
 enum Job {
-    /// `bool`: «Только скачать» — остановиться на `Saved`, даже если телефон задан.
-    Download(i64, bool),
+    /// `bool`: «Только скачать» — остановиться на `Saved`, даже если телефон задан. Версия —
+    /// выбранная человеком (external version id), `None` — последняя.
+    Download(i64, bool, Option<String>),
     /// Телефон задан явно («Все копии») — он главнее цели очереди и её не меняет.
     Install(i64, PathBuf, Option<String>),
 }
@@ -62,12 +64,16 @@ pub struct Queue {
     pending: Arc<Mutex<Pending>>,
     events: broadcast::Sender<(i64, JobState)>,
     target: Arc<Mutex<Option<String>>>,
+    /// iOS подключённых телефонов (udid → ProductVersion): проверка перед установкой.
+    ios: Arc<Mutex<HashMap<String, String>>>,
 }
 
 /// Ставит сохранённую ipa на телефон; возвращает итоговое состояние. `Installed` только при `Ok`.
+/// `ios` — iOS телефона, если известна: копия, которой нужна iOS новее, не ставится.
 async fn run_install(
     hub: &dyn DeviceHub,
     udid: Option<String>,
+    ios: Option<String>,
     path: &Path,
     emit: &(dyn Fn(JobState) + Send + Sync),
 ) -> JobState {
@@ -78,6 +84,14 @@ async fn run_install(
     // Диск компьютера проверяем до телефона: его ошибка не вина iPhone.
     if let Err(e) = crate::device::open_local(path).await {
         return failed(e);
+    }
+    // Минимальная iOS из Info.plist копии — до телефона: иначе непонятный отказ installation_proxy.
+    if ios.is_some() {
+        let p = path.to_path_buf();
+        let need = tokio::task::spawn_blocking(move || crate::library::read_min_os(&p)).await.ok().flatten();
+        if let Err(e) = crate::ios_compat::check(need.as_deref(), ios.as_deref()) {
+            return failed(e);
+        }
     }
     emit(JobState::Installing { percent: 0 });
     let (ptx, mut prx) = mpsc::channel::<u8>(64);
@@ -114,6 +128,7 @@ fn dir_size(dir: &Path) -> u64 {
 
 async fn run_job(
     id: i64,
+    version: Option<&str>,
     session: &Session,
     library: &Library,
     space: &dyn SpaceProbe,
@@ -137,7 +152,7 @@ async fn run_job(
     emit(JobState::Downloading { bytes: 0 });
     let result = {
         let started = std::sync::atomic::AtomicBool::new(false);
-        let download = session.download_marked(id, &partial, &started);
+        let download = session.download_marked(id, &partial, version, &started);
         tokio::pin!(download);
         let mut tick = tokio::time::interval(POLL);
         tick.tick().await; // первый тик срабатывает сразу
@@ -175,15 +190,16 @@ struct Worker {
     space: Arc<dyn SpaceProbe>,
     hub: Arc<dyn DeviceHub>,
     tgt: Arc<Mutex<Option<String>>>,
+    ios: Arc<Mutex<HashMap<String, String>>>,
     idle: Duration,
 }
 
 /// Один job целиком: скачивание (если нужно), затем установка (если задан телефон).
 async fn process(job: Job, w: Worker, emit: Arc<dyn Fn(JobState) + Send + Sync>) {
-    let Worker { session, library, space, hub, tgt, idle } = w;
+    let Worker { session, library, space, hub, tgt, ios, idle } = w;
     // explicit: установку попросили прямо (`install_saved`) — без телефона это ошибка.
     let (saved, explicit) = match job {
-        Job::Download(id, only) => match run_job(id, &session, &library, space.as_ref(), idle, emit.as_ref()).await {
+        Job::Download(id, only, version) => match run_job(id, version.as_deref(), &session, &library, space.as_ref(), idle, emit.as_ref()).await {
             Ok(path) => {
                 emit(JobState::Saved { path: path.clone() });
                 ((!only).then_some((path, None)), false)
@@ -199,7 +215,8 @@ async fn process(job: Job, w: Worker, emit: Arc<dyn Fn(JobState) + Send + Sync>)
         let udid = device.or_else(|| tgt.lock().unwrap().clone());
         // Без телефона скачанное остаётся в `Saved`; `install_saved` поставит позже.
         if udid.is_some() || explicit {
-            emit(run_install(hub.as_ref(), udid, &path, emit.as_ref()).await);
+            let phone_ios = udid.as_ref().and_then(|u| ios.lock().unwrap().get(u).cloned());
+            emit(run_install(hub.as_ref(), udid, phone_ios, &path, emit.as_ref()).await);
         }
     }
 }
@@ -229,11 +246,12 @@ impl Queue {
         let (events, _) = broadcast::channel(4096);
         let target: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
         let ev = events.clone();
-        let worker = Worker { session, library, space, hub, tgt: target.clone(), idle };
+        let ios: Arc<Mutex<HashMap<String, String>>> = Arc::default();
+        let worker = Worker { session, library, space, hub, tgt: target.clone(), ios: ios.clone(), idle };
         tokio::spawn(async move {
             while let Some((seq, job)) = rx.recv().await {
                 let id = match &job {
-                    Job::Download(id, _) | Job::Install(id, _, _) => *id,
+                    Job::Download(id, _, _) | Job::Install(id, _, _) => *id,
                 };
                 {
                     let mut p = current.lock().unwrap();
@@ -255,7 +273,13 @@ impl Queue {
                 }
             }
         });
-        Self { tx, pending, events, target }
+        Self { tx, pending, events, target, ios }
+    }
+
+    /// iOS подключённых телефонов (udid, ProductVersion) после опроса: по ней установка
+    /// отказывает копии, которой нужна iOS новее. Прежние записи заменяются.
+    pub fn set_phone_versions(&self, phones: Vec<(String, String)>) {
+        *self.ios.lock().unwrap() = phones.into_iter().filter(|(_, v)| !v.trim().is_empty()).collect();
     }
 
     /// Телефон, на который ставить после `Saved`; `None` — останавливаться на `Saved`.
@@ -265,7 +289,7 @@ impl Queue {
 
     fn send(&self, job: Job) {
         let id = match &job {
-            Job::Download(id, _) | Job::Install(id, _, _) => *id,
+            Job::Download(id, _, _) | Job::Install(id, _, _) => *id,
         };
         let mut p = self.pending.lock().unwrap();
         let seq = p.next;
@@ -305,14 +329,20 @@ impl Queue {
     }
 
     fn enqueue_with(&self, apps: Vec<(i64, String)>, only: bool) {
-        for (id, _name) in apps {
+        self.enqueue_versions(apps.into_iter().map(|(id, _)| (id, None)).collect(), only);
+    }
+
+    /// Скачать каждое (trackId, версия): версия — выбранная человеком («Другая версия…»), `None`
+    /// — последняя. `only` — «Только скачать».
+    pub fn enqueue_versions(&self, apps: Vec<(i64, Option<String>)>, only: bool) {
+        for (id, version) in apps {
             if id <= 0 {
                 let error = AppError::Unknown { detail: "invalid track id".into() };
                 let _ = self.events.send((id, JobState::Failed { error, saved: None }));
                 continue;
             }
             let _ = self.events.send((id, JobState::Queued));
-            self.send(Job::Download(id, only));
+            self.send(Job::Download(id, only, version));
         }
     }
 
@@ -678,6 +708,59 @@ mod tests {
         let ev = collect_installs(&mut rx, 1).await;
         assert_eq!(of(&ev, -6).last().unwrap(), &&JobState::Installed);
         assert_eq!(hub.calls.lock().unwrap()[1].0, "UDID-B");
+    }
+
+    /// Как DownloadRunner, но запоминает аргументы каждого запуска.
+    struct ArgsRunner {
+        inner: DownloadRunner,
+        args: Mutex<Vec<Vec<String>>>,
+    }
+    #[async_trait]
+    impl IpaRunner for ArgsRunner {
+        async fn run(&self, args: &[String]) -> RunResult {
+            self.args.lock().unwrap().push(args.to_vec());
+            self.inner.run(args).await
+        }
+    }
+
+    #[tokio::test]
+    async fn chosen_version_is_downloaded() {
+        let r = Arc::new(ArgsRunner { inner: DownloadRunner { fail: vec![], calls: Mutex::new(vec![]) }, args: Mutex::new(vec![]) });
+        let (q, _t, _) = setup(r.clone(), 10 * GB);
+        let mut rx = q.subscribe();
+        q.enqueue_versions(vec![(111, Some("812236754".into())), (222, None)], false);
+        let ev = collect(&mut rx, 2).await;
+        assert!(matches!(of(&ev, 111).last().unwrap(), JobState::Saved { .. }));
+        let args = r.args.lock().unwrap();
+        let ver = |a: &Vec<String>| a.iter().position(|x| x == "--external-version-id").map(|i| a[i + 1].clone());
+        assert_eq!(ver(&args[0]).as_deref(), Some("812236754"));
+        assert_eq!(ver(&args[1]), None, "без выбора — последняя");
+        assert!(args.iter().flatten().all(|a| !a.contains("purchase")));
+    }
+
+    /// Копия требует iOS новее телефона: не ставим, понятная ошибка, копия остаётся.
+    #[tokio::test]
+    async fn too_old_ios_refuses_install_before_touching_phone() {
+        let (q, t, _, hub) = setup_hub(ok_runner(), 10 * GB, Behavior::Ok);
+        let copy = t.path().join("5_com.example.c_2.0.ipa");
+        crate::library::testutil::make_ipa_min_os(&copy, "com.example.c", "2.0", "16.0");
+        q.set_phone_versions(vec![("UDID-1".into(), "15.7".into()), ("UDID-2".into(), "16.1".into())]);
+        let mut rx = q.subscribe();
+        q.install_on(-5, copy.clone(), "UDID-1".into());
+        let ev = collect_installs(&mut rx, 1).await;
+        assert_eq!(
+            of(&ev, -5).last().unwrap(),
+            &&JobState::Failed { error: AppError::IosTooOld { need: "16.0".into(), have: "15.7".into() }, saved: Some(copy.clone()) }
+        );
+        assert!(hub.calls.lock().unwrap().is_empty(), "телефон не трогали");
+        // телефон с подходящей iOS — ставит
+        q.install_on(-6, copy.clone(), "UDID-2".into());
+        let ev = collect_installs(&mut rx, 1).await;
+        assert_eq!(of(&ev, -6).last().unwrap(), &&JobState::Installed);
+        // iOS телефона неизвестна — ставит (откажет сам iPhone, если что)
+        q.install_on(-7, copy, "UDID-3".into());
+        let ev = collect_installs(&mut rx, 1).await;
+        assert_eq!(of(&ev, -7).last().unwrap(), &&JobState::Installed);
     }
 
     #[tokio::test]
