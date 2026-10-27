@@ -1,5 +1,5 @@
 // Строки экрана «Выбор»: группы, поиск, проверка покупок. Чистые функции, без DOM.
-import type { OwnedEvent, RowDto, UiError } from "./types";
+import type { OwnedEvent, PhoneDto, RowDto, UiError } from "./types";
 
 export type OwnedState = { kind: "checking" } | { kind: "yes" } | { kind: "no" } | { kind: "error"; error: UiError };
 export type OwnedMap = Map<number, OwnedState>;
@@ -217,7 +217,7 @@ export type TileLine = { text: string; tone: TileTone; up?: string; note?: strin
  * по нажатию повторяет проверку прав. `note` — третья строка рядом с версией («Неизвестный Apple ID», «Есть копия на компьютере»). */
 export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean, withPhone: boolean): TileLine {
   if (r.ipad_only && toIphone) return { text: "только для iPad", tone: "warn" };
-  if (r.other_account) return { text: "Куплено на другом Apple ID", tone: "warn" };
+  if (r.other_account) return { text: r.purchaser_masked ? `Куплено на другом Apple ID (${r.purchaser_masked})` : "Куплено на другом Apple ID", tone: "warn" };
   if ((r.source === "removed" || r.source === "phone") && !r.has_saved_copy) {
     if (!s || s.kind === "checking") return { text: "проверяем…", tone: "checking" };
     if (s.kind === "no") return { text: "Нет на вашем Apple ID", tone: "muted" };
@@ -230,6 +230,8 @@ export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean
     if (hasNewer(r)) return withNote({ text: `на iPhone ${have} → `, up: r.available_version!, tone: "plain" });
     return withNote({ text: `на iPhone ${have}`, tone: "plain" });
   }
+  // строка телефона-источника, которой нет на цели: версия со старого телефона
+  if (r.source === "phone" && r.version) return withNote({ text: `с телефона ${r.version}`, tone: "plain" });
   if (r.available_version) return withNote({ text: `доступно ${r.available_version}`, tone: "plain" });
   if (r.unknown_account) return { text: "Неизвестный Apple ID", tone: "muted" };
   if (r.has_saved_copy) return { text: "Есть копия на компьютере", tone: "plain" };
@@ -276,4 +278,23 @@ export function isLight(color: string): boolean {
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
   };
   return 0.2126 * lin(m[1]) + 0.7152 * lin(m[2]) + 0.0722 * lin(m[3]) > 0.45;
+}
+
+/** Подсказка под группой «С этого iPhone». */
+export const SOURCE_HINT = "Само приложение с телефона не забрать — копию скачаем с Apple по номеру. Работает, если приложение есть на Apple ID";
+
+/** Подсказка на «Входе» после «Войти в этот Apple ID» у плитки, купленной на другом Apple ID. */
+export const OTHER_ID_LOGIN_NOTE = "Войдите в Apple ID, с которого скачано это приложение";
+
+/** Выбор «Телефон-источник» над группой: только при двух и больше подключённых. Цель помечена. */
+export function sourceChoices(phones: PhoneDto[], source: string | null): { udid: string; label: string; selected: boolean }[] | null {
+  if (phones.length < 2) return null;
+  return phones.map((p) => ({ udid: p.udid, label: p.target ? `${p.name} (сюда ставим)` : p.name, selected: p.udid === source }));
+}
+
+/** Другой источник: строки группы «С этого iPhone» заменяются новыми, остальные остаются. */
+export function replacePhoneRows(rows: RowDto[], incoming: RowDto[]): RowDto[] {
+  const rest = rows.filter((r) => r.source !== "phone");
+  const ids = new Set(rest.map((r) => r.track_id));
+  return [...rest, ...incoming.filter((r) => !ids.has(r.track_id))];
 }

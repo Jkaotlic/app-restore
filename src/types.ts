@@ -48,6 +48,8 @@ export interface RowDto {
   size_bytes: number | null;
   /** «С этого iPhone», куплено на другом Apple ID: не выбрать. */
   other_account: boolean;
+  /** Маска покупателя у `other_account` («ma***@example.com»); полного адреса нет. */
+  purchaser_masked: string | null;
 }
 
 export type InstallState = "not_installed" | "installed" | "update_available" | "unknown";
@@ -56,6 +58,8 @@ export interface RowsDto {
   rows: RowDto[];
   ru_check_failed: boolean;
   purchases_error: UiError | null;
+  /** udid телефона-источника «С этого iPhone»; null — источника нет. */
+  source_udid: string | null;
 }
 
 export interface OwnedEvent {

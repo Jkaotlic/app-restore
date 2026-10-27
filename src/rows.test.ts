@@ -26,8 +26,12 @@ import {
   tileA11y,
   tileLine,
   visibleGroups,
+  replacePhoneRows,
+  sourceChoices,
+  SOURCE_HINT,
+  OTHER_ID_LOGIN_NOTE,
 } from "./rows";
-import type { OwnedEvent, RowDto } from "./types";
+import type { OwnedEvent, PhoneDto, RowDto } from "./types";
 
 function row(id: number, name: string, over: Partial<RowDto> = {}): RowDto {
   return {
@@ -51,6 +55,7 @@ function row(id: number, name: string, over: Partial<RowDto> = {}): RowDto {
     category: null,
     size_bytes: null,
     other_account: false,
+    purchaser_masked: null,
     ...over,
   };
 }
@@ -443,5 +448,38 @@ describe("unknown Apple ID copies", () => {
     const m = mergePurchases([u], [row(1, "Alpha")]);
     expect(m.map((r) => r.track_id)).toEqual([1, 5]);
     expect(canSelect(u, undefined, true)).toBe(true);
+  });
+});
+
+describe("phone as a source", () => {
+  const ph = (udid: string, name: string, target = false): PhoneDto => ({ udid, name, ios_version: "17", device_class: "iPhone", product_type: "p", target });
+  it("the foreign purchaser shows only the mask from Rust", () => {
+    const r = row(60, "О", { source: "phone", other_account: true, purchaser_masked: "ma***@example.com" });
+    expect(tileLine(r, undefined, false, true)).toEqual({ text: "Куплено на другом Apple ID (ma***@example.com)", tone: "warn" });
+  });
+  it("a source app missing on the target shows the source version", () => {
+    const r = row(60, "О", { source: "phone", version: "5.2", installed_version: null, available_version: "5.3" });
+    expect(tileLine(r, { kind: "yes" }, false, true)).toEqual({ text: "с телефона 5.2", tone: "plain" });
+    expect(tileLine(r, { kind: "yes" }, false, false)).toEqual({ text: "с телефона 5.2", tone: "plain" });
+    expect(tileLine({ ...r, installed_version: "5.0" }, { kind: "yes" }, false, true).text).toBe("на iPhone 5.0 → ");
+  });
+  it("picker only with more than one phone; target is marked", () => {
+    expect(sourceChoices([ph("A", "Новый", true)], "A")).toBeNull();
+    expect(sourceChoices([], null)).toBeNull();
+    expect(sourceChoices([ph("A", "Новый", true), ph("B", "Старый")], "B")).toEqual([
+      { udid: "A", label: "Новый (сюда ставим)", selected: false },
+      { udid: "B", label: "Старый", selected: true },
+    ]);
+  });
+  it("new source rows replace only the phone group", () => {
+    const list = [row(1, "К", { source: "removed" }), row(60, "Старое", { source: "phone" }), row(10, "П")];
+    const next = replacePhoneRows(list, [row(70, "Новое", { source: "phone" })]);
+    expect(next.map((r) => r.track_id)).toEqual([1, 10, 70]);
+    // строка группы с тем же trackId, что уже есть вне группы, не дублируется
+    expect(replacePhoneRows(list, [row(10, "П", { source: "phone" })]).map((r) => r.track_id)).toEqual([1, 10]);
+  });
+  it("texts", () => {
+    expect(SOURCE_HINT).toBe("Само приложение с телефона не забрать — копию скачаем с Apple по номеру. Работает, если приложение есть на Apple ID");
+    expect(OTHER_ID_LOGIN_NOTE).toBe("Войдите в Apple ID, с которого скачано это приложение");
   });
 });

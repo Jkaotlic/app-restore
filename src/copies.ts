@@ -104,6 +104,7 @@ export function copyRow(c: CopyDto): RowDto {
     category: null,
     size_bytes: null,
     other_account: false,
+    purchaser_masked: null,
   };
 }
 
