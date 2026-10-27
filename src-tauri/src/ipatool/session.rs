@@ -1,7 +1,7 @@
 
 //! Сессия ipatool: вход, список покупок, скачивание, выход. Повторы и разбор вывода внутри.
 use super::output::{IpaOutcome, OwnedApp, parse_output};
-use super::runner::{Args, IpaRunner};
+use super::runner::{Args, IpaRunner, RunResult};
 use crate::errors::AppError;
 use crate::retry::{APPLE_DELAYS, with_retry};
 use std::path::{Path, PathBuf};
@@ -65,6 +65,8 @@ pub struct Session {
     /// Замок держится на время одного запуска, поэтому check_owned и load_purchases идут вперемешку.
     one_at_a_time: Arc<tokio::sync::Mutex<()>>,
     limits: Limits,
+    /// Файл cookies ipatool: испорченный (ipatool падает на старте) откладываем и повторяем вызов.
+    cookies: Option<PathBuf>,
 }
 
 /// Какой срок у запуска (`Limits`).
@@ -77,7 +79,33 @@ enum Kind {
 
 impl Session {
     pub fn new(runner: Arc<dyn IpaRunner>, extra_args: Vec<String>) -> Self {
-        Self { runner, extra_args, delays: APPLE_DELAYS.to_vec(), one_at_a_time: Arc::default(), limits: LIMITS }
+        Self { runner, extra_args, delays: APPLE_DELAYS.to_vec(), one_at_a_time: Arc::default(), limits: LIMITS, cookies: None }
+    }
+
+    pub fn with_cookies(mut self, path: PathBuf) -> Self {
+        self.cookies = Some(path);
+        self
+    }
+
+    /// ipatool не читает свой файл cookies (`cannot load cookies`) — откладываем файл рядом.
+    /// `true`, если отложили и вызов стоит повторить.
+    fn set_aside_broken_cookies(&self, res: &RunResult) -> bool {
+        let Some(path) = &self.cookies else { return false };
+        if !(res.stderr.contains("cannot load cookies") || res.stdout.contains("cannot load cookies")) {
+            return false;
+        }
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let aside = path.with_file_name(format!("cookies.broken-{secs}"));
+        match std::fs::rename(path, &aside) {
+            Ok(()) => {
+                crate::log::write("ipatool", "cookies file unreadable, moved aside");
+                true
+            }
+            Err(e) => {
+                crate::log::write("ipatool", &format!("cookies file unreadable, not moved: {}", e.kind()));
+                false
+            }
+        }
     }
 
     #[cfg(test)]
@@ -123,13 +151,20 @@ impl Session {
             if let Some(f) = started {
                 f.store(true, Ordering::SeqCst);
             }
-            match tokio::time::timeout(run, self.runner.run(&args.0)).await {
-                Ok(r) => r,
-                Err(_) => {
-                    // команду без аргументов: среди них может быть пароль
-                    crate::log::write("ipatool", &format!("{} {}: no answer in {} s, stopped", args.0[0], args.0.get(1).map_or("", |s| s.as_str()), run.as_secs()));
-                    return Err(AppError::Timeout);
+            let mut repeated = false;
+            loop {
+                let r = match tokio::time::timeout(run, self.runner.run(&args.0)).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        // команду без аргументов: среди них может быть пароль
+                        crate::log::write("ipatool", &format!("{} {}: no answer in {} s, stopped", args.0[0], args.0.get(1).map_or("", |s| s.as_str()), run.as_secs()));
+                        return Err(AppError::Timeout);
+                    }
+                };
+                if repeated || !self.set_aside_broken_cookies(&r) {
+                    break r;
                 }
+                repeated = true;
             }
         };
         if res.stdout.trim().is_empty() && !res.stderr.trim().is_empty() {
@@ -375,6 +410,39 @@ mod tests {
     }
     fn strs(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn broken_cookies() -> RunResult {
+        RunResult {
+            stdout: String::new(),
+            exit_code: 2,
+            stderr: "panic: cannot load cookies: invalid character '#' looking for beginning of value\n\ngoroutine 1 [running]:".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn broken_cookies_are_moved_aside_and_the_call_repeats() {
+        let dir = tempfile::tempdir().unwrap();
+        let cookies = dir.path().join("cookies");
+        std::fs::write(&cookies, "# Netscape HTTP Cookie File\n").unwrap();
+        let r = Arc::new(FakeRunner::new(vec![broken_cookies(), fx("auth-info")]));
+        let s = session(&r, &[]).with_cookies(cookies.clone());
+        assert!(matches!(s.info().await, Ok(Some(_))));
+        assert_eq!(r.calls().len(), 2, "повтор после того, как файл отложен");
+        assert!(!cookies.exists());
+        let kept: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        assert!(kept.iter().any(|n| n.starts_with("cookies.broken-")), "{kept:?}");
+    }
+
+    #[tokio::test]
+    async fn broken_cookies_twice_is_one_retry_then_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let cookies = dir.path().join("cookies");
+        std::fs::write(&cookies, "#").unwrap();
+        let r = Arc::new(FakeRunner::new(vec![broken_cookies(), broken_cookies()]));
+        let s = session(&r, &[]).with_cookies(cookies);
+        assert!(matches!(s.info().await, Err(AppError::Unknown { .. })));
+        assert_eq!(r.calls().len(), 2);
     }
 
     #[tokio::test]

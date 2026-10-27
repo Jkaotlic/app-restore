@@ -146,7 +146,12 @@ impl AppState {
                 vec![]
             }
         };
-        let session = Arc::new(Session::new(Arc::new(SidecarRunner::new(app.clone())), extra));
+        let cookies = dirs::home_dir().map(|h| h.join(".ipatool").join("cookies"));
+        let mut session = Session::new(Arc::new(SidecarRunner::new(app.clone())), extra);
+        if let Some(c) = cookies {
+            session = session.with_cookies(c);
+        }
+        let session = Arc::new(session);
         let data_dir = app.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir().join("app-restore"));
         let home = dirs::home_dir().unwrap_or_else(|| data_dir.clone());
         let sessions = Arc::new(Sessions::real(data_dir.join("accounts.json"), &home));
