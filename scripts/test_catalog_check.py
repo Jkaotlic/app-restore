@@ -490,6 +490,57 @@ class NewsTests(unittest.TestCase):
         self.assertEqual((res.candidates, res.errors), ([], []))
         self.assertNotIn("## ", res.report)
 
+class HardeningTests(unittest.TestCase):
+    def test_apple_ids_ignore_query_refs_developer_and_glued_suffix(self):
+        self.assertEqual(cc.apple_ids("https://apps.apple.com/ru/app/x?ref=https://evil.example.com/p/id999"), [])
+        self.assertEqual(cc.apple_ids("https://apps.apple.com/ru/developer/x/id1234"), [])
+        self.assertEqual(cc.apple_ids("https://apps.apple.com/ru/app/x/id12abc"), [])
+        self.assertEqual(cc.apple_ids("https://apps.apple.com/ru/app/id55 https://apps.apple.com/ru/app/%D1%81/id66?mt=8"),
+                         [55, 66])
+
+    def test_apple_ids_timing_on_many_bare_urls(self):
+        import time
+        t = time.time()
+        cc.apple_ids("apps.apple.com/" * 20000)
+        self.assertLess(time.time() - t, 1)
+
+    def test_parse_feed_is_linear_on_unclosed_items(self):
+        import time
+        t = time.time()
+        items = cc.parse_feed("<item>" * 40000)
+        self.assertLess(time.time() - t, 1)
+        self.assertEqual(items, [])
+        t = time.time()
+        cc.parse_feed("<item>" * 20000 + "<title>x</title></item>")
+        self.assertLess(time.time() - t, 1)
+
+    def test_link_skips_atom_self_closing_and_falls_back_to_guid(self):
+        a = ('<item><title>t</title><atom:link href="https://x/self" rel="self"/>'
+             '<link>https://x/real</link></item>')
+        self.assertEqual(cc.parse_feed(a)[0]["link"], "https://x/real")
+        b = '<item><title>t</title><atom:link href="https://x/self"/><guid>https://x/g</guid></item>'
+        self.assertEqual(cc.parse_feed(b)[0]["link"], "https://x/g")
+        c = '<item><title>t</title><link/><guid isPermaLink="false">abc</guid></item>'
+        self.assertEqual(cc.parse_feed(c)[0]["link"], "")
+
+    def test_non_http_article_links_are_not_fetched(self):
+        feed = rss(("СБОЛ", "file:///etc/passwd", FRESH, ""), ("СБОЛ", "ftp://x/1", FRESH, ""))
+        res, web, _ = news([SBOL], {FEED: feed})
+        self.assertEqual(web.calls, [FEED])
+
+    def test_yo_is_folded_in_brand_match(self):
+        e = entry(7, "Всё онлайн", disguised=True)
+        feed = rss(("Все онлайн вернулось", ART, FRESH, ""))
+        res, web, _ = news([e], {FEED: feed, ART: article(TG)}, FakeApple({(TG, "ru"): fixture("lookup-ru.json")}))
+        self.assertEqual([c["track_id"] for c in res.candidates], [TG])
+        feed = rss(("ВСЁ ОНЛАЙН", ART, FRESH, ""))
+        res, _, _ = news([entry(7, "Все онлайн", disguised=True)], {FEED: feed, ART: article(TG)})
+        self.assertEqual([c["track_id"] for c in res.candidates], [TG])
+
+    def test_workflow_has_timeout(self):
+        with open(os.path.join(HERE, "..", ".github", "workflows", "catalog-check.yml"), encoding="utf-8") as f:
+            self.assertIn("timeout-minutes: 30", f.read())
+
 
 class NewsMainTests(unittest.TestCase):
     def setUp(self):

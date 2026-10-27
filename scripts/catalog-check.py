@@ -96,7 +96,7 @@ class Result:
 
 
 def _norm(s):
-    return (s or "").strip().casefold()
+    return (s or "").strip().casefold().replace("ё", "е")
 
 
 def _name_matches(track_name, terms):
@@ -212,8 +212,12 @@ def check_catalog(catalog, http_get, sleep=time.sleep, ignored=()):
 
 # ---------- Замаскированные выпуски: новости и аккаунты продавцов ----------
 
-APPLE_LINK = re.compile(r"apps\.apple\.com/[^\s\"'<>]*?/id(\d+)", re.I)
-APPLE_LINK_NOCC = re.compile(r"apps\.apple\.com/id(\d+)", re.I)
+_SLUG = r"(?:[^\s\"'<>?#&=/]{0,200}/)?"
+_TAIL = r"(\d+)(?![0-9A-Za-z])"
+# только путь /<cc>/app/<slug>/idNNN: query-строки, /developer/ и склеенные суффиксы не считаются
+APPLE_LINK = re.compile(r"apps\.apple\.com/(?:[a-z]{2}/)?app/" + _SLUG + "id" + _TAIL, re.I)
+APPLE_LINK_NOCC = re.compile(r"apps\.apple\.com/id" + _TAIL, re.I)
+MAX_FEED = 3_000_000
 
 
 def apple_ids(text):
@@ -232,6 +236,20 @@ def _tag(block, name):
     return c.group(1) if c else html.unescape(v)
 
 
+def _item_link(block):
+    """<link>текст</link> (не atom:link и не самозакрытый), иначе guid с http(s)."""
+    for m in re.finditer(r"<link\b([^>]*)>", block, re.I):
+        if m.group(1).rstrip().endswith("/"):
+            continue
+        end = block.find("</link>", m.end())
+        if end != -1:
+            v = block[m.end():end].strip()
+            c = re.fullmatch(r"<!\[CDATA\[(.*?)\]\]>", v, re.S)
+            return (c.group(1) if c else html.unescape(v)).strip()
+    g = _tag(block, "guid").strip()
+    return g if g.lower().startswith(("http://", "https://")) else ""
+
+
 def _plain(t):
     return html.unescape(re.sub(r"<[^>]+>", " ", t))
 
@@ -239,8 +257,26 @@ def _plain(t):
 def parse_feed(text):
     """RSS -> [{title, link, date (aware datetime | None), text, raw}]. Регулярками: ленты бывают битыми."""
     items = []
-    for m in re.finditer(r"<item\b.*?</item>", text, re.S | re.I):
-        block = m.group(0)
+    text = text[:MAX_FEED]
+    low = text.lower()
+    pos, end = 0, -2
+    while True:
+        st = low.find("<item", pos)
+        if st == -1:
+            break
+        if low[st + 5:st + 6].isalnum() or low[st + 5:st + 6] == "_":
+            pos = st + 5
+            continue
+        if end < st:
+            end = low.find("</item>", st)  # позиция растёт монотонно: проход линейный
+            if end == -1:
+                break
+        nxt = low.find("<item", st + 5, end)
+        if nxt != -1:  # незакрытый item: берём следующий старт
+            pos = nxt
+            continue
+        block = text[st:end + 7]
+        pos = end + 7
         date = None
         try:
             date = email.utils.parsedate_to_datetime(_tag(block, "pubDate"))
@@ -250,7 +286,7 @@ def parse_feed(text):
             pass
         title = _tag(block, "title")
         body = _tag(block, "description") + " " + _tag(block, "encoded")
-        items.append({"title": _plain(title).strip(), "link": _tag(block, "link").strip(), "date": date,
+        items.append({"title": _plain(title).strip(), "link": _item_link(block), "date": date,
                       "text": _plain(title + " " + body), "raw": block})
     return items
 
@@ -323,7 +359,7 @@ def find_news_candidates(catalog, sources, http_get, text_get, sleep=time.sleep,
                 continue
             seen_articles.add(it["link"])
             ids = apple_ids(it["raw"])
-            if counters["articles"] < max_articles:
+            if counters["articles"] < max_articles and it["link"].lower().startswith(("http://", "https://")):
                 counters["articles"] += 1
                 try:
                     pause()
