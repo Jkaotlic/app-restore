@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addedText, dropMessages, mergePending, MAX_PENDING, NO_FILES_TEXT, pendingNote } from "./drop";
+import { addedText, batchText, dropMessages, mergePending, MAX_PENDING, NO_FILES_TEXT, pendingNote, runBatch } from "./drop";
 import type { DropDto, UiError } from "./types";
 
 const err = (code: string, text: string): UiError => ({ code, text, retryable: false });
@@ -28,5 +28,40 @@ describe("drop", () => {
     expect(addedText(0, 2)).toBe("Не добавлено ни одного из 2");
     expect(pendingNote(0)).toBeNull();
     expect(pendingNote(2)).toBe("Ссылок перетащено: 2 — добавятся на шаге «Выбор»");
+  });
+});
+
+describe("batch of dropped ids", () => {
+  it("adds one by one, collects unique errors", async () => {
+    const seen: number[] = [];
+    const steps: string[] = [];
+    const r = await runBatch(
+      [1, 2, 3, 4],
+      async (id) => {
+        seen.push(id);
+        if (id % 2 === 0) throw new Error("нет прав");
+      },
+      { cancelled: () => false, step: (i, n) => steps.push(`${i}/${n}`), errorText: (e) => (e as Error).message },
+    );
+    expect(seen).toEqual([1, 2, 3, 4]);
+    expect(steps).toEqual(["1/4", "2/4", "3/4", "4/4"]);
+    expect(r).toEqual({ added: 2, total: 4, errors: ["нет прав"], cancelled: false });
+    expect(batchText(r)).toBe("Добавлено 2 из 4. нет прав");
+  });
+
+  it("stops when cancelled — the rest is not asked", async () => {
+    let stop = false;
+    const seen: number[] = [];
+    const r = await runBatch(
+      [1, 2, 3],
+      async (id) => {
+        seen.push(id);
+        stop = true;
+      },
+      { cancelled: () => stop, errorText: String },
+    );
+    expect(seen).toEqual([1]);
+    expect(r).toEqual({ added: 1, total: 3, errors: [], cancelled: true });
+    expect(batchText(r)).toBe("Добавлено 1 из 3 · остановлено");
   });
 });

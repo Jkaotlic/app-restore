@@ -1,6 +1,6 @@
 import { asUiError, call, go, refreshSidebar, register, safe, state, targetIsIphone, targetPhone, type Job } from "../app";
 import { h } from "../dom";
-import { addedText, dropMessages, mergePending } from "../drop";
+import { batchText, dropMessages, mergePending, runBatch } from "../drop";
 import { HELP_STEPS, type HelpAction } from "../help";
 import { purchasesProgressText, errorText } from "../labels";
 import {
@@ -113,6 +113,11 @@ register("choose", () => {
   let sweepError: string | null = null;
   /** Идёт добавление по ссылкам (поле или перетаскивание): следующие ждут в `state.pendingLinks`. */
   let linkBusy = false;
+  /** «Отменить» пачку номеров; `left` — ушли с «Выбора»: пачка тоже останавливается. */
+  let batchStop = false;
+  let left = false;
+  const cancelBtn = h("button", { class: "link", text: "Отменить", attrs: { type: "button" }, on: { click: () => (batchStop = true) } });
+  cancelBtn.hidden = true;
   /** Подключённые телефоны (udid через запятую): выбор источника перерисовывается, только когда они меняются. */
   let phonesKey = state.phones.map((p) => p.udid).join(",");
   // «Только для iPad» зависит от устройства, на которое ставим, а не от «Дальше» (как и `checked` в Rust)
@@ -745,7 +750,8 @@ register("choose", () => {
   }
 
   /** Несколько номеров (текст со ссылками, перетаскивание): каждый через `add_by_link` с проверкой
-   * владения, по одному. Итог — в `out`. Пока идёт, новые номера ждут в `state.pendingLinks`. */
+   * владения, по одному (`runBatch`). Итог — в `out`, рядом с ним «Отменить»; уход с «Выбора»
+   * тоже останавливает. Пока идёт, новые номера ждут в `state.pendingLinks`. */
   async function addMany(ids: number[], out: HTMLElement) {
     if (linkBusy) {
       state.pendingLinks = mergePending(state.pendingLinks, ids);
@@ -753,27 +759,32 @@ register("choose", () => {
       return;
     }
     linkBusy = true;
+    batchStop = false;
     linkBtn.disabled = true;
     out.hidden = true;
-    let added = 0;
-    const errors = new Set<string>();
-    for (const [i, id] of ids.entries()) {
-      linkBtn.textContent = `Проверяем ${i + 1} из ${ids.length}…`;
-      try {
+    out.after(cancelBtn);
+    cancelBtn.hidden = false;
+    const r = await runBatch(
+      ids,
+      async (id) => {
         takeLinkRow(await call<RowDto>("add_by_link", { link: String(id) }));
-        added++;
+        if (left) return;
         renderChips();
         renderList();
-      } catch (err) {
-        errors.add(errorText(asUiError(err)));
-      }
-    }
-    out.textContent = [addedText(added, ids.length), ...errors].join(". ");
+      },
+      {
+        cancelled: () => batchStop || left,
+        step: (i, n) => (linkBtn.textContent = `Проверяем ${i} из ${n}…`),
+        errorText: (e) => errorText(asUiError(e)),
+      },
+    );
+    cancelBtn.hidden = true;
+    out.textContent = batchText(r);
     out.hidden = false;
     linkBusy = false;
     linkBtn.disabled = false;
     linkBtn.textContent = "Добавить";
-    takePending();
+    if (!r.cancelled) takePending();
   }
 
   /** Номера, перетащенные до «Выбора» или пока шло добавление. */
@@ -939,6 +950,7 @@ register("choose", () => {
     },
     // Уход с «Выбора» останавливает проверку прав: пустой список отменяет идущую.
     leave: () => {
+      left = true;
       clearTimeout(visibleTimer);
       if (!started) state.choice = { selected: [...selected], unchecked: [...unchecked], picked: [...picked] };
       void call("check_owned", { trackIds: [] }).catch(() => undefined);

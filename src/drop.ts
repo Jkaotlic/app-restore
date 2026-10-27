@@ -30,3 +30,40 @@ export function addedText(added: number, total: number): string {
 export function pendingNote(n: number): string | null {
   return n ? `Ссылок перетащено: ${n} — добавятся на шаге «Выбор»` : null;
 }
+
+/** Итог пачки номеров (`runBatch`). */
+export interface BatchResult {
+  added: number;
+  total: number;
+  errors: string[];
+  /** Остановлено («Отменить» или уход с «Выбора»): остальные номера не спрашивали. */
+  cancelled: boolean;
+}
+
+/** Номера по одному через `add` (на «Выборе» — `add_by_link` с проверкой владения). Перед каждым
+ * проверяется `cancelled`; `step(i, n)` — для «Проверяем i из n…». */
+export async function runBatch(
+  ids: number[],
+  add: (id: number) => Promise<void>,
+  opts: { cancelled: () => boolean; step?: (i: number, n: number) => void; errorText: (e: unknown) => string },
+): Promise<BatchResult> {
+  let added = 0;
+  const errors = new Set<string>();
+  for (const [i, id] of ids.entries()) {
+    if (opts.cancelled()) return { added, total: ids.length, errors: [...errors], cancelled: true };
+    opts.step?.(i + 1, ids.length);
+    try {
+      await add(id);
+      added++;
+    } catch (e) {
+      errors.add(opts.errorText(e));
+    }
+  }
+  return { added, total: ids.length, errors: [...errors], cancelled: false };
+}
+
+/** Текст итога пачки. */
+export function batchText(r: BatchResult): string {
+  const head = r.cancelled ? `${addedText(r.added, r.total)} · остановлено` : addedText(r.added, r.total);
+  return [head, ...r.errors].join(". ");
+}
