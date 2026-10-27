@@ -26,6 +26,9 @@ pub struct PendingJob {
     pub udid: Option<String>,
     /// Apple ID, с которого скачивали: задания другого Apple ID без него не продолжаются.
     pub account: String,
+    /// Номер постановки (`PendingStore::next_seq`): после перезапуска — тот же порядок очереди.
+    #[serde(default)]
+    pub seq: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -48,7 +51,7 @@ fn same_job(a: &PendingJob, b: &PendingJob) -> bool {
 }
 
 /// Содержимое файла: живые задания и отложенные без повторов — живое главнее. Порядок
-/// постоянный (по аккаунту, затем trackId): одинаковый список не переписывает файл.
+/// постоянный (номер постановки, затем аккаунт и trackId): одинаковый список не переписывает файл.
 pub fn merge(unclaimed: &[PendingJob], live: &[PendingJob]) -> Vec<PendingJob> {
     let mut out: Vec<PendingJob> = live.to_vec();
     for u in unclaimed {
@@ -56,7 +59,7 @@ pub fn merge(unclaimed: &[PendingJob], live: &[PendingJob]) -> Vec<PendingJob> {
             out.push(u.clone());
         }
     }
-    out.sort_by(|a, b| a.account.to_lowercase().cmp(&b.account.to_lowercase()).then(a.track_id.cmp(&b.track_id)));
+    out.sort_by(|a, b| a.seq.cmp(&b.seq).then(a.account.to_lowercase().cmp(&b.account.to_lowercase())).then(a.track_id.cmp(&b.track_id)));
     out
 }
 
@@ -69,6 +72,8 @@ pub struct Live<'a> {
     /// Цель установки сейчас.
     pub udid: Option<&'a str>,
     pub account: &'a str,
+    /// Номера постановки заданий (`PendingStore::next_seq`).
+    pub seqs: &'a HashMap<i64, u64>,
 }
 
 /// Незавершённые задания Apple ID по trackId. Установки из «Все копии» (отрицательный ключ)
@@ -85,28 +90,33 @@ pub fn live(l: &Live) -> Vec<PendingJob> {
             version: l.versions.get(id).cloned(),
             udid: l.udid.map(str::to_string),
             account: l.account.to_string(),
+            seq: l.seqs.get(id).copied().unwrap_or_default(),
         })
         .collect();
-    out.sort_by_key(|j| j.track_id);
+    out.sort_by_key(|j| (j.seq, j.track_id));
     out
 }
 
 /// Пачка для `start` при «Продолжить»: «Только скачать» или нет, (trackId, имя), (trackId, версия).
 pub type Batch = (bool, Vec<(i64, String)>, Vec<(i64, String)>);
 
-/// «Продолжить»: задания по пачкам `start` — сначала с установкой, затем «Только скачать».
+/// «Продолжить»: задания по пачкам `start` в исходном порядке постановки; подряд идущие одного
+/// режима — одна пачка.
 pub fn batches(jobs: &[PendingJob]) -> Vec<Batch> {
-    [false, true]
-        .into_iter()
-        .filter_map(|only| {
-            let mine: Vec<&PendingJob> = jobs.iter().filter(|j| j.download_only == only).collect();
-            (!mine.is_empty()).then(|| {
-                let items = mine.iter().map(|j| (j.track_id, j.name.clone())).collect();
-                let versions = mine.iter().filter_map(|j| j.version.clone().map(|v| (j.track_id, v))).collect();
-                (only, items, versions)
-            })
-        })
-        .collect()
+    let mut sorted: Vec<&PendingJob> = jobs.iter().collect();
+    sorted.sort_by_key(|j| (j.seq, j.track_id));
+    let mut out: Vec<Batch> = vec![];
+    for j in sorted {
+        if out.last().is_none_or(|b| b.0 != j.download_only) {
+            out.push((j.download_only, vec![], vec![]));
+        }
+        let b = out.last_mut().expect("just pushed");
+        b.1.push((j.track_id, j.name.clone()));
+        if let Some(v) = &j.version {
+            b.2.push((j.track_id, v.clone()));
+        }
+    }
+    out
 }
 
 /// Телефон, на который ставили, если он сейчас подключён: первый из заданий с установкой.
@@ -135,13 +145,21 @@ struct Inner {
 pub struct PendingStore {
     path: Option<PathBuf>,
     inner: Mutex<Inner>,
+    /// Следующий номер постановки: после записанных в файле.
+    seq: std::sync::atomic::AtomicU64,
 }
 
 impl PendingStore {
     /// Читает файл; нет его или он битый — пусто.
     pub fn open(path: PathBuf) -> Self {
         let jobs = std::fs::read_to_string(&path).map(|t| parse(&t)).unwrap_or_default();
-        Self { path: Some(path), inner: Mutex::new(Inner { unclaimed: jobs.clone(), written: jobs }) }
+        let next = jobs.iter().map(|j| j.seq).max().unwrap_or(0) + 1;
+        Self { path: Some(path), inner: Mutex::new(Inner { unclaimed: jobs.clone(), written: jobs }), seq: next.into() }
+    }
+
+    /// Номер постановки нового задания: растёт и между запусками.
+    pub fn next_seq(&self) -> u64 {
+        self.seq.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Отложенные задания Apple ID `email`, кроме тех, что уже идут (`live`): для баннера.
@@ -214,7 +232,7 @@ mod tests {
     use crate::errors::AppError;
 
     fn job(id: i64, account: &str) -> PendingJob {
-        PendingJob { track_id: id, name: format!("App {id}"), download_only: false, version: None, udid: Some("UDID-1".into()), account: account.into() }
+        PendingJob { track_id: id, name: format!("App {id}"), download_only: false, version: None, udid: Some("UDID-1".into()), account: account.into(), seq: id as u64 }
     }
 
     fn ids(list: &[PendingJob]) -> Vec<i64> {
@@ -234,25 +252,49 @@ mod tests {
         let names = HashMap::from([(1, "Банк".to_string()), (3, "Такси".to_string()), (4, "Карты".to_string())]);
         let only = HashSet::from([4]);
         let versions = HashMap::from([(3, "812".to_string())]);
-        let got = live(&Live { jobs: &jobs, names: &names, download_only: &only, versions: &versions, udid: Some("U1"), account: "me@example.com" });
-        assert_eq!(ids(&got), [1, 3], "итоги, «Сохранено» у «Только скачать» и копии — не в счёт");
+        let seqs = HashMap::from([(1, 8u64), (3, 4u64)]);
+        let got = live(&Live { jobs: &jobs, names: &names, download_only: &only, versions: &versions, udid: Some("U1"), account: "me@example.com", seqs: &seqs });
+        assert_eq!(ids(&got), [3, 1], "итоги, «Сохранено» у «Только скачать» и копии — не в счёт; порядок постановки");
+        let got: Vec<PendingJob> = got.into_iter().rev().collect();
         assert_eq!(got[0].name, "Банк");
         assert_eq!(got[1].version.as_deref(), Some("812"));
         assert!(got.iter().all(|j| j.udid.as_deref() == Some("U1") && j.account == "me@example.com"));
     }
 
+    fn with_seq(mut j: PendingJob, seq: u64) -> PendingJob {
+        j.seq = seq;
+        j
+    }
+
+    /// Пачки идут в исходном порядке постановки: подряд одного режима — одна пачка.
     #[test]
-    fn batches_split_by_mode_install_first() {
-        let mut a = job(1, "me@example.com");
+    fn batches_keep_the_original_order() {
+        let mut a = with_seq(job(1, "me@example.com"), 10);
         a.version = Some("5".into());
-        let mut b = job(2, "me@example.com");
+        let mut b = with_seq(job(2, "me@example.com"), 11);
         b.download_only = true;
-        let c = job(3, "me@example.com");
-        let got = batches(&[b, a, c]);
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0], (false, vec![(1, "App 1".into()), (3, "App 3".into())], vec![(1, "5".into())]));
+        let c = with_seq(job(3, "me@example.com"), 12);
+        let d = with_seq(job(9, "me@example.com"), 13);
+        let got = batches(&[d, b, c, a]);
+        assert_eq!(got.len(), 3);
+        assert_eq!(got[0], (false, vec![(1, "App 1".into())], vec![(1, "5".into())]));
         assert_eq!(got[1], (true, vec![(2, "App 2".into())], vec![]));
+        assert_eq!(got[2], (false, vec![(3, "App 3".into()), (9, "App 9".into())], vec![]));
         assert!(batches(&[]).is_empty());
+    }
+
+    #[test]
+    fn file_keeps_queue_order_and_numbering_continues() {
+        let t = tempfile::tempdir().unwrap();
+        let path = t.path().join("p.json");
+        let s = PendingStore::open(path.clone());
+        let first = s.next_seq();
+        assert!(s.next_seq() > first);
+        // поставили 30, потом 5: в файле и после перезапуска — тот же порядок, не по trackId
+        s.sync(&[with_seq(job(30, "me@example.com"), 1), with_seq(job(5, "me@example.com"), 2)]);
+        let s = PendingStore::open(path);
+        assert_eq!(ids(&s.offered("me@example.com", &HashSet::new())), [30, 5]);
+        assert!(s.next_seq() > 2, "новые номера — после записанных");
     }
 
     #[test]

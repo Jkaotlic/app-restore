@@ -161,6 +161,8 @@ pub struct AppState {
     purchases_gen: AtomicU64,
     /// Незавершённые задания между запусками (`pending-jobs.json`): «В прошлый раз не закончили».
     pending: PendingStore,
+    /// Номер постановки задания (`PendingStore::next_seq`): порядок очереди в файле.
+    job_seq: Mutex<HashMap<i64, u64>>,
 }
 
 impl AppState {
@@ -234,6 +236,7 @@ impl AppState {
             account_epoch: AtomicU64::new(0),
             purchases_gen: AtomicU64::new(0),
             pending: PendingStore::open(data_dir.join("pending-jobs.json")),
+            job_seq: Mutex::new(HashMap::new()),
         }
     }
 
@@ -244,6 +247,7 @@ impl AppState {
         let versions = self.chosen_versions.lock().unwrap().clone();
         let names = self.names.lock().unwrap().clone();
         let udid = self.phones.lock().unwrap().target.clone();
+        let seqs = self.job_seq.lock().unwrap().clone();
         let jobs = self.jobs.lock().unwrap();
         Some(crate::pending_jobs::live(&crate::pending_jobs::Live {
             jobs: &jobs,
@@ -252,6 +256,7 @@ impl AppState {
             versions: &versions,
             udid: udid.as_deref(),
             account: &account,
+            seqs: &seqs,
         }))
     }
 
@@ -284,6 +289,12 @@ impl AppState {
         // начатое заново — уже не «прошлый раз»
         if let Some(e) = &email {
             self.pending.unclaim(e, &items.iter().map(|(id, _)| *id).collect());
+        }
+        {
+            let mut seqs = self.job_seq.lock().unwrap();
+            for (id, _) in &items {
+                seqs.insert(*id, self.pending.next_seq());
+            }
         }
         let run = RunDto { same_apple_id, email };
         *self.run.lock().unwrap() = Some(run.clone());
@@ -447,6 +458,12 @@ impl AppState {
             only.remove(id);
         }
         drop((names, fs, dl, only, chosen));
+        {
+            let mut seqs = self.job_seq.lock().unwrap();
+            for id in &gone {
+                seqs.remove(id);
+            }
+        }
         *self.run.lock().unwrap() = None;
         if let Some(before) = before {
             self.pending.release(before.into_iter().filter(|j| gone.contains(&j.track_id)).collect());
