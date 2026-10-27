@@ -636,10 +636,11 @@ pub struct JobEvent {
 }
 
 /// Задания, которые скачаны и ждут телефона. Под тем же замком помечаются `Queued`, чтобы
-/// второй вызов (следующая смена телефона) не поставил их ещё раз.
-pub fn take_waiting(jobs: &mut HashMap<i64, JobState>) -> Vec<(i64, PathBuf)> {
+/// второй вызов (следующая смена телефона) не поставил их ещё раз. Задания «Только скачать»
+/// (`download_only`) остаются `Saved`: их на телефон не ставим.
+pub fn take_waiting(jobs: &mut HashMap<i64, JobState>, download_only: &HashSet<i64>) -> Vec<(i64, PathBuf)> {
     let mut out = vec![];
-    for (id, s) in jobs.iter_mut() {
+    for (id, s) in jobs.iter_mut().filter(|(id, _)| !download_only.contains(id)) {
         if let JobState::Saved { path } = s {
             out.push((*id, std::mem::take(path)));
             *s = JobState::Queued;
@@ -1574,12 +1575,21 @@ mod tests {
             (4, JobState::Saved { path: "/x/4.ipa".into() }),
         ]
         .into();
-        let mut w = take_waiting(&mut jobs);
+        let mut w = take_waiting(&mut jobs, &HashSet::new());
         w.sort();
         assert_eq!(w, vec![(1, PathBuf::from("/x/1.ipa")), (4, PathBuf::from("/x/4.ipa"))]);
         assert_eq!((&jobs[&1], &jobs[&4]), (&JobState::Queued, &JobState::Queued));
-        assert!(take_waiting(&mut jobs).is_empty(), "второй вызов ничего не ставит");
+        assert!(take_waiting(&mut jobs, &HashSet::new()).is_empty(), "второй вызов ничего не ставит");
         assert!(matches!(jobs[&3], JobState::Failed { .. }));
+    }
+
+    #[test]
+    fn take_waiting_skips_download_only() {
+        let mut jobs: HashMap<i64, JobState> =
+            [(1, JobState::Saved { path: "/x/1.ipa".into() }), (2, JobState::Saved { path: "/x/2.ipa".into() })].into();
+        assert_eq!(take_waiting(&mut jobs, &[2].into()), vec![(1, PathBuf::from("/x/1.ipa"))]);
+        // «Только скачать»: остаётся «Сохранено», телефон его не ставит
+        assert_eq!(jobs[&2], JobState::Saved { path: "/x/2.ipa".into() });
     }
 
     #[test]

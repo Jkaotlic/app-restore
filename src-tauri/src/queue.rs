@@ -42,7 +42,8 @@ impl SpaceProbe for FsSpace {
 }
 
 enum Job {
-    Download(i64),
+    /// `bool`: «Только скачать» — остановиться на `Saved`, даже если телефон задан.
+    Download(i64, bool),
     /// Телефон задан явно («Все копии») — он главнее цели очереди и её не меняет.
     Install(i64, PathBuf, Option<String>),
 }
@@ -182,10 +183,10 @@ async fn process(job: Job, w: Worker, emit: Arc<dyn Fn(JobState) + Send + Sync>)
     let Worker { session, library, space, hub, tgt, idle } = w;
     // explicit: установку попросили прямо (`install_saved`) — без телефона это ошибка.
     let (saved, explicit) = match job {
-        Job::Download(id) => match run_job(id, &session, &library, space.as_ref(), idle, emit.as_ref()).await {
+        Job::Download(id, only) => match run_job(id, &session, &library, space.as_ref(), idle, emit.as_ref()).await {
             Ok(path) => {
                 emit(JobState::Saved { path: path.clone() });
-                (Some((path, None)), false)
+                ((!only).then_some((path, None)), false)
             }
             Err(error) => {
                 emit(JobState::Failed { error, saved: None });
@@ -232,7 +233,7 @@ impl Queue {
         tokio::spawn(async move {
             while let Some((seq, job)) = rx.recv().await {
                 let id = match &job {
-                    Job::Download(id) | Job::Install(id, _, _) => *id,
+                    Job::Download(id, _) | Job::Install(id, _, _) => *id,
                 };
                 {
                     let mut p = current.lock().unwrap();
@@ -264,7 +265,7 @@ impl Queue {
 
     fn send(&self, job: Job) {
         let id = match &job {
-            Job::Download(id) | Job::Install(id, _, _) => *id,
+            Job::Download(id, _) | Job::Install(id, _, _) => *id,
         };
         let mut p = self.pending.lock().unwrap();
         let seq = p.next;
@@ -295,6 +296,15 @@ impl Queue {
 
     /// `(track_id, name)`: имя нужно экрану, очереди достаточно trackId. Ключ событий: `track_id`.
     pub fn enqueue(&self, apps: Vec<(i64, String)>) {
+        self.enqueue_with(apps, false);
+    }
+
+    /// «Только скачать»: как `enqueue`, но скачанное остаётся в `Saved` и на телефон не ставится.
+    pub fn enqueue_download_only(&self, apps: Vec<(i64, String)>) {
+        self.enqueue_with(apps, true);
+    }
+
+    fn enqueue_with(&self, apps: Vec<(i64, String)>, only: bool) {
         for (id, _name) in apps {
             if id <= 0 {
                 let error = AppError::Unknown { detail: "invalid track id".into() };
@@ -302,7 +312,7 @@ impl Queue {
                 continue;
             }
             let _ = self.events.send((id, JobState::Queued));
-            self.send(Job::Download(id));
+            self.send(Job::Download(id, only));
         }
     }
 
@@ -608,6 +618,19 @@ mod tests {
         let JobState::Failed { error, saved } = (*of(&ev, 111).last().unwrap()).clone() else { panic!() };
         assert_eq!(error, AppError::DeviceNotTrusted);
         assert!(saved.is_some(), "«Повторить» поставит копию без скачивания");
+    }
+
+    #[tokio::test]
+    async fn download_only_stops_at_saved_even_with_target() {
+        let (q, _t, _, hub) = setup_hub(ok_runner(), 10 * GB, Behavior::Ok);
+        q.set_target(Some("UDID-1".into()));
+        let mut rx = q.subscribe();
+        q.enqueue_download_only(vec![(111, "A".into())]);
+        let ev = collect(&mut rx, 1).await;
+        assert!(matches!(of(&ev, 111).last().unwrap(), JobState::Saved { .. }));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(hub.calls.lock().unwrap().is_empty(), "«Только скачать» на телефон не ставит");
+        assert!(rx.try_recv().is_err(), "после Saved событий быть не должно");
     }
 
     #[tokio::test]

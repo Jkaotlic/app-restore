@@ -123,6 +123,8 @@ pub struct AppState {
     copy_paths: Mutex<HashMap<i64, (PathBuf, String)>>,
     /// trackId, которые сейчас скачиваются или ждут скачивания (`downloads_running`).
     downloads: Mutex<HashSet<i64>>,
+    /// Задания «Только скачать»: заканчиваются на `Saved`, на телефон не ставятся.
+    download_only: Mutex<HashSet<i64>>,
     account: Mutex<Option<Account>>,
     run: Mutex<Option<RunDto>>,
     phones: Mutex<Phones>,
@@ -184,6 +186,7 @@ impl AppState {
             from_saved: Mutex::new(HashMap::new()),
             copy_paths: Mutex::new(HashMap::new()),
             downloads: Mutex::new(HashSet::new()),
+            download_only: Mutex::new(HashSet::new()),
             account: Mutex::new(None),
             run: Mutex::new(None),
             phones: Mutex::new(Phones::default()),
@@ -277,10 +280,12 @@ impl AppState {
             drop_pending(&mut jobs, &queue_dropped)
         };
         let (mut names, mut fs, mut dl) = (self.names.lock().unwrap(), self.from_saved.lock().unwrap(), self.downloads.lock().unwrap());
+        let mut only = self.download_only.lock().unwrap();
         for id in &gone {
             names.remove(id);
             fs.remove(id);
             dl.remove(id);
+            only.remove(id);
         }
         *self.run.lock().unwrap() = None;
         gone
@@ -327,9 +332,11 @@ impl AppState {
 
     fn record<R: Runtime>(&self, app: &AppHandle<R>, track_id: i64, state: JobState) {
         track_download(&mut self.downloads.lock().unwrap(), track_id, &state);
+        let only = self.download_only.lock().unwrap().contains(&track_id);
         if let JobState::Failed { error, saved: None } = &state {
             log_err(&format!("job {track_id}"), error);
-            if let Some((path, version)) = fallback_copy(error, track_id, &self.library.list()) {
+            // «Только скачать» старую копию на телефон не ставит: пусть будет видна ошибка
+            if let Some((path, version)) = fallback_copy(error, track_id, &self.library.list()).filter(|_| !only) {
                 crate::log::write(&format!("job {track_id}"), &format!("скачать не вышло, ставим сохранённую копию {version}"));
                 self.from_saved.lock().unwrap().insert(track_id, version);
                 self.install_copy(app, track_id, path);
@@ -363,7 +370,8 @@ impl AppState {
         self.queue.set_target(target.clone());
         if changed && target.is_some() {
             // Выборка и пометка `Queued` под одним замком: параллельный вызов не поставит дважды.
-            let waiting = take_waiting(&mut self.jobs.lock().unwrap());
+            let only = self.download_only.lock().unwrap().clone();
+            let waiting = take_waiting(&mut self.jobs.lock().unwrap(), &only);
             for (id, path) in waiting {
                 self.emit_job(app, id, &JobState::Queued);
                 self.queue.install_saved(id, path);
@@ -765,13 +773,17 @@ pub async fn add_by_link(state: State<'_, AppState>, link: String) -> Result<Row
 }
 
 /// Ставит выбранное в очередь. Копии из «Мои приложения» ставятся без скачивания.
+/// `download_only` («Только скачать»): скачать в «Мои приложения» и не ставить, даже если телефон
+/// подключён; готовые копии сразу «Сохранено».
 #[tauri::command]
 pub async fn start(
     app: AppHandle,
     state: State<'_, AppState>,
     items: Vec<(i64, String)>,
     same_apple_id: bool,
+    download_only: Option<bool>,
 ) -> Result<RunDto, ()> {
+    let only = download_only.unwrap_or(false);
     let email = state.account.lock().unwrap().as_ref().map(|a| a.email.clone());
     let run = RunDto { same_apple_id, email };
     *state.run.lock().unwrap() = Some(run.clone());
@@ -783,12 +795,30 @@ pub async fn start(
         }
     }
     let catalog_ids: HashSet<i64> = state.catalog.read().await.iter().map(|r| r.track_id).collect();
+    {
+        let mut set = state.download_only.lock().unwrap();
+        for (id, _) in &items {
+            if only {
+                set.insert(*id);
+            } else {
+                set.remove(id);
+            }
+        }
+    }
     let (download, install) = plan_start(items, &catalog_ids, &state.library.list(), &state.library.list_unknown());
     for (id, path) in install {
-        state.install_copy(&app, id, path);
+        if only {
+            state.record(&app, id, JobState::Saved { path });
+        } else {
+            state.install_copy(&app, id, path);
+        }
     }
     state.mark_downloads(download.iter().map(|(id, _)| *id).filter(|id| *id > 0));
-    state.queue.enqueue(download);
+    if only {
+        state.queue.enqueue_download_only(download);
+    } else {
+        state.queue.enqueue(download);
+    }
     Ok(run)
 }
 
@@ -829,7 +859,11 @@ pub fn retry(app: AppHandle, state: State<'_, AppState>, track_id: i64) {
             let name = job_name(&state.names.lock().unwrap(), track_id);
             state.from_saved.lock().unwrap().remove(&track_id);
             state.mark_downloads([track_id]);
-            state.queue.enqueue(vec![(track_id, name)]);
+            if state.download_only.lock().unwrap().contains(&track_id) {
+                state.queue.enqueue_download_only(vec![(track_id, name)]);
+            } else {
+                state.queue.enqueue(vec![(track_id, name)]);
+            }
         }
         RetryAction::Nothing => {}
     }
