@@ -37,17 +37,22 @@ pub fn parse_app_link(s: &str) -> Option<i64> {
 pub const MAX_TEXT_IDS: usize = 100;
 
 /// Номера приложений из перетащенного или вставленного текста, по порядку и без повторов.
-/// Берутся только ссылки `apps.apple.com/…/idN` и строки «Имя: N» (N — от 6 цифр, как в
-/// `AppsList.txt`); голые числа и прочие адреса — нет.
+/// Берутся ссылки `apps.apple.com/…/idN` и строки «Имя: N» (N — 6–10 цифр, как в
+/// `AppsList.txt`). Строки «Имя: N» — только если текст похож на список: строк со ссылкой или
+/// «Имя: N» больше половины непустых (иначе «Заказ: 123456» в письме дал бы номер). Голые
+/// числа и прочие адреса — нет.
 pub fn ids_in_text(text: &str) -> Vec<i64> {
+    let lines: Vec<(Vec<i64>, Option<i64>)> = text
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| (l.split(|c: char| c.is_whitespace() || "\"'<>()[]{}«»,;=".contains(c)).filter_map(store_link_id).collect(), name_line_id(l)))
+        .collect();
+    let listy = lines.iter().filter(|(links, name)| !links.is_empty() || name.is_some()).count();
+    let list_shaped = listy * 2 > lines.len();
     let mut out = vec![];
     let mut seen = std::collections::HashSet::new();
-    for line in text.lines() {
-        let found = line
-            .split(|c: char| c.is_whitespace() || "\"'<>()[]{}«»,;=".contains(c))
-            .filter_map(store_link_id)
-            .chain(name_line_id(line));
-        for id in found {
+    for (links, name) in lines {
+        for id in links.into_iter().chain(name.filter(|_| list_shaped)) {
             if out.len() == MAX_TEXT_IDS {
                 return out;
             }
@@ -59,22 +64,28 @@ pub fn ids_in_text(text: &str) -> Vec<i64> {
     out
 }
 
-/// Номер из ссылки `apps.apple.com` (другие адреса, в том числе itunes.apple.com, — нет).
+/// Номер из ссылки `apps.apple.com` (другие адреса, в том числе itunes.apple.com, — нет). Ссылка
+/// может быть приклеена к слову («Ссылка:https://…»), но не продолжать имя хоста или путь
+/// (`evilapps.apple.com`, `x.apps.apple.com`, `…/apps.apple.com`).
 fn store_link_id(token: &str) -> Option<i64> {
     let token = token.trim_end_matches(['.', '!', '?', ':']);
     let lower = token.to_ascii_lowercase();
-    let rest = SCHEMES.iter().find_map(|p| lower.strip_prefix(p)).unwrap_or(&lower);
-    if !rest.starts_with("apps.apple.com/") {
+    let at = lower.find("apps.apple.com/")?;
+    let start = SCHEMES.iter().find(|p| lower[..at].ends_with(*p)).map_or(at, |p| at - p.len());
+    let glued = lower[..start].bytes().last().is_some_and(|b| b.is_ascii_alphanumeric() || b".-_@/%".contains(&b));
+    if glued {
         return None;
     }
-    parse_app_link(token)
+    // ASCII в нижнем регистре: границы байтов те же, что в исходной строке
+    parse_app_link(&token[start..])
 }
 
-/// «Имя: N» — строка списка вида `AppsList.txt`: имя не пустое, N — только цифры, от 6.
+/// «Имя: N» — строка списка вида `AppsList.txt`: имя не пустое, N — только цифры, 6–10
+/// (11 — уже телефон, 12 — ИНН).
 fn name_line_id(line: &str) -> Option<i64> {
     let (name, num) = line.trim().rsplit_once(':')?;
     let num = num.trim();
-    if name.trim().is_empty() || num.len() < 6 || !num.bytes().all(|b| b.is_ascii_digit()) {
+    if name.trim().is_empty() || !(6..=10).contains(&num.len()) || !num.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
     num.parse().ok().filter(|&id| id > 0)
@@ -120,6 +131,38 @@ mod tests {
         for t in bad {
             assert_eq!(ids_in_text(t), Vec::<i64>::new(), "{t}");
         }
+    }
+
+    #[test]
+    fn name_lines_are_six_to_ten_digits() {
+        assert_eq!(ids_in_text("А: 123456\nБ: 1234567890"), vec![123456, 1234567890]);
+        assert!(ids_in_text("А: 12345678901\nБ: 98765432109").is_empty(), "11 цифр — телефон");
+        assert!(ids_in_text("Телефон: 89161234567").is_empty());
+        assert!(ids_in_text("ИНН: 770708389312").is_empty(), "12 цифр — ИНН человека");
+    }
+
+    #[test]
+    fn name_lines_only_in_list_shaped_text() {
+        // одна строка «Имя: N» среди прозы — не список
+        let prose = "Здравствуйте!\nВаш заказ оформлен.\nЗаказ: 123456\nСпасибо за покупку";
+        assert!(ids_in_text(prose).is_empty());
+        let inn = "Реквизиты организации\nИНН: 7707083893\nКПП: 773601001\nАдрес: Москва\nБанк: Сбер";
+        assert!(ids_in_text(inn).is_empty(), "две строки из пяти — меньше половины");
+        let amount = "Счёт\nСумма: 1500000\nОплатить до пятницы";
+        assert!(ids_in_text(amount).is_empty());
+        // одна строка, и она вся — «Имя: N»
+        assert_eq!(ids_in_text("Сбер: 492224193"), vec![492224193]);
+        // ссылка в прозе берётся всегда
+        assert_eq!(ids_in_text("Заказ: 123456\nвот https://apps.apple.com/ru/app/x/id492224193\nи ещё текст\nи подпись\nс уважением"), vec![492224193]);
+    }
+
+    #[test]
+    fn link_glued_after_colon_or_word() {
+        assert_eq!(ids_in_text("Ссылка:https://apps.apple.com/ru/app/x/id492224193"), vec![492224193]);
+        assert_eq!(ids_in_text("тут:apps.apple.com/app/id1631810724"), vec![1631810724]);
+        assert!(ids_in_text("evilapps.apple.com/app/id492224193").is_empty());
+        assert!(ids_in_text("x.apps.apple.com/app/id492224193").is_empty());
+        assert!(ids_in_text("https://evil.example/apps.apple.com/app/id492224193").is_empty());
     }
 
     #[test]
