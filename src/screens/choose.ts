@@ -1,6 +1,6 @@
 import { asUiError, call, go, register, safe, state, targetIsIphone, targetPhone, type Job } from "../app";
 import { h } from "../dom";
-import { installCaption, purchasesProgressText, unknownAccountNote, versionLine } from "../labels";
+import { installCaption, purchasesProgressText, unknownAccountNote, versionLine, errorText } from "../labels";
 import { returnLabel } from "../plural";
 import {
   addLinkRow,
@@ -274,7 +274,7 @@ register("choose", () => {
       renderRemoved();
       renderOther();
     } catch (err) {
-      linkMsg.textContent = asUiError(err).text;
+      linkMsg.textContent = errorText(asUiError(err));
       linkMsg.hidden = false;
     }
     linkBtn.disabled = false;

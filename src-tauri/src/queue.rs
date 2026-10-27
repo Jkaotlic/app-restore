@@ -377,7 +377,7 @@ mod tests {
         all
     }
 
-    fn of<'a>(ev: &'a [(i64, JobState)], id: i64) -> Vec<&'a JobState> {
+    fn of(ev: &[(i64, JobState)], id: i64) -> Vec<&JobState> {
         ev.iter().filter(|(i, _)| *i == id).map(|(_, s)| s).collect()
     }
 

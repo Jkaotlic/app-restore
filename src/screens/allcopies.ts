@@ -4,7 +4,7 @@ import { asUiError, call, go, register, safe, state, type Job } from "../app";
 import { copyInstallButton, copyNotes, copyPhone, copyRow, copyWarning, groupCopies, markCopyPhone } from "../copies";
 import { h } from "../dom";
 import { jobInbox } from "../jobs";
-import { jobView } from "../labels";
+import { jobView, errorText } from "../labels";
 import type { AccountMatchDto, CopyDto } from "../types";
 import { appIcon } from "./choose";
 import { jobRow, phoneStatus, refreshPhones, retryJob } from "./phone";
@@ -63,7 +63,7 @@ register("copies", () => {
       copies = await call<CopyDto[]>("all_copies");
     } catch (e) {
       copies = [];
-      say(asUiError(e).text);
+      say(errorText(asUiError(e)));
     }
     renderList();
     renderAction();
@@ -86,7 +86,7 @@ register("copies", () => {
       renderList();
       onSelect();
     } catch (e) {
-      say(asUiError(e).text);
+      say(errorText(asUiError(e)));
     }
   }
 
@@ -132,7 +132,7 @@ register("copies", () => {
       if (!mine.includes(id)) mine.push(id);
       renderJobs();
     } catch (e) {
-      say(asUiError(e).text);
+      say(errorText(asUiError(e)));
     }
     renderAction();
   }

@@ -1,6 +1,6 @@
-import { call, go, refreshSidebar, register, safe, state, targetPhone } from "../app";
+import { asUiError, call, go, refreshSidebar, register, safe, state, targetPhone } from "../app";
 import { h } from "../dom";
-import { afterLoginScreen, sameFromMatch } from "../labels";
+import { afterLoginScreen, sameFromMatch, errorText } from "../labels";
 import type { LoginDto } from "../types";
 import { resetForAccount } from "./accounts";
 import { checkAccount } from "./phone";
@@ -98,14 +98,14 @@ register("login", () => {
       go(afterLoginScreen(switched, m));
       return;
     } catch (err) {
-      const ui = err as { code: string; text: string };
+      const ui = asUiError(err);
       if (ui.code === "auth_code_required") {
         codeBlock.hidden = false;
         boxes.forEach((b) => (b.value = ""));
-        say(ui.text, false);
+        say(errorText(ui), false);
         boxes[0].focus();
       } else {
-        say(ui.text, true);
+        say(errorText(ui), true);
         if (ui.code === "code_rejected") {
           boxes.forEach((b) => (b.value = ""));
           boxes[0].focus();

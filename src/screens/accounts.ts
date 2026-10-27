@@ -1,6 +1,7 @@
 // Шаг «Apple ID»: все, кто входил в программу или чьи копии лежат в «Мои приложения».
 import { asUiError, call, go, refreshSidebar, register, safe, state } from "../app";
 import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, staysOnRefusal } from "../copies";
+import { errorText } from "../labels";
 import { h } from "../dom";
 import type { AccountEntry, UseAccountDto } from "../types";
 
@@ -31,7 +32,7 @@ register("accounts", () => {
       accounts = await call<AccountEntry[]>("list_accounts");
     } catch (e) {
       accounts = [];
-      msg.textContent = asUiError(e).text;
+      msg.textContent = errorText(asUiError(e));
       msg.hidden = false;
     }
     render();
@@ -62,7 +63,7 @@ register("accounts", () => {
     const next = afterUseAccount(res);
     if (next === "stay") {
       // нынешний вход не сохранился — ничего не меняли
-      msg.textContent = res.error?.text ?? "";
+      msg.textContent = res.error ? errorText(res.error) : "";
       msg.hidden = false;
       render();
       return;
@@ -90,7 +91,7 @@ register("accounts", () => {
       dropped = await call<number[]>("forget_account", { email: a.email });
     } catch (e) {
       // выйти не вышло — ничего не забыли, вход прежний
-      msg.textContent = asUiError(e).text;
+      msg.textContent = errorText(asUiError(e));
       msg.hidden = false;
       return;
     }

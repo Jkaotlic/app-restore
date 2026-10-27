@@ -34,11 +34,12 @@ use tokio::sync::RwLock;
 
 const PHONE_POLL: Duration = Duration::from_secs(2);
 
-/// Пишет подробность `Unknown` в stderr: человеку её не показываем. Секретов в ней нет:
-/// ipatool не печатает свои аргументы, а пароль в `AppError` не попадает.
+/// Пишет ошибку в журнал (`crate::log`), с подробностью `Unknown`. Секретов в ней нет:
+/// ipatool не печатает свои аргументы, а пароль в `AppError` не попадает; журнал ещё и чистит.
 fn log_err(context: &str, e: &AppError) {
-    if let AppError::Unknown { detail } = e {
-        eprintln!("[app-restore] {context}: {detail}");
+    match error_ref(e) {
+        Some(r) => crate::log::write(context, &format!("[{r}] {e}")),
+        None => crate::log::write(context, &format!("{e}")),
     }
 }
 
@@ -255,7 +256,7 @@ impl AppState {
         if let JobState::Failed { error, saved: None } = &state {
             log_err(&format!("job {track_id}"), error);
             if let Some((path, version)) = fallback_copy(error, track_id, &self.library.list()) {
-                eprintln!("[app-restore] job {track_id}: скачать не вышло, ставим сохранённую копию {version}");
+                crate::log::write(&format!("job {track_id}"), &format!("скачать не вышло, ставим сохранённую копию {version}"));
                 self.from_saved.lock().unwrap().insert(track_id, version);
                 self.install_copy(app, track_id, path);
                 return;
@@ -676,6 +677,18 @@ pub fn open_library(app: AppHandle, state: State<'_, AppState>) -> Result<(), Ui
         .map_err(|e| ui("open_library", AppError::Unknown { detail: format!("open folder: {e}") }))
 }
 
+/// «Открыть журнал»: папка журнала (`crate::log`) в Finder / Проводнике. Как `open_library`,
+/// открывает Rust: разрешения opener у интерфейса не расширяются.
+#[tauri::command]
+pub fn open_log(app: AppHandle) -> Result<(), UiError> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = crate::log::dir().ok_or_else(|| ui("open_log", AppError::Unknown { detail: "log disabled".into() }))?;
+    let _ = std::fs::create_dir_all(&dir);
+    app.opener()
+        .open_path(dir.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|e| ui("open_log", AppError::Unknown { detail: format!("open log folder: {e}") }))
+}
+
 /// Тег новой версии программы на GitHub или `None` (в том числе при любой ошибке сети).
 #[tauri::command]
 pub async fn check_update(state: State<'_, AppState>) -> Result<Option<String>, ()> {
@@ -735,7 +748,7 @@ pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result
     }
     let s = state.sessions.clone();
     if let Err(e) = state.session.exclusive(move || s.forget(&email)).await {
-        eprintln!("[app-restore] forget_account: {e}");
+        crate::log::write("forget_account", &e.to_string());
     }
     Ok(dropped)
 }

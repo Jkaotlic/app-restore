@@ -427,7 +427,7 @@ mod tests {
     fn pick_default_only_single_iphone() {
         let (ipad, a, b) = (ph("iPad", "i"), ph("iPhone", "a"), ph("iPhone", "b"));
         assert_eq!(pick_default(&[ipad.clone(), a.clone()]).map(|p| p.udid.as_str()), Some("a"));
-        assert_eq!(pick_default(&[a.clone()]).map(|p| p.udid.as_str()), Some("a"));
+        assert_eq!(pick_default(std::slice::from_ref(&a)).map(|p| p.udid.as_str()), Some("a"));
         assert!(pick_default(&[ipad]).is_none());
         assert!(pick_default(&[a, b]).is_none());
         assert!(pick_default(&[]).is_none());

@@ -15,6 +15,9 @@ pub struct UiError {
     pub code: String,
     pub text: String,
     pub retryable: bool,
+    /// Только у `unknown`: короткий код (`error_ref`) — его можно продиктовать; та же строка
+    /// журнала содержит его и подробность. Сама подробность в интерфейс не идёт.
+    pub ref_code: Option<String>,
 }
 
 fn code(e: &AppError) -> &'static str {
@@ -42,9 +45,17 @@ fn code(e: &AppError) -> &'static str {
     }
 }
 
+/// Код `unknown` для человека и журнала: 6 знаков FNV-1a от подробности. Один и тот же сбой
+/// даёт один код, по нему строка находится в журнале.
+pub fn error_ref(e: &AppError) -> Option<String> {
+    let AppError::Unknown { detail } = e else { return None };
+    let h = detail.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+    Some(format!("{:06X}", h & 0xFF_FFFF))
+}
+
 impl From<AppError> for UiError {
     fn from(e: AppError) -> Self {
-        Self { code: code(&e).into(), text: e.user_text(), retryable: e.retryable() }
+        Self { code: code(&e).into(), text: e.user_text(), retryable: e.retryable(), ref_code: error_ref(&e) }
     }
 }
 
@@ -675,6 +686,19 @@ mod tests {
         assert_eq!(UiError::from(AppError::DeviceNotFound { drivers_missing: false }).code, "device_not_found");
         assert_eq!(UiError::from(AppError::BadLink).code, "bad_link");
         assert_eq!(UiError::from(AppError::BadAccountFolder).code, "bad_account_folder");
+        assert_eq!(UiError::from(AppError::BadLink).ref_code, None);
+    }
+
+    /// Подробность в интерфейс не идёт — только короткий код, тот же, что в строке журнала.
+    #[test]
+    fn unknown_error_has_short_ref_code_matching_the_log() {
+        let a = UiError::from(AppError::Unknown { detail: "partial: denied".into() });
+        let code = a.ref_code.clone().unwrap();
+        assert_eq!(code.len(), 6);
+        assert!(code.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase()), "{code}");
+        assert_eq!(UiError::from(AppError::Unknown { detail: "partial: denied".into() }).ref_code, Some(code.clone()));
+        assert_ne!(UiError::from(AppError::Unknown { detail: "other".into() }).ref_code, Some(code.clone()));
+        assert_eq!(error_ref(&AppError::Unknown { detail: "partial: denied".into() }), Some(code));
     }
 
     #[test]
@@ -879,7 +903,7 @@ mod tests {
         assert!(!e.checked);
         // на iPad или без телефона — как обычно
         c.target_iphone = false;
-        assert_eq!(catalog_rows(&c.get()).rows[0].checked, true);
+        assert!(catalog_rows(&c.get()).rows[0].checked);
         assert!(owned_event(656485245, &Ok((true, None)), &c.get()).checked);
     }
 

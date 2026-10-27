@@ -1,4 +1,4 @@
-import type { AccountMatchDto, InstallState, JobDto, PhoneDto, PurchasesProgress, RowDto } from "./types";
+import type { AccountMatchDto, InstallState, JobDto, PhoneDto, PurchasesProgress, RowDto, UiError } from "./types";
 
 export interface JobView {
   text: string;
@@ -23,7 +23,7 @@ export function jobView(s: JobDto, fromSaved: string | null): JobView {
     case "installed":
       return { text: fromSaved ? `Поставлена сохранённая копия ${fromSaved}` : "Установлено", bar: null, retry: false };
     case "failed":
-      return { text: s.error.text, bar: null, retry: true };
+      return { text: errorText(s.error), bar: null, retry: true };
   }
 }
 
@@ -130,4 +130,9 @@ export function afterLoginScreen(switched: boolean, m: AccountMatchDto | null): 
 /** Подпись копии, чей Apple ID неизвестен (лежит в «Мои приложения» без папки аккаунта). */
 export function unknownAccountNote(r: { unknown_account: boolean }): string | null {
   return r.unknown_account ? "Неизвестный Apple ID" : null;
+}
+
+/** Текст ошибки для человека; у неизвестной — код строки журнала и где его открыть. */
+export function errorText(e: UiError): string {
+  return e.ref_code ? `${e.text} Код ${e.ref_code} — подробности в журнале («Открыть журнал» внизу слева).` : e.text;
 }

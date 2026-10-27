@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, unknownAccountNote, canProceed, chooserNote, installsToIphone, showSkip, doneText, installCaption, isFinished, jobView, otherIdText, phoneView, purchasesProgressText, versionLine } from "./labels";
+import { errorText, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, unknownAccountNote, canProceed, chooserNote, installsToIphone, showSkip, doneText, installCaption, isFinished, jobView, otherIdText, phoneView, purchasesProgressText, versionLine } from "./labels";
 import type { JobDto, PhoneDto } from "./types";
 
 const err = { code: "device_locked", text: "Разблокируйте iPhone и нажмите «Доверять»", retryable: false };
@@ -230,5 +230,15 @@ describe("unknownAccountNote", () => {
   it("only for copies without a known Apple ID", () => {
     expect(unknownAccountNote({ unknown_account: true })).toBe("Неизвестный Apple ID");
     expect(unknownAccountNote({ unknown_account: false })).toBe(null);
+  });
+});
+
+describe("errorText", () => {
+  it("unknown errors get the log code line, others stay as is", () => {
+    expect(errorText({ code: "unknown", text: "Что-то пошло не так. Попробуйте ещё раз.", retryable: false, ref_code: "A1B2C3" })).toBe(
+      "Что-то пошло не так. Попробуйте ещё раз. Код A1B2C3 — подробности в журнале («Открыть журнал» внизу слева).",
+    );
+    expect(errorText({ code: "bad_link", text: "x", retryable: false, ref_code: null })).toBe("x");
+    expect(errorText({ code: "unknown", text: "y", retryable: false })).toBe("y");
   });
 });

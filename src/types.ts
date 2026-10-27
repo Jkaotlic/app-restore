@@ -4,6 +4,8 @@ export interface UiError {
   code: string;
   text: string;
   retryable: boolean;
+  /** Только у `unknown`: код строки в журнале. */
+  ref_code?: string | null;
 }
 
 export interface Account {

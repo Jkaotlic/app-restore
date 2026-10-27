@@ -3,7 +3,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { h } from "./dom";
 import { showCopiesLink, stepIndex } from "./copies";
-import { installsToIphone } from "./labels";
+import { errorText, installsToIphone } from "./labels";
 import type { AccountEntry, AccountMatchDto, Account, JobDto, OwnedEvent, PhoneDto, PurchasesProgress, RowDto, RowsDto, RunDto, UiError } from "./types";
 
 export type Screen = "warning" | "accounts" | "login" | "choose" | "phone" | "done" | "copies";
@@ -110,19 +110,29 @@ export function safe<E extends Event>(fn: (e: E) => Promise<unknown>): (e: E) =>
 
 /** Кнопка «Открыть папку с копиями» и место для ошибки под ней. */
 export function openLibraryButton(cls = "link"): HTMLElement {
+  return openFolderButton("open_library", "Открыть папку с копиями", cls);
+}
+
+/** «Открыть журнал»: папка журнала для поддержки. Есть всегда, и без входа. */
+export function openLogButton(cls = "link"): HTMLElement {
+  return openFolderButton("open_log", "Открыть журнал", cls);
+}
+
+/** Кнопка, которая просит Rust открыть папку (`cmd`), и место для ошибки под ней. */
+function openFolderButton(cmd: string, label: string, cls: string): HTMLElement {
   const msg = h("p", { class: "error", attrs: { role: "alert", "aria-live": "polite" } });
   msg.hidden = true;
   const btn = h("button", {
     class: cls,
-    text: "Открыть папку с копиями",
+    text: label,
     attrs: { type: "button" },
     on: {
       click: safe(async () => {
         msg.hidden = true;
         try {
-          await call("open_library");
+          await call(cmd);
         } catch (e) {
-          msg.textContent = asUiError(e).text;
+          msg.textContent = errorText(asUiError(e));
           msg.hidden = false;
         }
       }),
@@ -154,6 +164,7 @@ function sidebar(screen: Screen): HTMLElement {
     { class: "foot" },
     state.account ? h("div", { text: state.account.email }) : null,
     state.account ? openLibraryButton() : null,
+    openLogButton(),
     state.update ? h("div", { class: "update", text: `Есть новая версия ${state.update}` }) : null,
   );
   return h("nav", { class: "steps" }, h("div", { class: "brand" }, "Вернуть", h("br"), "приложения"), h("ol", {}, ...items), copies, foot);

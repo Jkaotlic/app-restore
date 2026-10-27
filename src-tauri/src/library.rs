@@ -240,7 +240,7 @@ fn place(ops: &dyn FileOps, src: &Path, dir: &Path, name: &str) -> std::io::Resu
         return match ops.remove(src) {
             Ok(()) => Ok((same, true)),
             Err(e) => {
-                eprintln!("[app-restore] place {name}: same copy exists, source not removed: {e}");
+                crate::log::write(&format!("place {name}"), &format!("same copy exists, source not removed: {e}"));
                 Ok((same, false))
             }
         };
@@ -310,7 +310,7 @@ fn replace_own(ops: &dyn FileOps, src: &Path, dir: &Path, name: &str) -> std::io
     for cand in candidates(dir, &format!("{stem}.recovered.ipa")) {
         match ops.rename_noreplace(&part, &cand) {
             Ok(()) => {
-                eprintln!("[app-restore] commit {name}: kept the download as {}", cand.display());
+                crate::log::write(&format!("commit {name}"), &format!("kept the download as {}", cand.display()));
                 return Err(err);
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -359,11 +359,10 @@ struct NameParts {
 /// Имя от ipatool: `<trackId>_<version>.ipa` (`download -i`) или старое `<bundleID>_<trackId>_<version>.ipa`.
 fn parse_ipatool_name(file: &str) -> Option<NameParts> {
     let stem = file.strip_suffix(".ipa")?;
-    if let Some((first, version)) = stem.split_once('_') {
-        if let Some(t) = digits(first) {
+    if let Some((first, version)) = stem.split_once('_')
+        && let Some(t) = digits(first) {
             return Some(NameParts { track_id: Some(t), bundle: None, version: version.to_string() });
         }
-    }
     let mut it = stem.rsplitn(3, '_');
     let version = it.next()?;
     let track = digits(it.next()?)?;
@@ -379,11 +378,10 @@ fn parse_saved_name(file: &str) -> Option<(Option<i64>, String, String)> {
         Some((s, n)) if n.strip_suffix(')').is_some_and(|d| !d.is_empty() && d.bytes().all(|c| c.is_ascii_digit())) => s,
         _ => stem,
     };
-    if let Some((first, rest)) = stem.split_once('_') {
-        if let (Some(t), Some((b, v))) = (digits(first), rest.rsplit_once('_')) {
+    if let Some((first, rest)) = stem.split_once('_')
+        && let (Some(t), Some((b, v))) = (digits(first), rest.rsplit_once('_')) {
             return Some((Some(t), b.to_string(), v.to_string()));
         }
-    }
     let (b, v) = stem.rsplit_once('_')?;
     Some((None, b.to_string(), v.to_string()))
 }
@@ -579,14 +577,14 @@ impl Library {
             }
             // Адрес покупателя в лог не пишем: только имя файла.
             let Some(dir) = ipa_purchaser(&path).and_then(|p| account_dir_name(&p).ok()) else {
-                eprintln!("[app-restore] migrate: no purchaser in {name}, left in place");
+                crate::log::write("migrate", &format!("no purchaser in {name}, left in place"));
                 continue;
             };
             let dir = self.base.join(dir);
             match std::fs::create_dir_all(&dir).and_then(|_| place(ops, &path, &dir, &name)) {
                 Ok((_, true)) => moved += 1,
                 Ok((_, false)) => {}
-                Err(err) => eprintln!("[app-restore] migrate {name}: {err}"),
+                Err(err) => crate::log::write(&format!("migrate {name}"), &err.to_string()),
             }
         }
         moved
@@ -595,11 +593,10 @@ impl Library {
     /// UIDeviceFamily с кэшем по времени изменения файла.
     fn family(&self, path: &Path) -> Vec<u8> {
         let mtime = std::fs::metadata(path).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-        if let Some((t, f)) = self.families.lock().unwrap().get(path) {
-            if *t == mtime {
+        if let Some((t, f)) = self.families.lock().unwrap().get(path)
+            && *t == mtime {
                 return f.clone();
             }
-        }
         let f = read_device_family(path);
         self.families.lock().unwrap().insert(path.to_path_buf(), (mtime, f.clone()));
         f
@@ -627,11 +624,10 @@ impl Library {
     /// Покупатель в ipa есть? С кэшем по времени изменения; адрес не хранится.
     fn has_buyer(&self, path: &Path) -> bool {
         let mtime = std::fs::metadata(path).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-        if let Some((t, b)) = self.has_buyer.lock().unwrap().get(path) {
-            if *t == mtime {
+        if let Some((t, b)) = self.has_buyer.lock().unwrap().get(path)
+            && *t == mtime {
                 return *b;
             }
-        }
         let b = ipa_purchaser(path).is_some();
         self.has_buyer.lock().unwrap().insert(path.to_path_buf(), (mtime, b));
         b

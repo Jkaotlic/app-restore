@@ -6,6 +6,7 @@ mod device;
 mod errors;
 mod ipatool;
 mod library;
+mod log;
 mod lookup;
 mod queue;
 mod removed_catalog;
@@ -28,6 +29,11 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
+            // macOS: ~/Library/Logs/<identifier>/, Windows: %LOCALAPPDATA%\<identifier>\logs
+            if let Ok(dir) = app.path().app_log_dir() {
+                log::init(dir);
+            }
+            log::write("start", &format!("v{} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS));
             commands::setup(app.handle());
             Ok(())
         })
@@ -51,6 +57,7 @@ pub fn run() {
             commands::retry,
             commands::check_update,
             commands::open_library,
+            commands::open_log,
             commands::list_accounts,
             commands::use_account,
             commands::forget_account,

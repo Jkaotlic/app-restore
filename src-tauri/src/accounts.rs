@@ -280,10 +280,10 @@ impl Sessions {
         match serde_json::to_vec_pretty(&ix) {
             Ok(b) => {
                 if let Err(e) = write_atomic(&self.index_path, &b) {
-                    eprintln!("[app-restore] accounts index: {e}");
+                    crate::log::write("accounts index", &e.to_string());
                 }
             }
-            Err(e) => eprintln!("[app-restore] accounts index: {e}"),
+            Err(e) => crate::log::write("accounts index", &format!("{e}")),
         }
     }
 
@@ -409,11 +409,11 @@ impl Sessions {
         match self.apply(before) {
             Ok(()) => true,
             Err(e) => {
-                eprintln!("[app-restore] rollback session: {e}");
+                crate::log::write("rollback session", &e.to_string());
                 let a = self.auth.delete_account();
                 let c = self.auth.delete_cookies();
                 if let Err(e) = a.and(c) {
-                    eprintln!("[app-restore] clear session: {e}");
+                    crate::log::write("clear session", &e.to_string());
                 }
                 false
             }
@@ -452,7 +452,7 @@ impl Sessions {
     /// Снимок не того аккаунта или испорчен: убрать его, адрес остаётся «нужен вход».
     pub fn drop_snapshot(&self, email: &str) {
         if let Err(e) = self.drop_blob(&key(email)) {
-            eprintln!("[app-restore] drop snapshot: {e}");
+            crate::log::write("drop snapshot", &e.to_string());
         }
         self.set_saved(email, false);
     }
@@ -499,7 +499,7 @@ pub async fn save_current(session: &Session, sessions: &Arc<Sessions>, email: &s
     match quiet(session, move || s.save(&e)).await {
         Ok(()) => true,
         Err(err) => {
-            eprintln!("[app-restore] save session: {err}");
+            crate::log::write("save session", &err.to_string());
             false
         }
     }
@@ -534,7 +534,7 @@ pub async fn switch_to(session: &Session, sessions: &Arc<Sessions>, current: Opt
         } else {
             let (s, c) = (sessions.clone(), cur.to_string());
             if let Err(err) = quiet(session, move || s.save(&c)).await {
-                eprintln!("[app-restore] save session: {err}");
+                crate::log::write("save session", &err.to_string());
                 return kept(Some(crate::errors::AppError::SaveSessionFailed));
             }
         }
@@ -544,7 +544,7 @@ pub async fn switch_to(session: &Session, sessions: &Arc<Sessions>, current: Opt
         Ok(Some(raw)) => raw,
         Ok(None) => return kept(None),
         Err(err) => {
-            eprintln!("[app-restore] restore session: {err}");
+            crate::log::write("restore session", &err.to_string());
             sessions.drop_snapshot(email);
             return kept(None);
         }
@@ -553,7 +553,7 @@ pub async fn switch_to(session: &Session, sessions: &Arc<Sessions>, current: Opt
     let before = match quiet(session, move || s.capture()).await {
         Ok(raw) => raw,
         Err(err) => {
-            eprintln!("[app-restore] restore session: {err}");
+            crate::log::write("restore session", &err.to_string());
             return kept(None);
         }
     };
@@ -566,7 +566,7 @@ pub async fn switch_to(session: &Session, sessions: &Arc<Sessions>, current: Opt
     };
     let s = sessions.clone();
     if let Err(err) = quiet(session, move || s.apply(&snap)).await {
-        eprintln!("[app-restore] restore session: {err}");
+        crate::log::write("restore session", &err.to_string());
         return rollback(before).await;
     }
     let acc = match session.info().await {
@@ -577,7 +577,7 @@ pub async fn switch_to(session: &Session, sessions: &Arc<Sessions>, current: Opt
         }
         other => {
             if let Err(e) = other {
-                eprintln!("[app-restore] restore session: {e}");
+                crate::log::write("restore session", &format!("{e}"));
             }
             sessions.mark_unsaved(email);
             return rollback(before).await;
@@ -591,7 +591,7 @@ pub async fn switch_to(session: &Session, sessions: &Arc<Sessions>, current: Opt
         other => {
             if let Err(e) = other {
                 // сеть или серверы Apple: вход оставляем, его проверит первый же запрос
-                eprintln!("[app-restore] token check: {e}");
+                crate::log::write("token check", &format!("{e}"));
             }
             UseOutcome { restored: true, account: Some(acc), kept: false, error: None }
         }

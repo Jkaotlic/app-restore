@@ -37,17 +37,15 @@ fn status_of(e: &str) -> Option<u16> {
         let Some(off) = rest.find(|c: char| c.is_ascii_digit()) else { break };
         let b = start + off;
         let len = e[b..].find(|c: char| !c.is_ascii_digit()).unwrap_or(e.len() - b);
-        if len == 3 {
-            if let Ok(n) = e[b..b + 3].parse::<u16>() {
-                if n == 429 || (500..=599).contains(&n) {
+        if len == 3
+            && let Ok(n) = e[b..b + 3].parse::<u16>()
+                && (n == 429 || (500..=599).contains(&n)) {
                     let from = e[..b].char_indices().rev().nth(19).map(|(i, _)| i).unwrap_or(0);
                     let ctx = &e[from..b];
                     if ["status", "code", "http"].iter().any(|w| ctx.contains(w)) {
                         return Some(n);
                     }
                 }
-            }
-        }
         start = b + len;
     }
     None

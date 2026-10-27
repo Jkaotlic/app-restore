@@ -143,12 +143,12 @@ impl Session {
             Ok(IpaOutcome::VersionMetadata { display_version }) => Ok(Some(display_version).filter(|v| !v.trim().is_empty())),
             Err(e @ (AppError::NotLoggedIn | AppError::AccountDisabled | AppError::AppleChangedLogin)) => Err(e),
             Ok(o) => {
-                eprintln!("[app-restore] version {track_id}: неожиданный ответ ipatool: {o:?}");
+                crate::log::write(&format!("version {track_id}"), &format!("неожиданный ответ ipatool: {o:?}"));
                 Ok(None)
             }
             Err(e) => {
                 // Секретов нет: аргументы ipatool в AppError не попадают.
-                eprintln!("[app-restore] version {track_id}: {e}");
+                crate::log::write(&format!("version {track_id}"), &e.to_string());
                 Ok(None)
             }
         }

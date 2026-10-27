@@ -2,7 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { asUiError, call, go, refreshSidebar, register, safe, state, targetPhone, type Job } from "../app";
 import { h, ipadIcon, phoneIcon } from "../dom";
 import { staysOnRefusal } from "../copies";
-import { accountBlock, canProceed, chooserNote, jobView, otherIdText, phoneView, sameFromMatch, showSkip } from "../labels";
+import { accountBlock, canProceed, chooserNote, jobView, otherIdText, phoneView, sameFromMatch, showSkip, errorText } from "../labels";
 import type { AccountMatchDto, PhoneDto, SwitchDto } from "../types";
 import { appIcon } from "./choose";
 
@@ -94,7 +94,7 @@ export function phoneStatus(onChange: () => void, pick?: PhonePick): { el: HTMLE
       if (note) parts.push(h("p", { class: "note", text: note }));
       parts.push(h("div", { class: "devices" }, ...phones.map(deviceCard)));
     } else {
-      const text = err?.text ?? "Подключите iPhone кабелем";
+      const text = err ? errorText(err) : "Подключите iPhone кабелем";
       const card = h(
         "div",
         { class: "phone" },
@@ -169,7 +169,7 @@ async function switchAccount(onRefused: (text: string) => void): Promise<void> {
     const ui = asUiError(e);
     // идёт скачивание — выходить нельзя, остаёмся
     if (staysOnRefusal(ui)) {
-      onRefused(ui.text);
+      onRefused(errorText(ui));
       return;
     }
     // выйти не вышло — всё равно даём войти заново
