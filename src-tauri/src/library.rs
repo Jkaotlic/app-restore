@@ -283,7 +283,9 @@ fn replace_own(ops: &dyn FileOps, src: &Path, dir: &Path, name: &str) -> std::io
         }
         Ok((p, replaced))
     };
-    let synced = std::fs::File::open(&part).and_then(|f| f.sync_all());
+    // Windows: FlushFileBuffers требует права записи — на дескрипторе только для чтения
+    // `sync_all` даёт ERROR_ACCESS_DENIED, и копия ложилась рядом как ` (2)` даже в пустой папке.
+    let synced = std::fs::OpenOptions::new().write(true).open(&part).and_then(|f| f.sync_all());
     let err = match synced.and_then(|_| ops.rename_replace(&part, &dest)) {
         Ok(()) => return finish(dest, true),
         Err(e) => e,
