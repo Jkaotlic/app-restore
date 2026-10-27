@@ -907,3 +907,8 @@ label.app {
 .tile .ver.warn {
   white-space: normal;
 }
+.bar-hint {
+  flex: none;
+  margin: 6px 0 0;
+  text-align: right;
+}

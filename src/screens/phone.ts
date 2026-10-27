@@ -12,8 +12,8 @@ export const APPLE_DEVICES_URL = "https://apps.microsoft.com/detail/9np83lwlpz9k
 const deviceIcon = (p: PhoneDto) => (phoneView(p).isIpad ? ipadIcon() : phoneIcon());
 
 /** Строка задания на «Готово»: полоса под названием, состояние и «Повторить» справа. */
-export function jobRow(job: Job, text: string, onRetry: (e: Event) => void): HTMLElement {
-  const v = jobView(job.state, job.fromSaved);
+export function jobRow(job: Job, text: string, onRetry: (e: Event) => void, downloadOnly = false): HTMLElement {
+  const v = jobView(job.state, job.fromSaved, downloadOnly);
   const failed = job.state.kind === "failed";
   const retry = v.retry ? h("button", { class: "btn ghost small", text: "Повторить", on: { click: onRetry } }) : null;
   let bar: HTMLElement | null = null;
@@ -23,7 +23,8 @@ export function jobRow(job: Job, text: string, onRetry: (e: Event) => void): HTM
         ? h("div", { class: "bar indeterminate" }, h("i"))
         : h("div", { class: "bar" }, h("i", { style: { width: `${v.bar}%` } }));
   }
-  const cls = failed ? "state bad" : job.state.kind === "installed" ? "state ok" : "state";
+  const ok = job.state.kind === "installed" || (downloadOnly && job.state.kind === "saved");
+  const cls = failed ? "state bad" : ok ? "state ok" : "state";
   const right = h("span", { class: "right" }, h("span", { class: cls, text }), retry);
   return h("div", { class: "app" }, appIcon(job.row), h("span", { class: "t" }, h("b", { text: job.name }), bar), right);
 }

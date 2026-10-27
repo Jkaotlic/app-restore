@@ -14,6 +14,8 @@ export interface Job {
   row: RowDto;
   state: JobDto;
   fromSaved: string | null;
+  /** «Только скачать»: задание заканчивается на «Сохранено», на телефон не ставится. */
+  downloadOnly?: boolean;
 }
 
 export interface State {

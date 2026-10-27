@@ -5,7 +5,12 @@ import {
   addLinkRow,
   applyOwned,
   applyOwnedRow,
+  autoChecks,
+  barState,
   canSelect,
+  dropStoreRows,
+  replaceStoreRows,
+  storeTerm,
   chipCounts,
   chipList,
   emptySearchText,
@@ -85,6 +90,10 @@ register("choose", () => {
   let sourceReq = 0;
   let sourceBusy = false;
   let sourceError: string | null = null;
+  /** Поиск «В App Store»: идёт, не ответил или тихо. Номер запроса — ответ на прежний не берём. */
+  let storeStatus: "idle" | "loading" | "error" = "idle";
+  let storeReq = 0;
+  let storeTimer: ReturnType<typeof setTimeout> | undefined;
   /** Подключённые телефоны (udid через запятую): выбор источника перерисовывается, только когда они меняются. */
   let phonesKey = state.phones.map((p) => p.udid).join(",");
   // «Только для iPad» зависит от устройства, на которое ставим, а не от «Дальше» (как и `checked` в Rust)
@@ -128,6 +137,7 @@ register("choose", () => {
     on: {
       input: () => {
         query = search.value;
+        scheduleStore();
         renderChips();
         renderList();
       },
@@ -136,7 +146,13 @@ register("choose", () => {
 
   const countEl = h("div", { class: "count", attrs: { "aria-live": "polite" } });
   const clearBtn = h("button", { class: "link", text: "Снять всё", attrs: { type: "button" }, on: { click: () => clearAll() } });
-  const startBtn = h("button", { class: "btn go", attrs: { type: "button" }, on: { click: safe(start) } });
+  const startBtn = h("button", { class: "btn go", attrs: { type: "button" }, on: { click: safe(() => start(false)) } });
+  const onlyBtn = h("button", {
+    class: "btn ghost",
+    attrs: { type: "button", title: "Скачать копии в «Мои приложения», не ставя на телефон" },
+    on: { click: safe(() => start(true)) },
+  });
+  const barHint = h("p", { class: "note bar-hint" });
 
   const linkInput = h("input", {
     class: "input",
@@ -290,6 +306,40 @@ register("choose", () => {
     renderList();
   }
 
+  /** Пауза 400 мс после ввода; новый ввод отменяет прежний запрос (его ответ не берём). */
+  function scheduleStore() {
+    clearTimeout(storeTimer);
+    const term = storeTerm(query);
+    storeReq++;
+    if (term === null) {
+      storeStatus = "idle";
+      rows = dropStoreRows(rows, selected);
+      return;
+    }
+    storeStatus = "loading";
+    storeTimer = setTimeout(() => void searchStore(term), 400);
+  }
+
+  async function searchStore(term: string) {
+    const req = ++storeReq;
+    try {
+      const found = await call<RowDto[]>("search_store", { term });
+      if (req !== storeReq) return;
+      rows = replaceStoreRows(rows, found, selected, term);
+      for (const r of rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
+      storeStatus = "idle";
+      // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки
+      const pending = pendingChecks(rows, owned);
+      if (pending.length) void call("check_owned", { trackIds: pending }).catch(() => undefined);
+    } catch {
+      if (req !== storeReq) return;
+      storeStatus = "error";
+    }
+    if (!loaded) return;
+    renderChips();
+    renderList();
+  }
+
   function applyA11y(tile: HTMLElement, r: RowDto, line: TileLine, enabled: boolean) {
     const a = tileA11y(r.name, line, enabled, selected.has(r.track_id));
     if (a.pressed === null) tile.removeAttribute("aria-pressed");
@@ -414,6 +464,10 @@ register("choose", () => {
         }
       }
       const after: HTMLElement[] = [];
+      if (g.key === "store") {
+        if (storeStatus === "loading") extra.push(h("p", { class: "loading" }, "Ищем в App Store…", h("span", { class: "spin", attrs: { "aria-hidden": "true" } })));
+        else if (storeStatus === "error") extra.push(h("p", { class: "note", text: "App Store не ответил" }));
+      }
       if (g.key === "phone" && !purchasesLoading) {
         const choices = sourceChoices(state.phones, sourceUdid);
         if (choices && (plain || g.rows.length)) extra.push(sourcePicker(choices));
@@ -454,8 +508,13 @@ register("choose", () => {
     const label = selectionLabel(count, hiddenCount(items, chip, query, withPhone));
     countEl.replaceChildren(label, ...(count && size ? [h("small", { text: size })] : []));
     clearBtn.hidden = count === 0;
-    startBtn.disabled = count === 0;
-    startBtn.textContent = count ? `Вернуть ${count}` : "Вернуть";
+    const bar = barState(count, !!targetPhone());
+    startBtn.disabled = bar.go.disabled;
+    startBtn.textContent = bar.go.text;
+    onlyBtn.disabled = bar.only.disabled;
+    onlyBtn.textContent = bar.only.text;
+    barHint.textContent = bar.hint ?? "";
+    barHint.hidden = !bar.hint;
   }
 
   function clearAll() {
@@ -473,7 +532,8 @@ register("choose", () => {
     if (!rows.some((r) => r.track_id === ev.track_id)) return;
     owned = applyOwned(owned, ev);
     rows = applyOwnedRow(rows, ev);
-    if (!ev.error) autoSelect(ev.track_id, ev.checked);
+    const r = rows.find((x) => x.track_id === ev.track_id);
+    if (!ev.error && r && autoChecks(r)) autoSelect(ev.track_id, ev.checked);
     if (!loaded) return;
     // ошибка «стоп» меняет все ждущие строки
     if (ev.error) renderList();
@@ -550,17 +610,20 @@ register("choose", () => {
     linkBtn.textContent = "Добавить";
   }
 
-  async function start() {
+  /** «Вернуть» или «Только скачать» (`downloadOnly`: в «Мои приложения», на телефон не ставить). */
+  async function start(downloadOnly: boolean) {
     const items = chosen();
     if (items.length === 0) return;
+    if (!downloadOnly && !targetPhone()) return;
     startBtn.disabled = true;
+    onlyBtn.disabled = true;
     started = true;
     state.choice = null;
     for (const r of items) {
-      state.jobs.set(r.track_id, { track_id: r.track_id, name: r.name, row: r, state: { kind: "queued" }, fromSaved: null } as Job);
+      state.jobs.set(r.track_id, { track_id: r.track_id, name: r.name, row: r, state: { kind: "queued" }, fromSaved: null, downloadOnly } as Job);
     }
     try {
-      state.run = await call<RunDto>("start", { items: items.map((r) => [r.track_id, r.name]), sameAppleId: state.sameAppleId ?? true });
+      state.run = await call<RunDto>("start", { items: items.map((r) => [r.track_id, r.name]), sameAppleId: state.sameAppleId ?? true, downloadOnly });
     } catch {
       // start в Rust не падает; на всякий случай строки остаются «В очереди»
     }
@@ -615,7 +678,7 @@ register("choose", () => {
       { class: "choose-top" },
       heading,
       h("label", { class: "searchbox" }, searchIcon(), search),
-      h("p", { class: "hint", text: "Ищет в каталоге, ваших покупках и на телефоне, в том числе по прежним названиям." }),
+      h("p", { class: "hint", text: "Ищет в каталоге, ваших покупках, на телефоне и в App Store, в том числе по прежним названиям." }),
     ),
     chips,
     found,
@@ -628,12 +691,16 @@ register("choose", () => {
       h("div", { class: "sp" }),
       h("button", { class: "link", text: "Назад", attrs: { type: "button" }, on: { click: () => go("phone") } }),
       switchId,
+      onlyBtn,
       startBtn,
     ),
+    barHint,
   );
   void load().catch((e) => console.error(e));
   /** Подключили или отключили телефон: выбор источника над группой перерисовать. */
   function onPhones() {
+    // «Вернуть» зависит от того, есть ли куда ставить: панель — на каждое событие
+    renderBar();
     const key = state.phones.map((p) => p.udid).join(",");
     if (key === phonesKey) return;
     phonesKey = key;

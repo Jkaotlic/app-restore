@@ -1,4 +1,4 @@
-import { go, openLibraryButton, register, safe, state, targetPhone } from "../app";
+import { call, go, openLibraryButton, register, safe, state, targetPhone, type Job } from "../app";
 import { h } from "../dom";
 import { askAppleIdOnDone, doneText, isFinished } from "../labels";
 import { appleIdQuestion, jobRow, phoneStatus, retryJob } from "./phone";
@@ -26,13 +26,15 @@ register("done", () => {
 
   function render() {
     const jobs = [...state.jobs.values()];
-    const n = jobs.filter((j) => j.state.kind === "installed").length;
-    const finished = jobs.length > 0 && jobs.every((j) => isFinished(j.state));
+    // «Только скачать»: сохранённое и есть итог
+    const done = (j: Job) => j.state.kind === "installed" || (!!j.downloadOnly && j.state.kind === "saved");
+    const n = jobs.filter(done).length;
+    const finished = jobs.length > 0 && jobs.every((j) => isFinished(j.state, j.downloadOnly));
     big.textContent = `${n} из ${jobs.length}`;
     big.className = n === jobs.length && finished ? "big-ok" : "big-ok partial";
     again.hidden = !finished;
     // Телефон показываем, пока есть что ставить и ставить некуда (или выбор не сделан).
-    const waiting = jobs.some((j) => !isFinished(j.state));
+    const waiting = jobs.some((j) => !isFinished(j.state, j.downloadOnly));
     phoneBox.replaceChildren(...(waiting && !targetPhone() ? [status.el] : []));
     const ask = askAppleIdOnDone(state.withPhone, state.sameAppleId, state.phones);
     // после ответа вопрос остаётся на виду: можно передумать
@@ -41,18 +43,31 @@ register("done", () => {
     const same = state.sameAppleId;
     const email = state.run?.email ?? null;
     list.replaceChildren(
-      ...jobs.map((j) =>
-        jobRow(
+      ...jobs.map((j) => {
+        const row = jobRow(
           j,
-          doneText(j.state, j.fromSaved, same, email),
+          doneText(j.state, j.fromSaved, same, email, j.downloadOnly),
           safe(async () => {
             j.state = { kind: "queued" };
             render();
             await retryJob(j.track_id);
           }),
-        ),
-      ),
+          j.downloadOnly,
+        );
+        if (j.downloadOnly && j.state.kind === "saved") row.querySelector(".right")?.append(openFolder());
+        return row;
+      }),
     );
+  }
+
+  /** «Открыть папку» у строки «Сохранено»: «Мои приложения» в Finder / Проводнике (как `open_library`). */
+  function openFolder(): HTMLElement {
+    return h("button", {
+      class: "btn ghost small",
+      text: "Открыть папку",
+      attrs: { type: "button" },
+      on: { click: safe(async () => void (await call("open_library").catch(() => undefined))) },
+    });
   }
 
   /** Телефон перерисовывается только по событию `phones`, а не на каждый шаг задания. */
