@@ -8,6 +8,7 @@ import {
   chipCounts,
   chipList,
   emptySearchText,
+  foundText,
   groupPick,
   hasNewer,
   hiddenCount,
@@ -98,6 +99,14 @@ describe("visibleGroups", () => {
     const list = [cat(1, "Сбер", { category: "bank" }), cat(2, "ВК", { category: "social" }), row(10, "Банк-покупка")];
     expect(visibleGroups(list, "bank", "").map((x) => x.rows.map((r) => r.track_id))).toEqual([[1], [], []]);
     expect(visibleGroups(list, "buy", "").map((x) => x.rows.map((r) => r.track_id))).toEqual([[], [], [10]]);
+  });
+});
+
+describe("foundText", () => {
+  it("counts what the chip and the search leave on screen", () => {
+    expect(foundText(rows, "all", "")).toBe("Найдено 6");
+    expect(foundText(rows, "all", "tele")).toBe("Найдено 1");
+    expect(foundText(rows, "all", "zzz")).toBe("Найдено 0");
   });
 });
 

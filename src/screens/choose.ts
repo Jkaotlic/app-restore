@@ -9,6 +9,7 @@ import {
   chipCounts,
   chipList,
   emptySearchText,
+  foundText,
   groupPick,
   iconFor,
   idsToCheck,
@@ -82,7 +83,9 @@ register("choose", () => {
     return p;
   };
 
-  const list = h("div", { class: "scroll tiles-list", attrs: { "aria-live": "polite" } });
+  // в живой области только короткий итог: весь список на каждую букву диктор не читает
+  const list = h("div", { class: "scroll tiles-list" });
+  const found = h("p", { class: "found", attrs: { role: "status" } });
   const chips = h("div", { class: "chips", attrs: { role: "toolbar", "aria-label": "Фильтры" } });
 
   const search = h("input", {
@@ -272,6 +275,7 @@ register("choose", () => {
     }
     const focusedId = (document.activeElement as HTMLElement | null)?.closest?.<HTMLElement>(".tile")?.dataset.id;
     const groups = visibleGroups(rows, chip, query, withPhone);
+    found.textContent = foundText(rows, chip, query, withPhone);
     const plain = chip === "all" && query.trim() === "";
     const parts: HTMLElement[] = banners();
     for (const g of groups) {
@@ -467,6 +471,7 @@ register("choose", () => {
       h("p", { class: "hint", text: "Ищет в каталоге, ваших покупках и на телефоне, в том числе по прежним названиям." }),
     ),
     chips,
+    found,
     list,
     h(
       "div",

@@ -96,6 +96,11 @@ export function selectionLabel(count: number, hidden: number): string {
   return hidden ? `Выбрано ${count} · ${hidden} скрыто фильтром` : `Выбрано ${count}`;
 }
 
+/** Короткий итог для экранного диктора вместо озвучивания всего списка. */
+export function foundText(rows: RowDto[], chip: Chip, query: string, withPhone = true): string {
+  return `Найдено ${visibleGroups(rows, chip, query, withPhone).reduce((n, g) => n + g.rows.length, 0)}`;
+}
+
 /** «Выбрать все в группе»: что выбирается и выбрано ли уже всё. */
 export function groupPick(rows: RowDto[], selectable: (r: RowDto) => boolean, selected: Set<number>): { ids: number[]; allOn: boolean } {
   const ids = rows.filter(selectable).map((r) => r.track_id);
