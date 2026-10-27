@@ -754,6 +754,7 @@ pub async fn check_owned(app: AppHandle, state: State<'_, AppState>, track_ids: 
 #[tauri::command]
 pub async fn search_store(state: State<'_, AppState>, term: String) -> Result<Vec<RowDto>, UiError> {
     let found = crate::lookup::search(state.fetch.as_ref(), &term).await.map_err(|e| ui("search_store", e))?;
+    let found = relevant(found, &term);
     state.sizes.lock().unwrap().extend(found.iter().filter_map(|a| Some((a.track_id, a.size?))));
     let screen = state.phone_taken.lock().unwrap().clone();
     Ok(state.with_ctx(|ctx| store_rows(found, &store_taken(ctx, screen.as_ref()), ctx)).await)

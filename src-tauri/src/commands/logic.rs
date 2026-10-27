@@ -404,6 +404,18 @@ pub fn link_row(track_id: i64, ctx: &RowCtx, looked_up: Option<(String, String)>
     }
 }
 
+/// Как `fold` в rows.ts: без регистра, ё = е, пробелы схлопнуты.
+fn fold(s: &str) -> String {
+    s.to_lowercase().replace('ё', "е").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Search API нечёткий («сбер» → Госуслуги, Telegram…): оставляем только то, где запрос есть в
+/// названии или в имени продавца.
+pub fn relevant(found: Vec<crate::lookup::StoreApp>, term: &str) -> Vec<crate::lookup::StoreApp> {
+    let t = fold(term);
+    found.into_iter().filter(|a| fold(&a.name).contains(&t) || fold(&a.seller).contains(&t)).collect()
+}
+
 /// Что уже есть на «Выборе» и в группу «В App Store» не идёт: каталог, копии, строки после
 /// загрузки покупок (`phone_taken`; `None` — ещё не загружены) и приложения телефона-источника.
 pub fn store_taken(ctx: &RowCtx, screen: Option<&HashSet<i64>>) -> HashSet<i64> {
@@ -2025,7 +2037,37 @@ mod tests {
     }
 
     fn store_app(id: i64, name: &str) -> crate::lookup::StoreApp {
-        crate::lookup::StoreApp { track_id: id, name: name.into(), bundle_id: format!("com.example.s{id}"), version: "2.0".into(), size: Some(1000), ipad_only: false }
+        crate::lookup::StoreApp { track_id: id, name: name.into(), bundle_id: format!("com.example.s{id}"), version: "2.0".into(), size: Some(1000), ipad_only: false, seller: String::new() }
+    }
+
+    /// Живой Search API: `cargo test live_search -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn live_search_relevance() {
+        let f = crate::lookup::ReqwestFetch::new();
+        for term in ["сбер", "вконтакте"] {
+            let all = crate::lookup::search(&f, term).await.unwrap();
+            let kept = relevant(all.clone(), term);
+            println!("{term}: {} из {}", kept.len(), all.len());
+            println!("  отброшено: {}", all.iter().filter(|a| !kept.contains(a)).map(|a| a.name.as_str()).collect::<Vec<_>>().join("; "));
+            for a in &kept {
+                println!("  {} | {} | {}", a.track_id, a.name, a.seller);
+            }
+        }
+    }
+
+    #[test]
+    fn relevant_keeps_name_or_seller_matches_only() {
+        let body = std::fs::read_to_string(format!("{}/tests/fixtures/lookup/search-synthetic.json", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let found = crate::lookup::parse_search_for_tests(&body);
+        let ids = |term: &str| relevant(found.clone(), term).iter().map(|a| a.track_id).collect::<Vec<_>>();
+        // «Посторонний» Search API тоже вернул бы — его нет ни в имени, ни в продавце
+        assert_eq!(ids(" ПРИМЕР "), [1000000001, 1000000002, 1000000003]);
+        assert_eq!(ids("example  llc"), [1000000001], "по продавцу, пробелы схлопнуты");
+        assert_eq!(ids("пример   банк"), [1000000001]);
+        let yo = crate::lookup::StoreApp { name: "Ёлка".into(), ..found[0].clone() };
+        assert_eq!(relevant(vec![yo], "елк").len(), 1, "ё = е");
+        assert!(relevant(found, "нет такого").is_empty());
     }
 
     #[test]

@@ -137,6 +137,8 @@ pub struct StoreApp {
     pub size: Option<u64>,
     /// В `supportedDevices` нет ни одного iPhone.
     pub ipad_only: bool,
+    /// Продавец (`sellerName`): по нему тоже отбирается выдача (`logic::relevant`).
+    pub seller: String,
 }
 
 /// Значение параметра адреса: всё, кроме `A-Z a-z 0-9 - _ . ~`, — `%XX` по байтам UTF-8.
@@ -178,9 +180,14 @@ fn parse_search(body: &str) -> Result<Vec<StoreApp>, AppError> {
                 .get("supportedDevices")
                 .and_then(Value::as_array)
                 .is_some_and(|d| !d.is_empty() && !d.iter().any(|x| x.as_str().is_some_and(|s| s.starts_with("iPhone"))));
-            Some(StoreApp { track_id, name, bundle_id: text(r, "bundleId"), version: text(r, "version"), size, ipad_only })
+            Some(StoreApp { track_id, name, bundle_id: text(r, "bundleId"), version: text(r, "version"), size, ipad_only, seller: text(r, "sellerName") })
         })
         .collect())
+}
+
+#[cfg(test)]
+pub fn parse_search_for_tests(body: &str) -> Vec<StoreApp> {
+    parse_search(body).unwrap()
 }
 
 /// Поиск в российском App Store (группа «В App Store»). Один запрос без повторов: человек ждёт
@@ -329,9 +336,10 @@ mod tests {
         assert_eq!(
             got,
             vec![
-                StoreApp { track_id: 1000000001, name: "Пример Банк".into(), bundle_id: "com.example.bank".into(), version: "3.2.1".into(), size: Some(104857600), ipad_only: false },
-                StoreApp { track_id: 1000000002, name: "Пример Почта".into(), bundle_id: "com.example.mail".into(), version: "1.0".into(), size: Some(52428800), ipad_only: false },
-                StoreApp { track_id: 1000000003, name: "Пример для iPad".into(), bundle_id: "com.example.pad".into(), version: "2.0".into(), size: None, ipad_only: true },
+                StoreApp { track_id: 1000000001, name: "Пример Банк".into(), bundle_id: "com.example.bank".into(), version: "3.2.1".into(), size: Some(104857600), ipad_only: false, seller: "Example LLC".into() },
+                StoreApp { track_id: 1000000002, name: "Пример Почта".into(), bundle_id: "com.example.mail".into(), version: "1.0".into(), size: Some(52428800), ipad_only: false, seller: String::new() },
+                StoreApp { track_id: 1000000003, name: "Пример для iPad".into(), bundle_id: "com.example.pad".into(), version: "2.0".into(), size: None, ipad_only: true, seller: String::new() },
+                StoreApp { track_id: 1000000006, name: "Посторонний".into(), bundle_id: "com.example.other".into(), version: "5.0".into(), size: None, ipad_only: false, seller: "Other Inc".into() },
             ],
             "без trackId и без имени — пропущены"
         );
@@ -353,7 +361,7 @@ mod tests {
         assert_eq!(search(&f, "  сб ").await, Ok(vec![]));
         assert!(f.urls.lock().unwrap().is_empty());
         let got = search(&f, " пример ").await.unwrap();
-        assert_eq!(got.len(), 3);
+        assert_eq!(got.len(), 4);
         assert_eq!(f.urls.lock().unwrap().as_slice(), [format!("{SEARCH_URL}?term=%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%80&country=ru&entity=software&limit=25")]);
         let f = FakeFetch { body: Err(AppError::AppleUnavailable { status: None }), urls: Mutex::new(vec![]) };
         assert_eq!(search(&f, "пример").await, Err(AppError::AppleUnavailable { status: None }));
