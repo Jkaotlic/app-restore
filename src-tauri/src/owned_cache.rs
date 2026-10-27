@@ -8,6 +8,8 @@ use std::sync::Mutex;
 
 /// Через сколько ответ перепроверяется в фоне (плитка до того — с ответом из кэша).
 pub const TTL_SECS: u64 = 7 * 24 * 60 * 60;
+/// Старше этого ответ из файла убирается при записи: строки поиска не копятся без конца.
+pub const KEEP_SECS: u64 = 30 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Entry {
@@ -35,6 +37,14 @@ pub fn fresh(e: &Entry, now: u64) -> bool {
 /// Содержимое файла; битое или чужого вида — пусто.
 pub fn parse(text: &str) -> Data {
     serde_json::from_str(text).unwrap_or_default()
+}
+
+/// Убрать ответы старше `KEEP_SECS` и опустевшие Apple ID.
+pub fn prune(d: &mut Data, now: u64) {
+    for entries in d.values_mut() {
+        entries.retain(|_, e| now.saturating_sub(e.checked_at) < KEEP_SECS);
+    }
+    d.retain(|_, entries| !entries.is_empty());
 }
 
 /// Что делать с запрошенными trackId: `cached` — ответ из кэша отдать сразу; `check` — к ipatool
@@ -123,14 +133,15 @@ impl OwnedCache {
         self.data.lock().unwrap().get(&key(email)).cloned().unwrap_or_default()
     }
 
-    /// Записать ответы Apple ID `email` и сохранить файл.
-    pub fn put(&self, email: &str, answers: impl IntoIterator<Item = (i64, Entry)>) {
+    /// Записать ответы Apple ID `email` и сохранить файл (старые ответы убираются, `prune`).
+    pub fn put(&self, email: &str, answers: impl IntoIterator<Item = (i64, Entry)>, now: u64) {
         let k = key(email);
         if k.is_empty() {
             return;
         }
         let mut d = self.data.lock().unwrap();
         d.entry(k).or_default().extend(answers);
+        prune(&mut d, now);
         self.save(&d);
     }
 
@@ -207,6 +218,28 @@ mod tests {
     }
 
     #[test]
+    fn prune_drops_answers_older_than_keep_and_empty_accounts() {
+        let mut d: Data = [
+            ("user@example.com".to_string(), [(1, e(true, NOW - KEEP_SECS)), (2, e(false, NOW - KEEP_SECS + 1))].into()),
+            ("other@example.com".to_string(), [(3, e(true, 0))].into()),
+        ]
+        .into();
+        prune(&mut d, NOW);
+        assert_eq!(d.len(), 1);
+        assert_eq!(d["user@example.com"].keys().copied().collect::<Vec<_>>(), vec![2]);
+    }
+
+    #[test]
+    fn put_prunes_old_answers() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("owned-cache.json");
+        let c = OwnedCache::open(p.clone());
+        c.put("user@example.com", [(1, e(true, 0))], NOW);
+        c.put("user@example.com", [(2, e(true, NOW))], NOW);
+        assert_eq!(OwnedCache::open(p).entries("user@example.com").len(), 1);
+    }
+
+    #[test]
     fn stale_ids_only_on_screen() {
         let entries: HashMap<i64, Entry> = [(1, e(true, 0)), (2, e(false, 0)), (3, e(true, NOW)), (4, e(true, 0))].into();
         assert_eq!(stale_ids(&entries, &[4, 1, 3].into(), NOW), vec![1, 4]);
@@ -233,8 +266,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("owned-cache.json");
         let c = OwnedCache::open(p.clone());
-        c.put("User@Example.com", [(5, e(true, 7))]);
-        c.put("other@example.com", [(5, e(false, 8))]);
+        c.put("User@Example.com", [(5, e(true, 7))], 7);
+        c.put("other@example.com", [(5, e(false, 8))], 8);
         let again = OwnedCache::open(p.clone());
         assert_eq!(again.entries("user@example.com")[&5], e(true, 7));
         assert_eq!(again.entries("other@example.com")[&5], e(false, 8), "у каждого Apple ID свои ответы");
@@ -248,7 +281,7 @@ mod tests {
         std::fs::write(&p, b"{\"user@example.com\": {\"5\": tru").unwrap();
         let c = OwnedCache::open(p.clone());
         assert!(c.entries("user@example.com").is_empty());
-        c.put("user@example.com", [(6, e(false, 1))]);
+        c.put("user@example.com", [(6, e(false, 1))], 1);
         assert_eq!(parse(&std::fs::read_to_string(&p).unwrap())["user@example.com"].len(), 1);
     }
 
@@ -257,8 +290,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("owned-cache.json");
         let c = OwnedCache::open(p.clone());
-        c.put("user@example.com", [(5, e(true, 7))]);
-        c.put("other@example.com", [(5, e(true, 7))]);
+        c.put("user@example.com", [(5, e(true, 7))], 7);
+        c.put("other@example.com", [(5, e(true, 7))], 7);
         c.forget(" USER@example.com");
         let again = OwnedCache::open(p);
         assert!(again.entries("user@example.com").is_empty());

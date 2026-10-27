@@ -103,6 +103,8 @@ pub struct AppState {
     owned_cache: OwnedCache,
     /// trackId строк, видимых при текущем поиске/фильтре (`owned_visible`): их проверяют первыми.
     visible: Mutex<HashSet<i64>>,
+    /// trackId последнего ответа «В App Store»: их устаревшие ответы тоже перепроверяются.
+    store_ids: Mutex<Vec<i64>>,
     /// Последние версии у Apple (`latest_version`) по trackId.
     latest: Mutex<HashMap<i64, String>>,
     /// Размеры из Lookup (`fileSizeBytes`) по trackId: для «≈ размер» на «Выборе».
@@ -183,6 +185,7 @@ impl AppState {
             owned: Mutex::new(HashMap::new()),
             owned_cache: OwnedCache::open(data_dir.join("owned-cache.json")),
             visible: Mutex::new(HashSet::new()),
+            store_ids: Mutex::new(vec![]),
             latest: Mutex::new(HashMap::new()),
             sizes: Mutex::new(HashMap::new()),
             installed: Mutex::new(None),
@@ -340,14 +343,19 @@ impl AppState {
             self.clear_account_caches();
         }
         if let Some(email) = after {
-            self.apply_cached(&self.owned_cache.entries(email));
+            // под замком аккаунта: другая смена не вклинится
+            self.apply_cached(&self.owned_cache.entries(email), self.account_epoch.load(Ordering::SeqCst));
         }
         *cur = acc;
     }
 
-    /// Ответы кэша — в права и версии, не поверх полученных в этом запуске.
-    fn apply_cached(&self, entries: &HashMap<i64, Entry>) {
+    /// Ответы кэша — в права и версии, не поверх полученных в этом запуске. Эпоха сверяется под
+    /// замком прав: `clear_account_caches` меняет её раньше, чем чистит их.
+    fn apply_cached(&self, entries: &HashMap<i64, Entry>, epoch: u64) {
         let (mut owned, mut latest) = (self.owned.lock().unwrap(), self.latest.lock().unwrap());
+        if self.account_epoch.load(Ordering::SeqCst) != epoch {
+            return;
+        }
         for (id, e) in entries {
             owned.entry(*id).or_insert(e.owned);
             if let Some(v) = &e.version {
@@ -357,9 +365,13 @@ impl AppState {
     }
 
     /// Права из покупок: в память и в кэш Apple ID `email` (тот, при котором их загружали).
-    fn apply_bought(&self, email: Option<&str>, answers: &[(i64, Entry)]) {
+    /// Apple ID сменился (`epoch`) — ничего не пишем.
+    fn apply_bought(&self, email: Option<&str>, answers: &[(i64, Entry)], epoch: u64) {
         {
             let (mut owned, mut latest) = (self.owned.lock().unwrap(), self.latest.lock().unwrap());
+            if self.account_epoch.load(Ordering::SeqCst) != epoch {
+                return;
+            }
             for (id, e) in answers {
                 owned.insert(*id, true);
                 if let Some(v) = &e.version {
@@ -368,17 +380,17 @@ impl AppState {
             }
         }
         if let Some(e) = email {
-            self.owned_cache.put(e, answers.iter().cloned());
+            self.owned_cache.put(e, answers.iter().cloned(), owned_cache::now());
         }
     }
 
-    /// trackId строк на «Выборе»: каталог, покупки и группа «С этого iPhone». По ним выбираются
-    /// устаревшие ответы кэша для фоновой перепроверки.
+    /// trackId строк на «Выборе» (`screen_ids`).
     async fn on_screen(&self) -> HashSet<i64> {
-        let mut out: HashSet<i64> = self.catalog.read().await.iter().map(|r| r.track_id).collect();
-        out.extend(self.phone_taken.lock().unwrap().iter().flatten().copied());
-        out.extend(self.phone_lists.lock().unwrap().values().flatten().filter_map(|a| a.item_id));
-        out
+        let catalog: Vec<i64> = self.catalog.read().await.iter().map(|r| r.track_id).collect();
+        let taken = self.phone_taken.lock().unwrap().clone();
+        let phones = self.phone_lists.lock().unwrap().clone();
+        let store = self.store_ids.lock().unwrap().clone();
+        screen_ids(&catalog, taken.as_ref(), &phones, &store)
     }
 
     fn emit_job<R: Runtime>(&self, app: &AppHandle<R>, track_id: i64, state: &JobState) {
@@ -656,6 +668,7 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
     tauri::async_runtime::spawn(async move {
         let st = app.state::<AppState>();
         let email = st.current_email();
+        let epoch = st.account_epoch.load(Ordering::SeqCst);
         let current = || st.purchases_gen.load(Ordering::SeqCst) == generation;
         let progress = |page: u32, total: u32| {
             if current() {
@@ -670,7 +683,7 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
             Ok(purchases) => {
                 // купленное — с правами: каталогу, «С этого iPhone» и «В App Store» list-versions не нужен
                 let answers = owned_cache::from_purchases(&purchases, owned_cache::now());
-                st.apply_bought(email.as_deref(), &answers);
+                st.apply_bought(email.as_deref(), &answers, epoch);
                 // одним Lookup и покупки, и кандидаты «С этого iPhone» (нет в каталоге и покупках)
                 let mut ids: Vec<i64> = purchases.iter().map(|a| a.id).collect();
                 let taken: HashSet<i64> = st.catalog.read().await.iter().map(|r| r.track_id).chain(ids.iter().copied()).collect();
@@ -785,12 +798,13 @@ pub fn clear_installed(state: State<'_, AppState>) {
 }
 
 /// Права и последняя версия по одной записи (~2–4 с каждая) в фоне; итоги приходят событиями
-/// `owned`. Пустой список просто останавливает идущую проверку. Ответы из кэша — сразу, устаревшие
-/// перепроверяются в конце; видимые строки (`owned_visible`) — первыми. ipatool — по одному.
+/// `owned`. Пустой список без `recheck` просто останавливает идущую проверку. Ответы из кэша —
+/// сразу, устаревшие ответы строк «Выбора» перепроверяются в конце; видимые строки
+/// (`owned_visible`) — первыми. ipatool — по одному.
 #[tauri::command]
-pub async fn check_owned(app: AppHandle, track_ids: Vec<i64>) -> Result<(), ()> {
-    let stop_only = track_ids.is_empty();
-    run_checks(app, track_ids, !stop_only).await;
+pub async fn check_owned(app: AppHandle, track_ids: Vec<i64>, recheck: Option<bool>) -> Result<(), ()> {
+    let recheck = recheck.unwrap_or(false) || !track_ids.is_empty();
+    run_checks(app, track_ids, recheck).await;
     Ok(())
 }
 
@@ -806,9 +820,7 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
     let plan = owned_cache::plan(&track_ids, &entries, &stale, now);
     let current = move |st: &AppState| st.owned_gen.load(Ordering::SeqCst) == generation;
     // ответы кэша — без ipatool, сразу
-    if st.account_epoch.load(Ordering::SeqCst) == epoch {
-        st.apply_cached(&plan.cached.iter().cloned().collect());
-    }
+    st.apply_cached(&plan.cached.iter().cloned().collect(), epoch);
     for (id, e) in &plan.cached {
         let ev = st.with_ctx(|ctx| owned_event(*id, &Ok((e.owned, e.version.clone())), ctx)).await;
         if current(&st) {
@@ -826,18 +838,22 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
             let Some(i) = owned_cache::next_check(&queue, &st.visible.lock().unwrap()) else { return };
             let (id, stale) = queue.remove(i);
             let r = owned_result(st.session.latest_version(id).await);
-            // ответ прежнего Apple ID новому не годится
-            if st.account_epoch.load(Ordering::SeqCst) != epoch {
-                return;
+            // ответ прежнего Apple ID новому не годится: эпоха — под замком прав
+            {
+                let mut owned_map = st.owned.lock().unwrap();
+                if st.account_epoch.load(Ordering::SeqCst) != epoch {
+                    return;
+                }
+                if let Ok((owned, latest)) = &r {
+                    owned_map.insert(id, *owned);
+                    if let Some(v) = latest {
+                        st.latest.lock().unwrap().insert(id, v.clone());
+                    }
+                }
             }
-            if let Ok((owned, latest)) = &r {
-                st.owned.lock().unwrap().insert(id, *owned);
-                if let Some(v) = latest {
-                    st.latest.lock().unwrap().insert(id, v.clone());
-                }
-                if let Some(e) = &email {
-                    st.owned_cache.put(e, [(id, Entry { owned: *owned, checked_at: owned_cache::now(), version: latest.clone() })]);
-                }
+            if let (Ok((owned, latest)), Some(e)) = (&r, &email) {
+                let now = owned_cache::now();
+                st.owned_cache.put(e, [(id, Entry { owned: *owned, checked_at: now, version: latest.clone() })], now);
             }
             let stop = r.as_ref().err().is_some_and(stops_owned_check);
             if let Err(e) = &r {
@@ -871,7 +887,9 @@ pub async fn search_store(state: State<'_, AppState>, term: String) -> Result<Ve
     let found = relevant(found, &term);
     state.sizes.lock().unwrap().extend(found.iter().filter_map(|a| Some((a.track_id, a.size?))));
     let screen = state.phone_taken.lock().unwrap().clone();
-    Ok(state.with_ctx(|ctx| store_rows(found, &store_taken(ctx, screen.as_ref()), ctx)).await)
+    let rows = state.with_ctx(|ctx| store_rows(found, &store_taken(ctx, screen.as_ref()), ctx)).await;
+    *state.store_ids.lock().unwrap() = rows.iter().map(|r| r.track_id).collect();
+    Ok(rows)
 }
 
 #[tauri::command]
@@ -880,7 +898,8 @@ pub async fn add_by_link(state: State<'_, AppState>, link: String) -> Result<Row
     let latest = state.session.latest_version(id).await.map_err(|e| ui("add_by_link", e))?;
     state.owned.lock().unwrap().insert(id, true);
     if let Some(e) = state.current_email() {
-        state.owned_cache.put(&e, [(id, Entry { owned: true, checked_at: owned_cache::now(), version: latest.clone() })]);
+        let now = owned_cache::now();
+        state.owned_cache.put(&e, [(id, Entry { owned: true, checked_at: now, version: latest.clone() })], now);
     }
     if let Some(v) = latest {
         state.latest.lock().unwrap().insert(id, v);

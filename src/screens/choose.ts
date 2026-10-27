@@ -335,9 +335,9 @@ register("choose", () => {
       storeAnswered = term;
       for (const r of rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
       storeStatus = "idle";
-      // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки
-      const pending = pendingChecks(rows, owned);
-      if (pending.length) void call("check_owned", { trackIds: pending }).catch(() => undefined);
+      // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки; `recheck` — Rust
+      // допишет устаревшие ответы кэша (и найденных в App Store), даже если ждущих нет
+      if (found.length) void call("check_owned", { trackIds: pendingChecks(rows, owned), recheck: true }).catch(() => undefined);
     } catch {
       if (req !== storeReq) return;
       storeStatus = "error";

@@ -466,6 +466,17 @@ pub fn store_rows(found: Vec<crate::lookup::StoreApp>, taken: &HashSet<i64>, ctx
         .collect()
 }
 
+/// trackId строк «Выбора»: каталог, строки после загрузки покупок (`taken`), приложения
+/// прочитанных телефонов и последний ответ «В App Store». По ним выбираются устаревшие ответы
+/// кэша прав для фоновой перепроверки.
+pub fn screen_ids(catalog: &[i64], taken: Option<&HashSet<i64>>, phones: &HashMap<String, Vec<InstalledApp>>, store: &[i64]) -> HashSet<i64> {
+    let mut out: HashSet<i64> = catalog.iter().copied().collect();
+    out.extend(taken.into_iter().flatten().copied());
+    out.extend(phones.values().flatten().filter_map(|a| a.item_id));
+    out.extend(store.iter().copied());
+    out
+}
+
 /// Ответ `latest_version` -> (права, версия). Нет прав — не ошибка.
 pub fn owned_result(r: Result<Option<String>, AppError>) -> Result<(bool, Option<String>), AppError> {
     match r {
@@ -1326,6 +1337,15 @@ mod tests {
         // не каталог, своей копии нет — скачивание по trackId
         let (download, install) = plan_start(vec![(60, "Онлайн".into())], &HashSet::new(), &[], &[]);
         assert_eq!((download, install), (vec![(60, "Онлайн".to_string())], vec![]));
+    }
+
+    #[test]
+    fn screen_ids_cover_catalog_purchases_phones_and_store() {
+        let phones: HashMap<String, Vec<InstalledApp>> = [("u1".to_string(), vec![inst("com.example.a", "1", Some(30)), inst("com.example.b", "1", None)])].into();
+        let taken: HashSet<i64> = [20].into();
+        let got = screen_ids(&[10], Some(&taken), &phones, &[40, 10]);
+        assert_eq!(got, [10, 20, 30, 40].into());
+        assert_eq!(screen_ids(&[], None, &HashMap::new(), &[40]), [40].into());
     }
 
     #[test]
