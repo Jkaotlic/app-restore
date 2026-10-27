@@ -28,6 +28,7 @@ import {
   sourceChoices,
   OTHER_ID_LOGIN_NOTE,
   SOURCE_HINT,
+  HIDDEN_PURCHASES_HINT,
   rovingIndex,
   hiddenCount,
   selectionLabel,
@@ -476,6 +477,7 @@ register("choose", () => {
         if (storeStatus === "loading") extra.push(h("p", { class: "loading" }, "Ищем в App Store…", h("span", { class: "spin", attrs: { "aria-hidden": "true" } })));
         else if (storeStatus === "error") extra.push(h("p", { class: "note", text: "App Store не ответил" }));
         else if (!g.rows.length && storeAnswered !== null && storeAnswered === storeTerm(query)) extra.push(h("p", { class: "empty", text: "В App Store ничего не нашлось" }));
+        if (g.rows.length) after.push(h("p", { class: "note group-hint", text: HIDDEN_PURCHASES_HINT }));
       }
       if (g.key === "phone" && !purchasesLoading) {
         const choices = sourceChoices(state.phones, sourceUdid);

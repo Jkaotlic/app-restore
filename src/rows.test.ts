@@ -31,6 +31,8 @@ import {
   purchasesForSource,
   sourceChoices,
   SOURCE_HINT,
+  HIDDEN_PURCHASES_HINT,
+  NAMESAKE_NOTE,
   OTHER_ID_LOGIN_NOTE,
   autoChecks,
   barState,
@@ -279,6 +281,13 @@ describe("owned states", () => {
     expect(m.get(2)).toEqual({ kind: "error", error: stopErr });
     expect(m.get(3)).toEqual({ kind: "yes" });
   });
+  it("app_gone is a final answer: not owned, with its own state, others keep waiting", () => {
+    const gone = { code: "app_gone", text: "Apple больше не отдаёт это приложение для скачивания", retryable: false, ref_code: null };
+    let m = initialOwned([cat(1, "А"), cat(2, "Б")]);
+    m = applyOwned(m, ev(1, false, gone));
+    expect(m.get(1)).toEqual({ kind: "gone" });
+    expect(m.get(2)).toEqual({ kind: "checking" });
+  });
   it("a soft error leaves the others waiting", () => {
     let m = initialOwned([cat(1, "А"), cat(2, "Б")]);
     m = applyOwned(m, ev(1, null, softErr));
@@ -315,6 +324,13 @@ describe("tileLine and canSelect", () => {
     expect(tileLine(cat(1, "А"), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
     expect(tileLine(row(60, "А", { source: "phone" }), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
     expect(tileLine(cat(1, "А"), { kind: "error", error: softErr }, false, true)).toEqual({ text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" });
+    // Apple больше не отдаёт: не выбрать и не повторять
+    const gone = { kind: "gone" } as const;
+    expect(tileLine(cat(1, "А"), gone, false, true)).toEqual({ text: "Apple больше не отдаёт", tone: "muted" });
+    expect(tileLine(row(70, "С", { source: "store" }), gone, false, true)).toEqual({ text: "Apple больше не отдаёт", tone: "muted" });
+    expect(canSelect(cat(1, "А"), gone)).toBe(false);
+    // тёзка из App Store: подсказка третьей строкой; у каталога её нет
+    expect(tileLine(row(70, "Сила звука", { source: "store" }), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE });
     // копия на компьютере: ставится и без подтверждения прав
     expect(tileLine(cat(1, "А", { has_saved_copy: true, available_version: "16.4" }), { kind: "checking" }, false, true)).toEqual({ text: "доступно 16.4", tone: "plain", note: "Есть копия на компьютере" });
   });
@@ -499,6 +515,8 @@ describe("phone as a source", () => {
   });
   it("texts", () => {
     expect(SOURCE_HINT).toBe("Само приложение с телефона не забрать — копию скачаем с Apple по номеру. Работает, если приложение есть на Apple ID");
+    expect(NAMESAKE_NOTE).toBe("Если у вас было приложение с таким названием, это могло быть другое — удалённое или скрытое");
+    expect(HIDDEN_PURCHASES_HINT).toBe("Скрытые покупки: App Store → аватар → ваше имя → Скрытые покупки → Показать");
     expect(OTHER_ID_LOGIN_NOTE).toBe("Войдите в Apple ID, с которого скачано это приложение");
   });
 });
@@ -563,7 +581,7 @@ describe("«В App Store»", () => {
     expect(canSelect(s, { kind: "checking" })).toBe(false);
     expect(canSelect(s, { kind: "no" })).toBe(false);
     expect(canSelect(s, { kind: "yes" })).toBe(true);
-    expect(tileLine(s, { kind: "no" }, false, false)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
+    expect(tileLine(s, { kind: "no" }, false, false)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE });
     expect(tileLine({ ...s, available_version: "2.0" }, { kind: "yes" }, false, false)).toEqual({ text: "доступно 2.0", tone: "plain" });
     expect(autoChecks(s)).toBe(false);
     expect(autoChecks(cat(1, "Сбер"))).toBe(true);

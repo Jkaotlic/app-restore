@@ -1,7 +1,8 @@
 // Строки экрана «Выбор»: группы, поиск, проверка покупок. Чистые функции, без DOM.
 import type { OwnedEvent, PhoneDto, RowDto, UiError } from "./types";
 
-export type OwnedState = { kind: "checking" } | { kind: "yes" } | { kind: "no" } | { kind: "error"; error: UiError };
+/** `gone` — Apple больше не отдаёт приложение (`app_gone`): окончательный ответ, как «нет». */
+export type OwnedState = { kind: "checking" } | { kind: "yes" } | { kind: "no" } | { kind: "gone" } | { kind: "error"; error: UiError };
 export type OwnedMap = Map<number, OwnedState>;
 
 /** После этих ошибок Rust прекращает `check_owned` (см. `stops_owned_check`). */
@@ -237,7 +238,9 @@ export function idsToCheck(rows: RowDto[]): number[] {
 
 export function applyOwned(map: OwnedMap, ev: OwnedEvent): OwnedMap {
   const m = new Map(map);
-  if (ev.error) {
+  if (ev.error?.code === "app_gone") {
+    m.set(ev.track_id, { kind: "gone" });
+  } else if (ev.error) {
     m.set(ev.track_id, { kind: "error", error: ev.error });
     if (STOPS_CHECK.has(ev.error.code)) {
       for (const [id, s] of m) if (s.kind === "checking") m.set(id, { kind: "error", error: ev.error });
@@ -280,7 +283,8 @@ export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean
   if (r.other_account) return { text: r.purchaser_masked ? `Куплено на другом Apple ID (${r.purchaser_masked})` : "Куплено на другом Apple ID", tone: "warn" };
   if ((r.source === "removed" || r.source === "phone" || r.source === "store") && !r.has_saved_copy) {
     if (!s || s.kind === "checking") return { text: "проверяем…", tone: "checking" };
-    if (s.kind === "no") return { text: "Нет на вашем Apple ID", tone: "muted" };
+    if (s.kind === "gone") return { text: "Apple больше не отдаёт", tone: "muted" };
+    if (s.kind === "no") return r.source === "store" ? { text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE } : { text: "Нет на вашем Apple ID", tone: "muted" };
     if (s.kind === "error") return { text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" };
   }
   const note = r.unknown_account ? "Неизвестный Apple ID" : r.has_saved_copy ? "Есть копия на компьютере" : undefined;
@@ -339,6 +343,12 @@ export function isLight(color: string): boolean {
   };
   return 0.2126 * lin(m[1]) + 0.7152 * lin(m[2]) + 0.0722 * lin(m[3]) > 0.45;
 }
+
+/** Третья строка плитки «В App Store» без прав: тёзка — не обязательно то самое приложение. */
+export const NAMESAKE_NOTE = "Если у вас было приложение с таким названием, это могло быть другое — удалённое или скрытое";
+
+/** Подсказка под группой «В App Store»: где вернуть скрытую покупку. */
+export const HIDDEN_PURCHASES_HINT = "Скрытые покупки: App Store → аватар → ваше имя → Скрытые покупки → Показать";
 
 /** Подсказка под группой «С этого iPhone». */
 export const SOURCE_HINT = "Само приложение с телефона не забрать — копию скачаем с Apple по номеру. Работает, если приложение есть на Apple ID";
