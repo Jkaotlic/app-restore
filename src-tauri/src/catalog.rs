@@ -13,6 +13,8 @@ pub struct SavedIpa {
     /// `None` у файлов со старым именем `<bundle>_<версия>.ipa`.
     pub track_id: Option<i64>,
     pub bundle_id: String,
+    /// Название из ipa (`itemName`, иначе `CFBundleDisplayName`); `None` — не прочитать.
+    pub name: Option<String>,
     pub version: String,
     /// `UIDeviceFamily` из Info.plist: 1 — iPhone, 2 — iPad; пусто, если неизвестно.
     pub device_family: Vec<u8>,
@@ -258,7 +260,7 @@ mod tests {
 
     #[test]
     fn saved_copy_matched_by_bundle_id() {
-        let saved = vec![SavedIpa { track_id: None, bundle_id: "b".into(), version: "2".into(), device_family: vec![], path: "/x/b_2.ipa".into() }];
+        let saved = vec![SavedIpa { track_id: None, bundle_id: "b".into(), name: None, version: "2".into(), device_family: vec![], path: "/x/b_2.ipa".into() }];
         let r = build_rows(&[], &HashMap::new(), vec![app(1, "a", "A"), app(2, "b", "B")], Some(&[1, 2].into()), &saved);
         assert_eq!(r.rows[0].saved_copy, None);
         assert_eq!(r.rows[1].saved_copy, Some(PathBuf::from("/x/b_2.ipa")));
@@ -271,7 +273,7 @@ mod tests {
             let p = t.path().join(name);
             let f = std::fs::File::create(&p).unwrap();
             f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(age_s)).unwrap();
-            SavedIpa { track_id: None, bundle_id: "b".into(), version: "x".into(), device_family: vec![], path: p }
+            SavedIpa { track_id: None, bundle_id: "b".into(), name: None, version: "x".into(), device_family: vec![], path: p }
         };
         // самая новая версия стоит в списке посередине
         let saved = vec![mk("b_1.0.ipa", 300), mk("b_3.0.ipa", 10), mk("b_2.0.ipa", 100)];
@@ -392,7 +394,7 @@ mod tests {
         assert!(!is_ipad_only(&[1, 2]));
         assert!(!is_ipad_only(&[1]));
         assert!(!is_ipad_only(&[]), "неизвестно — не прячем");
-        let saved = vec![SavedIpa { track_id: Some(901), bundle_id: "com.vk.vkhd".into(), version: "2.0.4".into(), device_family: vec![2], path: "/x/901.ipa".into() }];
+        let saved = vec![SavedIpa { track_id: Some(901), bundle_id: "com.vk.vkhd".into(), name: None, version: "2.0.4".into(), device_family: vec![2], path: "/x/901.ipa".into() }];
         let flagged = RemovedApp { ipad_only: true, ..removed(900, "Флаг") };
         let r = build_rows(&[flagged, removed(901, "Копия"), removed(902, "Обычное")], &HashMap::new(), vec![], Some(&HashSet::new()), &saved);
         assert_eq!(r.rows.iter().map(|x| x.ipad_only).collect::<Vec<_>>(), [true, true, false]);
@@ -400,7 +402,7 @@ mod tests {
 
     #[test]
     fn apply_versions_fills_rows() {
-        let saved = vec![SavedIpa { track_id: Some(901), bundle_id: "ru.copy".into(), version: "3.0".into(), device_family: vec![], path: "/x/901.ipa".into() }];
+        let saved = vec![SavedIpa { track_id: Some(901), bundle_id: "ru.copy".into(), name: None, version: "3.0".into(), device_family: vec![], path: "/x/901.ipa".into() }];
         let cat = vec![removed(900, "Сбер"), removed(901, "Копия"), removed(902, "Нет")];
         let buy = vec![OwnedApp { version: "12.16".into(), ..app(1, "com.example.a", "A") }, app(2, "com.example.b", "B")];
         let mut r = build_rows(&cat, &HashMap::new(), buy, Some(&[1, 2].into()), &saved);
@@ -436,7 +438,7 @@ mod tests {
 
     #[test]
     fn saved_copy_matched_by_track_id_first_then_bundle() {
-        let sv = |t: Option<i64>, b: &str, p: &str| SavedIpa { track_id: t, bundle_id: b.into(), version: "1".into(), device_family: vec![], path: p.into() };
+        let sv = |t: Option<i64>, b: &str, p: &str| SavedIpa { track_id: t, bundle_id: b.into(), name: None, version: "1".into(), device_family: vec![], path: p.into() };
         let saved = vec![sv(Some(900), "ru.removed", "/x/900.ipa"), sv(None, "b", "/x/b_1.ipa"), sv(Some(2), "b", "/x/2_b_1.ipa")];
         let r = build_rows(&[removed(900, "R")], &HashMap::new(), vec![app(2, "b", "B")], Some(&[2].into()), &saved);
         assert_eq!(r.rows[0].saved_copy, Some(PathBuf::from("/x/900.ipa")));

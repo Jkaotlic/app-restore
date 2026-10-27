@@ -645,7 +645,8 @@ impl Library {
                 if !keep(&path) {
                     return None;
                 }
-                Some(SavedIpa { track_id, bundle_id, version, device_family: self.family(&path), path })
+                let name = self.meta(&path).and_then(|m| m.name);
+                Some(SavedIpa { track_id, bundle_id, name, version, device_family: self.family(&path), path })
             })
             .collect();
         out.sort_by(|a, b| a.path.cmp(&b.path));

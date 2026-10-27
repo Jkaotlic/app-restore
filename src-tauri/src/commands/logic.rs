@@ -164,7 +164,7 @@ pub fn catalog_rows(ctx: &RowCtx) -> RowsDto {
             // самая свежая копия этого trackId, как в `build_rows`
             let path = crate::catalog::find_saved(ctx.saved, id, "")?;
             let s = ctx.saved.iter().find(|s| s.path == path)?;
-            Some(OwnedApp { id, bundle_id: s.bundle_id.clone(), name: s.bundle_id.clone(), version: s.version.clone(), platforms: vec![] })
+            Some(OwnedApp { id, bundle_id: s.bundle_id.clone(), name: s.name.clone().unwrap_or_else(|| s.bundle_id.clone()), version: s.version.clone(), platforms: vec![] })
         })
         .collect();
     let mut rows = crate::catalog::build_rows(ctx.catalog, ctx.owned, copies, Some(&HashSet::new()), ctx.saved);
@@ -196,7 +196,7 @@ fn with_unknown(mut rows: Vec<RowDto>, ctx: &RowCtx) -> Vec<RowDto> {
         .filter_map(|id| {
             let path = crate::catalog::find_saved(ctx.unknown, id, "")?;
             let s = ctx.unknown.iter().find(|s| s.path == path)?;
-            Some(OwnedApp { id, bundle_id: s.bundle_id.clone(), name: s.bundle_id.clone(), version: s.version.clone(), platforms: vec![] })
+            Some(OwnedApp { id, bundle_id: s.bundle_id.clone(), name: s.name.clone().unwrap_or_else(|| s.bundle_id.clone()), version: s.version.clone(), platforms: vec![] })
         })
         .collect();
     if copies.is_empty() {
@@ -762,7 +762,7 @@ mod tests {
         OwnedApp { id, bundle_id: bundle.into(), name: name.into(), version: "1.0".into(), platforms: vec![] }
     }
     fn saved(id: i64, path: &str) -> SavedIpa {
-        SavedIpa { track_id: Some(id), bundle_id: "b".into(), version: "1".into(), device_family: vec![], path: path.into() }
+        SavedIpa { track_id: Some(id), bundle_id: "b".into(), name: None, version: "1".into(), device_family: vec![], path: path.into() }
     }
 
     #[test]
@@ -1009,6 +1009,18 @@ mod tests {
         // 2 — запись каталога, 9 — есть своя копия: как раньше.
         assert_eq!(down, vec![(2, "C".to_string()), (9, "M".to_string())]);
         assert_eq!(inst, vec![(8, PathBuf::from("/x/8_u.ipa"))]);
+    }
+
+    /// Покупки не загрузились: строки копий называются по имени из ipa, не по bundle id.
+    #[test]
+    fn saved_rows_use_the_copy_name() {
+        let mut c = Ctx::new(vec![]);
+        c.saved = vec![SavedIpa { name: Some("СберБанк Онлайн".into()), ..saved(7, "/x/7_b_1.ipa") }, saved(8, "/x/8_b_1.ipa")];
+        c.unknown = vec![SavedIpa { name: Some("Чужое".into()), ..saved(9, "/x/9_u_1.ipa") }];
+        let d = rows_without_purchases(&c.get(), AppError::NotLoggedIn);
+        let mut names: Vec<_> = d.rows.iter().map(|r| (r.track_id, r.name.as_str())).collect();
+        names.sort();
+        assert_eq!(names, [(7, "СберБанк Онлайн"), (8, "b"), (9, "Чужое")]);
     }
 
     #[test]
