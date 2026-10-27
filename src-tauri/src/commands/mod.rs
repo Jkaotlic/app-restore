@@ -25,6 +25,7 @@ use crate::ipatool::session::{Account, Session};
 use crate::library::Library;
 use crate::owned_cache::{self, Entry, OwnedCache};
 use crate::lookup::{Fetch, HttpLookup, Lookup, ReqwestFetch, app_name};
+use crate::pending_jobs::{PendingJob, PendingStore};
 use crate::queue::{FsSpace, JobState, Queue};
 use crate::releases::NotifiedStore;
 use crate::removed_catalog::{RemovedApp, bundled, cached_catalog, fetch_catalog};
@@ -156,6 +157,8 @@ pub struct AppState {
     account_epoch: AtomicU64,
     /// Новый `load_purchases` (и выход) отменяет итог предыдущего.
     purchases_gen: AtomicU64,
+    /// Незавершённые задания между запусками (`pending-jobs.json`): «Не закончили прошлый раз».
+    pending: PendingStore,
 }
 
 impl AppState {
@@ -227,7 +230,91 @@ impl AppState {
             owned_gen: AtomicU64::new(0),
             account_epoch: AtomicU64::new(0),
             purchases_gen: AtomicU64::new(0),
+            pending: PendingStore::open(data_dir.join("pending-jobs.json")),
         }
+    }
+
+    /// Незавершённые задания нынешнего Apple ID для `pending-jobs.json`; без входа — `None`.
+    fn live_pending(&self) -> Option<Vec<PendingJob>> {
+        let account = self.current_email()?;
+        let only = self.download_only.lock().unwrap().clone();
+        let versions = self.chosen_versions.lock().unwrap().clone();
+        let names = self.names.lock().unwrap().clone();
+        let udid = self.phones.lock().unwrap().target.clone();
+        let jobs = self.jobs.lock().unwrap();
+        Some(crate::pending_jobs::live(&crate::pending_jobs::Live {
+            jobs: &jobs,
+            names: &names,
+            download_only: &only,
+            versions: &versions,
+            udid: udid.as_deref(),
+            account: &account,
+        }))
+    }
+
+    /// Файл незавершённых заданий — по нынешней очереди (пишется, только если список изменился).
+    /// Без входа файл не трогаем: задания не к кому отнести.
+    fn sync_pending(&self) {
+        if let Some(live) = self.live_pending() {
+            self.pending.sync(&live);
+        }
+    }
+
+    /// trackId заданий, которые сейчас есть в очереди программы (любом состоянии).
+    fn live_ids(&self) -> HashSet<i64> {
+        self.jobs.lock().unwrap().keys().copied().collect()
+    }
+
+    /// «Вернуть» (и «Продолжить» незавершённые): копии из «Мои приложения» ставятся без
+    /// скачивания, остальное — в очередь. Описание параметров — у команды `start`.
+    async fn start_jobs<R: Runtime>(&self, app: &AppHandle<R>, items: Vec<(i64, String)>, same_apple_id: bool, only: bool, versions: HashMap<i64, String>) -> RunDto {
+        {
+            let mut chosen = self.chosen_versions.lock().unwrap();
+            for (id, _) in &items {
+                match versions.get(id) {
+                    Some(v) => chosen.insert(*id, v.clone()),
+                    None => chosen.remove(id),
+                };
+            }
+        }
+        let chosen_ids: HashSet<i64> = versions.keys().copied().collect();
+        let email = self.current_email();
+        // начатое заново — уже не «прошлый раз»
+        if let Some(e) = &email {
+            self.pending.unclaim(e, &items.iter().map(|(id, _)| *id).collect());
+        }
+        let run = RunDto { same_apple_id, email };
+        *self.run.lock().unwrap() = Some(run.clone());
+        self.names.lock().unwrap().extend(items.iter().cloned());
+        {
+            let mut fs = self.from_saved.lock().unwrap();
+            for (id, _) in &items {
+                fs.remove(id);
+            }
+        }
+        let catalog_ids: HashSet<i64> = self.catalog.read().await.iter().map(|r| r.track_id).collect();
+        {
+            let mut set = self.download_only.lock().unwrap();
+            for (id, _) in &items {
+                if only {
+                    set.insert(*id);
+                } else {
+                    set.remove(id);
+                }
+            }
+        }
+        let (download, install) = plan_start(items, &catalog_ids, &self.library.list(), &self.library.list_unknown(), &chosen_ids);
+        for (id, path) in install {
+            if only {
+                self.record(app, id, JobState::Saved { path });
+            } else {
+                self.install_copy(app, id, path);
+            }
+        }
+        self.mark_downloads(download.iter().map(|(id, _)| *id).filter(|id| *id > 0));
+        self.queue.enqueue_versions(self.with_versions(download.into_iter().map(|(id, _)| id)), only);
+        self.sync_pending();
+        run
     }
 
     /// Снимок всего, из чего строятся строки «Выбора»; `f` получает его как `RowCtx`.
@@ -338,6 +425,8 @@ impl AppState {
     /// Смена аккаунта: убрать ждущие задания (`Saved` и `Queued`, которые очередь ещё не взяла;
     /// идущую установку не трогаем) и итог прошлого запуска. Возвращает убранные trackId.
     fn drop_waiting(&self) -> Vec<i64> {
+        // до сброса: убранные задания Apple ID остаются в файле до возвращения в него
+        let before = self.live_pending();
         let gone = {
             // под замком заданий: `take_waiting` не переведёт `Saved` в очередь между шагами
             let mut jobs = self.jobs.lock().unwrap();
@@ -354,7 +443,12 @@ impl AppState {
             dl.remove(id);
             only.remove(id);
         }
+        drop((names, fs, dl, only, chosen));
         *self.run.lock().unwrap() = None;
+        if let Some(before) = before {
+            self.pending.release(before.into_iter().filter(|j| gone.contains(&j.track_id)).collect());
+        }
+        self.sync_pending();
         gone
     }
 
@@ -470,6 +564,7 @@ impl AppState {
         }
         self.emit_job(app, track_id, &state);
         self.jobs.lock().unwrap().insert(track_id, state);
+        self.sync_pending();
     }
 
     /// Ставит готовую ipa: сразу, если телефон выбран, иначе ждёт его в `Saved` (`apply_target`).
@@ -1137,51 +1232,65 @@ pub async fn start(
     download_only: Option<bool>,
     versions: Option<Vec<(i64, String)>>,
 ) -> Result<RunDto, ()> {
-    let only = download_only.unwrap_or(false);
     let versions: HashMap<i64, String> = versions.unwrap_or_default().into_iter().filter(|(_, v)| !v.trim().is_empty()).collect();
-    {
-        let mut chosen = state.chosen_versions.lock().unwrap();
-        for (id, _) in &items {
-            match versions.get(id) {
-                Some(v) => chosen.insert(*id, v.clone()),
-                None => chosen.remove(id),
-            };
-        }
-    }
-    let chosen_ids: HashSet<i64> = versions.keys().copied().collect();
-    let email = state.account.lock().unwrap().as_ref().map(|a| a.email.clone());
-    let run = RunDto { same_apple_id, email };
-    *state.run.lock().unwrap() = Some(run.clone());
-    state.names.lock().unwrap().extend(items.iter().cloned());
-    {
-        let mut fs = state.from_saved.lock().unwrap();
-        for (id, _) in &items {
-            fs.remove(id);
-        }
-    }
-    let catalog_ids: HashSet<i64> = state.catalog.read().await.iter().map(|r| r.track_id).collect();
-    {
-        let mut set = state.download_only.lock().unwrap();
-        for (id, _) in &items {
-            if only {
-                set.insert(*id);
-            } else {
-                set.remove(id);
-            }
-        }
-    }
-    let (download, install) = plan_start(items, &catalog_ids, &state.library.list(), &state.library.list_unknown(), &chosen_ids);
-    for (id, path) in install {
-        if only {
-            state.record(&app, id, JobState::Saved { path });
-        } else {
-            state.install_copy(&app, id, path);
-        }
-    }
-    state.mark_downloads(download.iter().map(|(id, _)| *id).filter(|id| *id > 0));
-    state.queue.enqueue_versions(state.with_versions(download.into_iter().map(|(id, _)| id)), only);
-    Ok(run)
+    Ok(state.start_jobs(&app, items, same_apple_id, download_only.unwrap_or(false), versions).await)
 }
+
+/// Незавершённое задание прошлого запуска для баннера «Не закончили прошлый раз».
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PendingJobDto {
+    pub track_id: i64,
+    pub name: String,
+    pub download_only: bool,
+}
+
+fn pending_dto(j: &PendingJob) -> PendingJobDto {
+    PendingJobDto { track_id: j.track_id, name: j.name.clone(), download_only: j.download_only }
+}
+
+/// Итог «Продолжить»: что поставлено в очередь и данные запуска для «Готово».
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResumeDto {
+    pub jobs: Vec<PendingJobDto>,
+    pub run: Option<RunDto>,
+}
+
+/// Незавершённые задания прошлого раза у нынешнего Apple ID (кроме уже идущих). Без входа — пусто:
+/// задания другого Apple ID без него не продолжаются.
+#[tauri::command]
+pub fn pending_jobs(state: State<'_, AppState>) -> Vec<PendingJobDto> {
+    let Some(email) = state.current_email() else { return vec![] };
+    state.pending.offered(&email, &state.live_ids()).iter().map(pending_dto).collect()
+}
+
+/// «Продолжить» незавершённые: как «Вернуть» с теми же режимом, версией и телефоном (если он
+/// подключён). Скачивание начинается заново. Сами задания не начинаются никогда — только так.
+#[tauri::command]
+pub async fn resume_pending(app: AppHandle, state: State<'_, AppState>, same_apple_id: Option<bool>) -> Result<ResumeDto, ()> {
+    let Some(email) = state.current_email() else { return Ok(ResumeDto { jobs: vec![], run: None }) };
+    let jobs = state.pending.claim(&email, &state.live_ids());
+    crate::log::write("pending jobs", &format!("resume {}", jobs.len()));
+    let connected: Vec<String> = state.phones.lock().unwrap().last.iter().map(|p| p.udid.clone()).collect();
+    if let Some(udid) = crate::pending_jobs::resume_target(&jobs, &connected) {
+        state.choose(&app, udid);
+    }
+    let mut run = None;
+    for (only, items, versions) in crate::pending_jobs::batches(&jobs) {
+        run = Some(state.start_jobs(&app, items, same_apple_id.unwrap_or(true), only, versions.into_iter().collect()).await);
+    }
+    state.sync_pending();
+    Ok(ResumeDto { jobs: jobs.iter().map(pending_dto).collect(), run })
+}
+
+/// «Забыть» незавершённые задания нынешнего Apple ID: из файла и из баннера.
+#[tauri::command]
+pub fn forget_pending(state: State<'_, AppState>) {
+    if let Some(email) = state.current_email() {
+        state.pending.forget(&email);
+        state.sync_pending();
+    }
+}
+
 
 #[tauri::command]
 pub fn run_info(state: State<'_, AppState>) -> Option<RunDto> {
@@ -1428,6 +1537,13 @@ pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result
     }
     let s = state.sessions.clone();
     state.owned_cache.forget(&email);
+    // забытый Apple ID — и его незавершённые задания
+    state.pending.forget(&email);
+    state.sync_pending();
+    if state.current_email().is_none() {
+        // вышли из него: `sync_pending` без входа файл не пишет
+        state.pending.sync(&[]);
+    }
     // не забыли (очередь к ipatool, связка ключей) — сказать, а не делать вид, что вышло;
     // выход и убранные задания при этом уже случились — их интерфейс получает тоже
     let forgot = match state.session.exclusive(move || s.forget(&email)).await {

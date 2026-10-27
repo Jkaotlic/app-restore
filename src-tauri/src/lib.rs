@@ -16,6 +16,7 @@ mod releases;
 mod removed_catalog;
 mod retry;
 mod passphrase;
+mod pending_jobs;
 mod update_check;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -78,6 +79,9 @@ pub fn run() {
             commands::pause_queue,
             commands::resume_queue,
             commands::queue_paused,
+            commands::pending_jobs,
+            commands::resume_pending,
+            commands::forget_pending,
             commands::check_update,
             commands::open_library,
             commands::open_log,
