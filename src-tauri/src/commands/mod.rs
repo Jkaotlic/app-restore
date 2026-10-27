@@ -198,15 +198,16 @@ impl AppState {
         let sizes = self.sizes.lock().unwrap().clone();
         let account = self.current_email();
         let installed = self.installed.lock().unwrap().clone().map(|(_, apps)| apps);
-        let source = self.source.lock().unwrap().current.clone();
-        let source = source.and_then(|u| self.phone_lists.lock().unwrap().get(&u).cloned());
+        // источник и его список — из одного снимка: им же помечаются строки группы
+        let source_udid = self.source.lock().unwrap().current.clone();
+        let source = source_udid.as_ref().and_then(|u| self.phone_lists.lock().unwrap().get(u).cloned());
         let saved = self.library.list();
         let unknown = self.library.list_unknown();
         let target_iphone = {
             let p = self.phones.lock().unwrap();
             p.target.as_deref().is_some_and(|t| p.last.iter().any(|d| d.udid == t && d.device_class == "iPhone"))
         };
-        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, target_iphone, sizes: &sizes, account: account.as_deref(), source: source.as_deref() })
+        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, target_iphone, sizes: &sizes, account: account.as_deref(), source: source.as_deref(), source_udid: source_udid.as_deref() })
     }
 
     /// Что стоит на телефоне, с запоминанием. Во время установки телефон не трогаем — прошлый список.
@@ -228,6 +229,8 @@ impl AppState {
             return Ok(cached.unwrap_or_else(|| cached_installed(self.installed.lock().unwrap().as_ref(), udid)));
         }
         let apps = self.hub.installed(udid).await?;
+        // источник — та же цель: «на iPhone» и группа из одного чтения
+        refresh_target(&mut self.installed.lock().unwrap(), udid, &apps);
         self.phone_lists.lock().unwrap().insert(udid.to_string(), apps.clone());
         Ok(apps)
     }
@@ -619,8 +622,8 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
                     let mut s = st.source.lock().unwrap();
                     s.current = resolve_source(s.chosen.as_deref(), &udids, default);
                 }
-                let mut rows = st.with_ctx(|ctx| purchase_rows(ctx, purchases, present.as_ref().map(|p| &p.ids))).await;
-                rows.source_udid = st.source.lock().unwrap().current.clone();
+                // помечены источником, по которому построены (`with_ctx`): интерфейс сверяет его со своим выбором
+                let rows = st.with_ctx(|ctx| purchase_rows(ctx, purchases, present.as_ref().map(|p| &p.ids))).await;
                 *st.phone_taken.lock().unwrap() = Some(rows.rows.iter().filter(|r| r.source != "phone").map(|r| r.track_id).collect());
                 rows
             }
@@ -665,7 +668,7 @@ pub async fn phone_account(state: State<'_, AppState>, udid: String) -> Result<A
 /// «Телефон-источник»: группа «С этого iPhone» по другому подключённому телефону. Цель установки
 /// не меняется. Отдаёт новые строки группы (после загрузки покупок; до неё — ошибка).
 #[tauri::command]
-pub async fn set_source_phone(state: State<'_, AppState>, udid: String) -> Result<Vec<RowDto>, UiError> {
+pub async fn set_source_phone(state: State<'_, AppState>, udid: String) -> Result<SourceRowsDto, UiError> {
     let udid = copy_device(&state.phones.lock().unwrap().last, &udid).map_err(|e| ui("set_source_phone", e))?;
     let taken = state.phone_taken.lock().unwrap().clone();
     let taken = taken.ok_or_else(|| ui("set_source_phone", AppError::Unknown { detail: "purchases not loaded".into() }))?;

@@ -174,6 +174,8 @@ pub struct RowCtx<'a> {
     /// Что стоит на телефоне-источнике группы «С этого iPhone» (любой подключённый, не только цель);
     /// `None` — группы нет. Версия «на iPhone» и состояние строк группы — по цели (`installed`).
     pub source: Option<&'a [InstalledApp]>,
+    /// udid этого источника: им помечаются строки группы (`RowsDto.source_udid`, `SourceRowsDto`).
+    pub source_udid: Option<&'a str>,
 }
 
 /// Размер для строки: у записей каталога главнее копия (её и поставим), у прочих — Lookup.
@@ -263,7 +265,7 @@ pub fn purchase_rows(ctx: &RowCtx, purchases: Vec<OwnedApp>, present_ru: Option<
         let taken: HashSet<i64> = list.iter().map(|r| r.track_id).collect();
         list.extend(phone_rows(ctx, &taken, present));
     }
-    RowsDto { rows: with_sizes(list, ctx), ..d }
+    RowsDto { rows: with_sizes(list, ctx), source_udid: present_ru.and(ctx.source_udid.map(String::from)), ..d }
 }
 
 /// Кандидаты в «С этого iPhone»: установленные приложения с App Store id, которых нет в `taken`
@@ -289,8 +291,26 @@ pub fn phone_rows(ctx: &RowCtx, taken: &HashSet<i64>, present_ru: &HashSet<i64>)
 }
 
 /// Группа «С этого iPhone» для выбранного источника (`set_source_phone`): `phone_rows` с размерами.
-pub fn source_rows(ctx: &RowCtx, taken: &HashSet<i64>, present_ru: &HashSet<i64>) -> Vec<RowDto> {
-    with_sizes(phone_rows(ctx, taken, present_ru), ctx)
+pub fn source_rows(ctx: &RowCtx, taken: &HashSet<i64>, present_ru: &HashSet<i64>) -> SourceRowsDto {
+    SourceRowsDto { source_udid: ctx.source_udid.map(String::from), rows: with_sizes(phone_rows(ctx, taken, present_ru), ctx) }
+}
+
+/// Итог `set_source_phone`: строки группы и источник, по которому они построены. Интерфейс
+/// берёт только ответ для источника, который выбран последним.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SourceRowsDto {
+    pub source_udid: Option<String>,
+    pub rows: Vec<RowDto>,
+}
+
+/// Один прочитанный список телефона обновляет и кэш цели (`installed`), если это она: группа и
+/// «на iPhone» тогда из одного чтения. Другой телефон и «без телефона» цель не трогают.
+pub fn refresh_target(cache: &mut Option<(String, Vec<InstalledApp>)>, udid: &str, apps: &[InstalledApp]) {
+    if let Some((u, list)) = cache
+        && u == udid
+    {
+        *list = apps.to_vec();
+    }
 }
 
 /// Версия приложения строки «С этого iPhone» на цели установки; `None` — не стоит или цели нет.
@@ -863,9 +883,11 @@ pub fn report_url(track_id: i64, name: &str, version: &str, bundle_id: &str) -> 
     format!("{REPORT_PREFIX}title={}&body={}", url_encode(&title), url_encode(&body))
 }
 
-/// Можно ли открыть `url` для «Сообщить в каталог»: ровно наш префикс и без пробелов и управляющих.
+/// Можно ли открыть `url` для «Сообщить в каталог»: ровно наш префикс, дальше только алфавит
+/// `url_encode` и разделители параметров (`A-Z a-z 0-9 - _ . ~ % = &`): ни `#`, ни `@`, ни `\`.
 pub fn is_report_url(url: &str) -> bool {
-    url.starts_with(REPORT_PREFIX) && url.len() > REPORT_PREFIX.len() && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+    url.strip_prefix(REPORT_PREFIX)
+        .is_some_and(|q| !q.is_empty() && q.chars().all(|c| c.is_ascii_alphanumeric() || "-_.~%=&".contains(c)))
 }
 
 #[cfg(test)]
@@ -1018,6 +1040,7 @@ mod tests {
         account: Option<String>,
         /// Телефон-источник «С этого iPhone»; `None` — тот же, что цель (`installed`).
         source: Option<Vec<InstalledApp>>,
+        source_udid: Option<String>,
     }
     impl Ctx {
         fn new(catalog: Vec<RemovedApp>) -> Self {
@@ -1032,6 +1055,7 @@ mod tests {
                 sizes: HashMap::new(),
                 account: None,
                 source: None,
+                source_udid: None,
             }
         }
         fn get(&self) -> RowCtx<'_> {
@@ -1046,6 +1070,7 @@ mod tests {
                 sizes: &self.sizes,
                 account: self.account.as_deref(),
                 source: self.source.as_deref().or(self.installed.as_deref()),
+                source_udid: self.source_udid.as_deref(),
             }
         }
     }
@@ -1741,7 +1766,7 @@ mod tests {
         c.source = Some(vec![bought_by("com.example.gone", "1.0", 60, None), bought_by("com.example.live", "1.0", 61, None)]);
         c.sizes = [(60, 5_000_000)].into();
         let rows = source_rows(&c.get(), &HashSet::new(), &[61].into());
-        assert_eq!(rows.iter().map(|r| (r.track_id, r.size_bytes)).collect::<Vec<_>>(), [(60, Some(5_000_000))]);
+        assert_eq!(rows.rows.iter().map(|r| (r.track_id, r.size_bytes)).collect::<Vec<_>>(), [(60, Some(5_000_000))]);
     }
 
     #[test]
@@ -1833,8 +1858,40 @@ mod tests {
             "https://github.com/Jkaotlic/app-restore/issues/new?title=a b",
             "https://github.com.evil.example.com/Jkaotlic/app-restore/issues/new?x",
             "https://github.com/Jkaotlic/other/issues/new?title=a",
+            "https://github.com/Jkaotlic/app-restore/issues/new?title=a#frag",
+            "https://github.com/Jkaotlic/app-restore/issues/new?title=a@b",
+            "https://github.com/Jkaotlic/app-restore/issues/new?title=a\\b",
+            "https://github.com/Jkaotlic/app-restore/issues/new?title=a/b",
+            "https://github.com/Jkaotlic/app-restore/issues/new?title=я",
+            "https://github.com/Jkaotlic/app-restore/issues/new?",
         ] {
             assert!(!is_report_url(bad), "{bad}");
         }
+    }
+
+    #[test]
+    fn rows_are_tagged_with_the_source_they_were_built_for() {
+        let mut c = Ctx::new(vec![]);
+        c.source = Some(vec![bought_by("com.example.gone", "1.0", 60, None)]);
+        c.source_udid = Some("OLD".into());
+        assert_eq!(purchase_rows(&c.get(), vec![], Some(&HashSet::new())).source_udid.as_deref(), Some("OLD"));
+        let d = source_rows(&c.get(), &HashSet::new(), &HashSet::new());
+        assert_eq!((d.source_udid.as_deref(), d.rows.len()), (Some("OLD"), 1));
+        // каталог без группы — без источника
+        assert_eq!(catalog_rows(&c.get()).source_udid, None);
+    }
+
+    #[test]
+    fn one_read_refreshes_the_target_cache_too() {
+        let apps = vec![inst("com.example.new", "2.0", Some(60))];
+        let mut cache = Some(("NEW".to_string(), vec![inst("com.example.old", "1.0", Some(60))]));
+        refresh_target(&mut cache, "NEW", &apps);
+        assert_eq!(cache.as_ref().map(|(u, a)| (u.as_str(), a.clone())), Some(("NEW", apps.clone())));
+        // другой телефон и «без телефона» цель не трогают
+        refresh_target(&mut cache, "OLD", &[]);
+        assert_eq!(cache.as_ref().map(|(_, a)| a.len()), Some(1));
+        let mut none = None;
+        refresh_target(&mut none, "NEW", &apps);
+        assert_eq!(none, None);
     }
 }
