@@ -34,7 +34,7 @@ jobs:
           else
             echo "pr=false" >> "$GITHUB_OUTPUT"
           fi
-          if grep -qE '^## (Кандидаты|Неподтверждённые кандидаты)' "$RUNNER_TEMP/report.md"; then
+          if grep -qE '^## (Кандидаты|Неподтверждённые кандидаты|Замаскированные выпуски)' "$RUNNER_TEMP/report.md"; then
             echo "issue=true" >> "$GITHUB_OUTPUT"
           else
             echo "issue=false" >> "$GITHUB_OUTPUT"
