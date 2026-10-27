@@ -852,3 +852,7 @@ label.app {
   color: var(--muted);
   flex: none;
 }
+/* «Не удалось проверить»: кнопка повтора, не переключатель — без квадратика */
+.tile:not([aria-pressed]) .tbox {
+  visibility: hidden;
+}
