@@ -9,8 +9,14 @@ export interface JobView {
 
 const MB = 1024 * 1024;
 
-/** Строка задания на экране «iPhone». `downloadOnly` — «Только скачать»: скачанное и есть итог. */
-export function jobView(s: JobDto, fromSaved: string | null, downloadOnly = false): JobView {
+/** Сколько секунд паузы повтора осталось к `now`; `until` нет — `undefined`. */
+export function waitLeft(until: number | undefined, now: number): number | undefined {
+  return until === undefined ? undefined : Math.max(0, Math.ceil((until - now) / 1000));
+}
+
+/** Строка задания на экране «iPhone». `downloadOnly` — «Только скачать»: скачанное и есть итог.
+ * `left` — живой остаток паузы «повтор через N с» (`waitLeft`); нет — из события. */
+export function jobView(s: JobDto, fromSaved: string | null, downloadOnly = false, left?: number): JobView {
   switch (s.kind) {
     case "queued":
       return { text: "В очереди", bar: 0, retry: false };
@@ -26,7 +32,7 @@ export function jobView(s: JobDto, fromSaved: string | null, downloadOnly = fals
       // iOS телефона старше нужной: повтор дал бы ту же ошибку
       return { text: errorText(s.error), bar: null, retry: s.error.code !== "ios_too_old" };
     case "waiting":
-      return { text: `Apple просит подождать, повтор через ${s.seconds} с`, bar: "indeterminate", retry: false };
+      return { text: `Apple просит подождать, повтор через ${left ?? s.seconds} с`, bar: "indeterminate", retry: false };
     case "paused":
       return { text: "На паузе", bar: null, retry: false };
   }
@@ -38,8 +44,8 @@ export function isFinished(s: JobDto, downloadOnly = false): boolean {
 }
 
 /** Строка на экране «Готово». С другим Apple ID говорим, в какой ID войти при первом запуске. */
-export function doneText(s: JobDto, fromSaved: string | null, sameAppleId: boolean | null, email: string | null, downloadOnly = false): string {
-  const base = jobView(s, fromSaved, downloadOnly).text;
+export function doneText(s: JobDto, fromSaved: string | null, sameAppleId: boolean | null, email: string | null, downloadOnly = false, left?: number): string {
+  const base = jobView(s, fromSaved, downloadOnly, left).text;
   if (s.kind !== "installed" || sameAppleId !== false) return base;
   return `${base}. При первом запуске войдите в ${email ?? "Apple ID, с которого скачивали"}`;
 }

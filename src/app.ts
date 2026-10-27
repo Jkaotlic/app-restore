@@ -18,6 +18,8 @@ export interface Job {
   fromSaved: string | null;
   /** «Только скачать»: задание заканчивается на «Сохранено», на телефон не ставится. */
   downloadOnly?: boolean;
+  /** «Apple просит подождать»: когда (мс) кончится пауза повтора — для живого отсчёта. */
+  waitUntil?: number;
 }
 
 export interface State {

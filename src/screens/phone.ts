@@ -2,7 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { asUiError, call, go, refreshSidebar, register, safe, state, targetPhone, type Job } from "../app";
 import { h, ipadIcon, phoneIcon } from "../dom";
 import { staysOnRefusal } from "../copies";
-import { accountBlock, canProceed, chooserNote, jobView, otherIdText, phoneView, sameFromMatch, showSkip, errorText } from "../labels";
+import { accountBlock, canProceed, chooserNote, jobView, waitLeft, otherIdText, phoneView, sameFromMatch, showSkip, errorText } from "../labels";
 import type { AccountMatchDto, PhoneDto, SwitchDto } from "../types";
 import { appIcon } from "./choose";
 
@@ -13,7 +13,7 @@ const deviceIcon = (p: PhoneDto) => (phoneView(p).isIpad ? ipadIcon() : phoneIco
 
 /** Строка задания на «Готово»: полоса под названием, состояние и «Повторить» справа. */
 export function jobRow(job: Job, text: string, onRetry: (e: Event) => void, downloadOnly = false): HTMLElement {
-  const v = jobView(job.state, job.fromSaved, downloadOnly);
+  const v = jobView(job.state, job.fromSaved, downloadOnly, waitLeft(job.waitUntil, Date.now()));
   const failed = job.state.kind === "failed";
   const retry = v.retry ? h("button", { class: "btn ghost small", text: "Повторить", on: { click: onRetry } }) : null;
   let bar: HTMLElement | null = null;

@@ -1,6 +1,6 @@
 import { call, go, openLibraryButton, register, safe, state, targetPhone, type Job } from "../app";
 import { h } from "../dom";
-import { askAppleIdOnDone, doneText, isFinished } from "../labels";
+import { askAppleIdOnDone, doneText, isFinished, waitLeft } from "../labels";
 import { etaMinutes, overallText, remainingBytes, speedMeter, togglePause } from "../queue";
 import { appleIdQuestion, jobRow, phoneStatus, retryJob } from "./phone";
 
@@ -66,11 +66,12 @@ register("done", () => {
     // без ответа подпись нейтральная: «Установлено»
     const same = state.sameAppleId;
     const email = state.run?.email ?? null;
+    const now = Date.now();
     list.replaceChildren(
       ...jobs.map((j) => {
         const row = jobRow(
           j,
-          doneText(j.state, j.fromSaved, same, email, j.downloadOnly),
+          doneText(j.state, j.fromSaved, same, email, j.downloadOnly, waitLeft(j.waitUntil, now)),
           safe(async () => {
             j.state = { kind: "queued" };
             render();
@@ -114,5 +115,9 @@ register("done", () => {
     openLibraryButton("btn ghost small"),
     h("div", { class: "push" }, again, back),
   );
-  return { el, onJob: render, onPhones };
+  // «повтор через N с» отсчитывается раз в секунду, пока кто-то ждёт Apple
+  const tick = setInterval(() => {
+    if ([...state.jobs.values()].some((j) => j.state.kind === "waiting")) render();
+  }, 1000);
+  return { el, onJob: render, onPhones, leave: () => clearInterval(tick) };
 });

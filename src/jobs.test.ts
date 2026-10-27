@@ -27,6 +27,19 @@ describe("JobInbox", () => {
     inbox.register(jobs, again);
     expect(again.state).toEqual({ kind: "queued" });
   });
+  it("«повтор через N с» remembers when the wait ends, other states forget it", () => {
+    const jobs = new Map([[1, job(1)]]);
+    const inbox = new JobInbox();
+    inbox.apply(jobs, { track_id: 1, state: { kind: "waiting", seconds: 10 }, from_saved: null }, 5000);
+    expect(jobs.get(1)?.waitUntil).toBe(15_000);
+    inbox.apply(jobs, { track_id: 1, state: { kind: "downloading", bytes: 1 }, from_saved: null }, 6000);
+    expect(jobs.get(1)?.waitUntil).toBeUndefined();
+    // пришло до регистрации — отсчёт от прихода события, а не от регистрации
+    inbox.apply(jobs, { track_id: 2, state: { kind: "waiting", seconds: 5 }, from_saved: null }, 1000);
+    const j2 = job(2);
+    inbox.register(jobs, j2);
+    expect(j2.waitUntil).toBe(6000);
+  });
   it("buffer is capped", () => {
     const jobs = new Map<number, Job>();
     const inbox = new JobInbox(2);

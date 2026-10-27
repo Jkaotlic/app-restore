@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CODE_HINT, errorText, loginNote, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
+import { waitLeft, CODE_HINT, errorText, loginNote, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
 import type { JobDto, PhoneDto } from "./types";
 
 const err = { code: "device_locked", text: "Разблокируйте iPhone и нажмите «Доверять»", retryable: false };
@@ -11,6 +11,11 @@ describe("jobView", () => {
   it("Apple asks to wait, and paused", () => {
     expect(jobView({ kind: "waiting", seconds: 10 }, null)).toEqual({ text: "Apple просит подождать, повтор через 10 с", bar: "indeterminate", retry: false });
     expect(jobView({ kind: "paused" }, null)).toEqual({ text: "На паузе", bar: null, retry: false });
+    // живой отсчёт: сколько осталось сейчас
+    expect(jobView({ kind: "waiting", seconds: 10 }, null, false, 3).text).toBe("Apple просит подождать, повтор через 3 с");
+    expect(waitLeft(15_000, 12_100)).toBe(3);
+    expect(waitLeft(15_000, 16_000)).toBe(0);
+    expect(waitLeft(undefined, 1)).toBeUndefined();
     // iOS телефона старше нужной: «Повторить» дало бы ту же ошибку
     const old = { code: "ios_too_old", text: "Нужна iOS 17.0, на iPhone 16.1", retryable: false };
     expect(jobView({ kind: "failed", error: old, saved: true }, null)).toEqual({ text: "Нужна iOS 17.0, на iPhone 16.1", bar: null, retry: false });
