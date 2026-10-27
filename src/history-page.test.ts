@@ -15,6 +15,13 @@ interface Api {
     send: (items: Item[], done: boolean, error: string | null) => Promise<unknown>,
     sleep: (ms: number) => Promise<void>,
   ): Promise<void>;
+  bannerText(found: number, phase: "wait" | "done" | "error"): string;
+  packed(items: Item[]): Item[][];
+  reporter(
+    send: (items: Item[], done: boolean, error: string | null) => Promise<unknown>,
+    show: (text: string) => void,
+  ): (items: Item[], done: boolean, error: string | null) => Promise<void>;
+  showBanner(doc: unknown, text: string): void;
 }
 
 /** Скрипт окна — обычный скрипт страницы: исполняем его на подставном `globalThis` без `location`
@@ -109,5 +116,59 @@ describe("history page script", () => {
     await api.crawl(page([], "B"), {}, async () => { calls++; return page([], "B"); }, async (_i, done, error) => { last = [done, error]; }, async () => undefined);
     expect(calls).toBe(499);
     expect(last).toEqual([true, null]);
+  });
+
+  it("banner asks to scroll while waiting and says done at the end", () => {
+    const api = load();
+    expect(api.bannerText(0, "wait")).toBe("Войдите и пролистайте список покупок вниз до конца — так подгрузятся все приложения. Найдено: 0");
+    expect(api.bannerText(312, "wait")).toBe("Войдите и пролистайте список покупок вниз до конца — так подгрузятся все приложения. Найдено: 312");
+    expect(api.bannerText(1222, "done")).toBe("Готово, найдено 1222. Окно закроется само.");
+    expect(api.bannerText(5, "error")).toBe("Дальше история не загрузилась, найдено 5. Окно закроется само.");
+  });
+
+  it("packs batches to at most 500 items and clips names", () => {
+    const api = load();
+    const items = Array.from({ length: 1201 }, (_, i) => ({ adamId: String(1000000 + i), name: i === 0 ? "я".repeat(5000) : "A", type: "IOSApp", date: null }));
+    const packs = api.packed(items);
+    expect(packs.map((p) => p.length)).toEqual([500, 500, 201]);
+    expect(packs[0][0].name.length).toBe(200);
+    expect(Object.keys(packs[0][0]).sort()).toEqual(["adamId", "date", "name", "type"]);
+    expect(api.packed([])).toEqual([[]]);
+  });
+
+  it("reporter sends packs, done only on the last, and counts distinct apps for the banner", async () => {
+    const api = load();
+    const sent: [number, boolean, string | null][] = [];
+    const shown: string[] = [];
+    const report = api.reporter(async (items, done, error) => sent.push([items.length, done, error]), (t) => shown.push(t));
+    const it = (id: number) => ({ adamId: String(id), name: "A", type: "IOSApp", date: null });
+    await report(Array.from({ length: 600 }, (_, i) => it(1000000 + i)), false, null);
+    await report([it(1000000), it(2000000)], true, null);
+    expect(sent).toEqual([[500, false, null], [100, false, null], [2, true, null]]);
+    expect(shown).toEqual([api.bannerText(600, "wait"), api.bannerText(601, "done")]);
+    await report([], true, "http");
+    expect(shown[2]).toBe(api.bannerText(601, "error"));
+  });
+
+  it("shows one banner element and updates its text", () => {
+    const api = load();
+    const made: Record<string, unknown>[] = [];
+    const doc = {
+      body: { append: (el: Record<string, unknown>) => (el.isConnected = true) },
+      documentElement: {},
+      getElementById: (id: string) => made.find((e) => e.id === id && e.isConnected) ?? null,
+      createElement: () => {
+        const el: Record<string, unknown> = { style: {}, isConnected: false, setAttribute: (k: string, v: string) => (el[k] = v) };
+        made.push(el);
+        return el;
+      },
+    };
+    api.showBanner(doc, "один");
+    api.showBanner(doc, "два");
+    expect(made).toHaveLength(1);
+    expect(made[0].textContent).toBe("два");
+    expect(made[0].role).toBe("status");
+    expect((made[0].style as Record<string, string>).position).toBe("fixed");
+    expect((made[0].style as Record<string, string>).pointerEvents).toBe("none");
   });
 });

@@ -2,11 +2,17 @@
 // (`include_str!`) и ставится только этому окну. Безопасность: токены, cookie и заголовки сайта
 // остаются в памяти страницы — наружу уходят только {adamId, name, type, date} приложений iPhone
 // через одну команду `plugin:history|items`. Без внешних библиотек; разбор проверяет vitest.
+// Сверху страницы — плашка «Войдите и пролистайте…» со счётчиком: только DOM и стили элемента,
+// без внешних ресурсов; клики сквозь неё проходят.
 (function (root) {
   "use strict";
   var PATH = "/api/purchase/search";
   var MAX_PAGES = 500;
   var DELAY_MS = 400;
+  /** Rust не читает пачку больше 500 записей и имя длиннее 1 КБ: режем здесь. */
+  var MAX_SEND = 500;
+  var MAX_NAME = 200;
+  var BANNER_ID = "__app-restore-banner";
 
   function isSearchUrl(url) {
     try {
@@ -70,14 +76,95 @@
     }
   }
 
+  /** Текст плашки. Просьба листать верна и тогда, когда скрипт догружает пачки сам. */
+  function bannerText(found, phase) {
+    if (phase === "done") return "Готово, найдено " + found + ". Окно закроется само.";
+    if (phase === "error") return "Дальше история не загрузилась, найдено " + found + ". Окно закроется само.";
+    return "Войдите и пролистайте список покупок вниз до конца — так подгрузятся все приложения. Найдено: " + found;
+  }
+
+  /** Пачки не больше MAX_SEND, имя не длиннее MAX_NAME; поля — только {adamId, name, type, date}. */
+  function packed(items) {
+    var out = [];
+    for (var i = 0; i < items.length; i += MAX_SEND) {
+      out.push(
+        items.slice(i, i + MAX_SEND).map(function (it) {
+          return { adamId: it.adamId, name: String(it.name).slice(0, MAX_NAME), type: it.type, date: it.date };
+        }),
+      );
+    }
+    return out.length ? out : [[]];
+  }
+
+  /** Обёртка над отправкой: режет на пачки (`done` — только у последней) и считает разные приложения. */
+  function reporter(send, show) {
+    var seen = {};
+    var found = 0;
+    return async function (items, done, error) {
+      for (var i = 0; i < items.length; i++) {
+        if (!seen[items[i].adamId]) {
+          seen[items[i].adamId] = true;
+          found++;
+        }
+      }
+      var packs = packed(items);
+      for (var j = 0; j < packs.length; j++) await send(packs[j], done && j === packs.length - 1, j === packs.length - 1 ? error : null);
+      show(bannerText(found, error ? "error" : done ? "done" : "wait"));
+    };
+  }
+
+  /** Плашка сверху страницы: одна, текст обновляется; страница могла её снести — ставим заново. */
+  function showBanner(doc, text) {
+    var el = doc.getElementById(BANNER_ID);
+    if (!el) {
+      el = doc.createElement("div");
+      el.id = BANNER_ID;
+      el.setAttribute("role", "status");
+      var st = el.style;
+      st.position = "fixed";
+      st.top = "8px";
+      st.left = "50%";
+      st.transform = "translateX(-50%)";
+      st.zIndex = "2147483647";
+      st.maxWidth = "min(720px, calc(100% - 24px))";
+      st.boxSizing = "border-box";
+      st.padding = "8px 14px";
+      st.borderRadius = "10px";
+      st.background = "#13312f";
+      st.color = "#ffffff";
+      st.font = "500 13px/1.4 -apple-system, system-ui, sans-serif";
+      st.textAlign = "center";
+      st.boxShadow = "0 4px 14px rgba(19, 49, 47, 0.25)";
+      st.pointerEvents = "none";
+      (doc.body || doc.documentElement).append(el);
+    }
+    el.textContent = text;
+  }
+
   function install(w) {
     if (w.__appRestoreHistoryHooked) return;
     w.__appRestoreHistoryHooked = true;
     var started = false;
     var origFetch = w.fetch.bind(w);
-    var send = function (items, done, error) {
-      return w.__TAURI_INTERNALS__.invoke("plugin:history|items", { items: items, done: done, error: error });
+    var text = bannerText(0, "wait");
+    var show = function (t) {
+      text = t;
+      try {
+        if (w.document.body) showBanner(w.document, t);
+      } catch (e) {
+        // без плашки страница работает как обычно
+      }
     };
+    // до DOM плашку ставить некуда; SPA может пересобрать body — раз в 2 с ставим заново
+    w.addEventListener("DOMContentLoaded", function () {
+      show(text);
+    });
+    setInterval(function () {
+      show(text);
+    }, 2000);
+    var send = reporter(function (items, done, error) {
+      return w.__TAURI_INTERNALS__.invoke("plugin:history|items", { items: items, done: done, error: error });
+    }, show);
     var sleep = function (ms) {
       return new Promise(function (r) {
         setTimeout(r, ms);
@@ -161,6 +248,6 @@
     };
   }
 
-  root.__appRestoreHistory = { extractApps: extractApps, nextBody: nextBody, isSearchUrl: isSearchUrl, crawl: crawl };
+  root.__appRestoreHistory = { extractApps: extractApps, nextBody: nextBody, isSearchUrl: isSearchUrl, crawl: crawl, bannerText: bannerText, packed: packed, reporter: reporter, showBanner: showBanner };
   if (root.location && root.location.hostname === "reportaproblem.apple.com" && root.top === root && typeof root.fetch === "function") install(root);
 })(globalThis);
