@@ -45,6 +45,7 @@ fn code(e: &AppError) -> &'static str {
         AppError::Busy => "busy",
         AppError::Timeout => "timeout",
         AppError::KeychainWaiting => "keychain_waiting",
+        AppError::IosTooOld { .. } => "ios_too_old",
         AppError::Unknown { .. } => "unknown",
     }
 }

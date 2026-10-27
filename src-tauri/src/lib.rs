@@ -5,6 +5,7 @@ mod catalog;
 mod device;
 mod dropped;
 mod errors;
+mod ios_compat;
 mod ipatool;
 mod library;
 mod log;

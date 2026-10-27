@@ -56,6 +56,9 @@ pub enum AppError {
     /// Связка ключей не ответила в срок: macOS, скорее всего, ждёт разрешения в своём окне.
     #[error("keychain waiting")]
     KeychainWaiting,
+    /// Приложению нужна iOS новее, чем на телефоне: ставить бесполезно (скачать можно).
+    #[error("ios too old: need {need}, have {have}")]
+    IosTooOld { need: String, have: String },
     #[error("unknown: {detail}")]
     Unknown { detail: String },
 }
@@ -97,6 +100,7 @@ impl AppError {
             AppError::Busy => "Программа занята другой операцией (скачивание или Связка ключей) — подождите немного и попробуйте снова.".into(),
             AppError::Timeout => "Apple слишком долго не отвечает. Попробуйте ещё раз.".into(),
             AppError::KeychainWaiting => "macOS ждёт разрешения на доступ к Связке ключей — найдите окно (оно может быть за окном программы), введите пароль Mac и нажмите «Разрешать всегда».".into(),
+            AppError::IosTooOld { need, have } => format!("Нужна iOS {need}, на iPhone {have}"),
             AppError::Unknown { .. } => "Что-то пошло не так. Попробуйте ещё раз.".into(),
         }
     }
