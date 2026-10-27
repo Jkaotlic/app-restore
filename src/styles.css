@@ -629,3 +629,220 @@ label.app {
 .app.on .t b {
   color: var(--ok);
 }
+
+/* «Выбор»: поиск, фильтры, плитки, нижняя панель (макет docs/superpowers/specs/mockups/choose-v3.html) */
+.body.choose {
+  padding-bottom: 0;
+}
+.choose-top h2 {
+  margin-bottom: 12px;
+}
+.searchbox {
+  position: relative;
+  display: block;
+}
+.searchbox svg {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.searchbox .input {
+  font-size: 16px;
+  padding: 11px 14px 11px 40px;
+  border-radius: 10px;
+}
+.choose-top .hint {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+}
+.chips {
+  display: flex;
+  gap: 6px;
+  padding: 10px 0 12px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: none;
+}
+.chip {
+  flex: none;
+  font-size: 13.5px;
+  border: 1.5px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.chip span {
+  color: var(--muted);
+  margin-left: 4px;
+}
+.chip[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+.chip[aria-pressed="true"] span {
+  color: #b9cbc8;
+}
+.gsec {
+  margin-top: 6px;
+}
+.ghead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  position: sticky;
+  top: 0;
+  background: var(--paper);
+  padding: 8px 0 6px;
+  z-index: 1;
+}
+.ghead h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+}
+.ghead h3 small {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 6px;
+  font-size: inherit;
+}
+.ghead .link {
+  font-size: 13px;
+}
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  gap: 8px;
+}
+.tile {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 20px;
+  gap: 10px;
+  align-items: center;
+  text-align: left;
+  background: #fff;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  padding: 9px 10px;
+  cursor: pointer;
+  color: var(--ink);
+}
+.tile:hover {
+  border-color: var(--off);
+}
+.tile[aria-pressed="true"] {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+}
+.tile:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.tile .ico {
+  border-radius: 9px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.tile .ico.tight {
+  font-size: 10px;
+}
+.ico.light {
+  color: var(--ink);
+}
+.tile .tt {
+  min-width: 0;
+  display: block;
+}
+.tile .nm,
+.tile .ver {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile .nm {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.tile .ver {
+  font-size: 12px;
+  color: var(--muted);
+}
+.tile .ver .up {
+  color: var(--ok);
+  font-weight: 600;
+}
+.tile .ver.warn {
+  color: var(--bad);
+}
+.tile .ver.retry {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tbox {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1.5px solid var(--off);
+  display: grid;
+  place-items: center;
+}
+.tile[aria-pressed="true"] .tbox {
+  background: var(--go);
+  border-color: #d9a82a;
+}
+.tile[aria-pressed="true"] .tbox::after {
+  content: "";
+  width: 9px;
+  height: 5px;
+  border-left: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+.tile:focus-visible,
+.chip:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.tiles-list .empty {
+  text-align: center;
+  padding: 24px 0 8px;
+}
+.tiles-list .gsec .empty {
+  text-align: left;
+  padding: 4px 0;
+}
+.selbar {
+  flex: none;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 12px -28px 0;
+  padding: 12px 28px;
+  background: var(--paper);
+}
+.selbar .count {
+  font-weight: 600;
+}
+.selbar .count small {
+  color: var(--muted);
+  font-weight: 400;
+  margin-left: 6px;
+  font-size: inherit;
+}
+.selbar .sp {
+  flex: 1;
+}
+.btn.go {
+  font-size: 15px;
+  padding: 11px 26px;
+}
