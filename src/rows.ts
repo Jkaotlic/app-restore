@@ -188,7 +188,7 @@ export type TileTone = "plain" | "muted" | "warn" | "checking" | "retry";
 export type TileLine = { text: string; tone: TileTone; up?: string; note?: string };
 
 /** Вторая строка плитки. `up` — новая версия, её выделяем: «на iPhone 21.3 → 22.1». `retry` — плитка
- * по нажатию повторяет проверку прав. `note` — третья строка рядом с версией («Неизвестный Apple ID»). */
+ * по нажатию повторяет проверку прав. `note` — третья строка рядом с версией («Неизвестный Apple ID», «Есть копия на компьютере»). */
 export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean, withPhone: boolean): TileLine {
   if (r.ipad_only && toIphone) return { text: "только для iPad", tone: "warn" };
   if (r.other_account) return { text: "Куплено на другом Apple ID", tone: "warn" };
@@ -197,7 +197,7 @@ export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean
     if (s.kind === "no") return { text: "Нет на вашем Apple ID", tone: "muted" };
     if (s.kind === "error") return { text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" };
   }
-  const note = r.unknown_account ? "Неизвестный Apple ID" : undefined;
+  const note = r.unknown_account ? "Неизвестный Apple ID" : r.has_saved_copy ? "Есть копия на компьютере" : undefined;
   const withNote = (l: TileLine): TileLine => (note ? { ...l, note } : l);
   if (withPhone && r.installed_version !== null) {
     const have = r.installed_version || "есть";
@@ -206,7 +206,7 @@ export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean
   }
   if (r.available_version) return withNote({ text: `доступно ${r.available_version}`, tone: "plain" });
   if (r.unknown_account) return { text: "Неизвестный Apple ID", tone: "muted" };
-  if (r.has_saved_copy) return { text: "копия на компьютере", tone: "plain" };
+  if (r.has_saved_copy) return { text: "Есть копия на компьютере", tone: "plain" };
   if (r.source === "purchase" && r.removed_from_ru) return { text: "нет в российском App Store", tone: "muted" };
   return { text: "в ваших покупках", tone: "muted" };
 }

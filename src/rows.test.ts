@@ -255,7 +255,7 @@ describe("tileLine and canSelect", () => {
     expect(tileLine(row(60, "А", { source: "phone" }), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
     expect(tileLine(cat(1, "А"), { kind: "error", error: softErr }, false, true)).toEqual({ text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" });
     // копия на компьютере: ставится и без подтверждения прав
-    expect(tileLine(cat(1, "А", { has_saved_copy: true, available_version: "16.4" }), { kind: "checking" }, false, true)).toEqual({ text: "доступно 16.4", tone: "plain" });
+    expect(tileLine(cat(1, "А", { has_saved_copy: true, available_version: "16.4" }), { kind: "checking" }, false, true)).toEqual({ text: "доступно 16.4", tone: "plain", note: "Есть копия на компьютере" });
   });
   it("versions: newer, installed, available", () => {
     const vtb = cat(2, "ВТБ", { installed_version: "21.3", available_version: "22.1", install_state: "update_available" });
@@ -274,8 +274,14 @@ describe("tileLine and canSelect", () => {
     expect(tileLine(u, undefined, false, true)).toMatchObject({ text: "доступно 3.2", note: "Неизвестный Apple ID" });
     expect(tileLine({ ...u, installed_version: "3.1" }, undefined, false, true)).toMatchObject({ note: "Неизвестный Apple ID" });
   });
+  it("a saved copy is mentioned next to the version line", () => {
+    const sber = cat(1, "Сбер", { has_saved_copy: true, available_version: "16.4" });
+    expect(tileLine(sber, { kind: "yes" }, false, true)).toEqual({ text: "доступно 16.4", tone: "plain", note: "Есть копия на компьютере" });
+    expect(tileLine({ ...sber, installed_version: "16.4", install_state: "installed" }, { kind: "yes" }, false, true)).toMatchObject({ text: "на iPhone 16.4", note: "Есть копия на компьютере" });
+    expect(tileLine(row(10, "Т", { available_version: "7.12" }), undefined, false, true).note).toBeUndefined();
+  });
   it("fallbacks without versions", () => {
-    expect(tileLine(row(12, "c", { source: "saved", has_saved_copy: true }), undefined, false, true)).toEqual({ text: "копия на компьютере", tone: "plain" });
+    expect(tileLine(row(12, "c", { source: "saved", has_saved_copy: true }), undefined, false, true)).toEqual({ text: "Есть копия на компьютере", tone: "plain" });
     expect(tileLine(row(10, "c", { removed_from_ru: true }), yes, false, true)).toEqual({ text: "нет в российском App Store", tone: "muted" });
     expect(tileLine(row(12, "c", { source: "saved", unknown_account: true, has_saved_copy: true }), undefined, false, true)).toEqual({ text: "Неизвестный Apple ID", tone: "muted" });
     expect(tileLine(row(10, "c"), yes, false, true)).toEqual({ text: "в ваших покупках", tone: "muted" });
