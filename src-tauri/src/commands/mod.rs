@@ -544,12 +544,20 @@ async fn refresh<R: Runtime>(app: &AppHandle<R>) {
     let st = app.state::<AppState>();
     let before = cached_catalog(&st.catalog_cache).await;
     let apps = fetch_catalog(st.fetch.as_ref(), &st.catalog_cache).await;
-    let new = crate::releases::new_releases(&before, &apps);
     let now = owned_cache::now();
-    let fresh = st.notified.record(&new, now);
-    let notice = crate::releases::notice(&crate::releases::names(&fresh, &apps));
+    // без годного прежнего кэша — тихая точка отсчёта: запомнить, не говорить
+    let notice = match crate::releases::signal(before.as_deref(), &apps) {
+        crate::releases::Signal::Notify(new) => {
+            let fresh = st.notified.record(&new, now);
+            crate::releases::notice(&crate::releases::names(&fresh, &apps)).map(|n| (n, fresh))
+        }
+        crate::releases::Signal::Baseline(ids) => {
+            st.notified.record(&ids, crate::releases::BASELINE_AT);
+            None
+        }
+    };
     *st.catalog.write().await = apps;
-    if let Some((title, body)) = notice {
+    if let Some(((title, body), fresh)) = notice {
         crate::log::write("new releases", &format!("{fresh:?}"));
         notify(app, title, body);
         let _ = app.emit("new_releases", st.notified.badges(now));

@@ -126,13 +126,18 @@ async fn fetch_catalog_with(fetch: &dyn Fetch, cache_path: &Path, timeout: Durat
     cached_or_bundled(cache_path, fallback).await
 }
 
-/// Каталог, который программа знала до обновления: кэш (с записями вшитой копии), а без
-/// годного кэша — вшитая копия. С ним сравнивается свежий (`releases::new_releases`).
-pub async fn cached_catalog(cache_path: &Path) -> Vec<RemovedApp> {
-    cached_or_bundled(cache_path, bundled()).await
+/// Каталог, который программа знала до обновления: годный кэш (с записями вшитой копии).
+/// `None` — кэша нет или он битый: сравнивать не с чем (`releases::signal` — тихая точка отсчёта).
+pub async fn cached_catalog(cache_path: &Path) -> Option<Vec<RemovedApp>> {
+    from_cache(cache_path, bundled()).await.ok()
 }
 
 async fn cached_or_bundled(cache_path: &Path, fallback: Vec<RemovedApp>) -> Vec<RemovedApp> {
+    from_cache(cache_path, fallback).await.unwrap_or_else(|fallback| fallback)
+}
+
+/// Годный кэш, дополненный записями `fallback`; без кэша — `Err(fallback)`.
+async fn from_cache(cache_path: &Path, fallback: Vec<RemovedApp>) -> Result<Vec<RemovedApp>, Vec<RemovedApp>> {
     if let Ok(cached) = tokio::fs::read_to_string(cache_path).await
         && let Some(mut apps) = accept(&cached, fallback.len())
     {
@@ -140,9 +145,9 @@ async fn cached_or_bundled(cache_path: &Path, fallback: Vec<RemovedApp>) -> Vec<
         // дополнить новая версия программы), не теряем
         let known: std::collections::HashSet<i64> = apps.iter().map(|a| a.track_id).collect();
         apps.extend(fallback.into_iter().filter(|a| !known.contains(&a.track_id)));
-        return apps;
+        return Ok(apps);
     }
-    fallback
+    Err(fallback)
 }
 
 /// Каталог, вшитый в бинарник. Файл проверяется тестами, поэтому паника здесь невозможна.
@@ -405,14 +410,14 @@ mod tests {
     #[tokio::test]
     async fn previous_catalog_is_cache_or_bundled() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(cached_catalog(&cache_in(&dir)).await, bundled(), "кэша нет");
+        assert_eq!(cached_catalog(&cache_in(&dir)).await, None, "кэша нет");
         let n = bundled().len();
         let f = FakeFetch::new(Mode::Body(catalog_of(n + 1)));
         let fresh = fetch_catalog(&f, &cache_in(&dir)).await;
-        let before = cached_catalog(&cache_in(&dir)).await;
+        let before = cached_catalog(&cache_in(&dir)).await.unwrap();
         assert_eq!(&before[..fresh.len()], &fresh[..]);
         assert_eq!(before.len(), 2 * n + 1, "кэш плюс вшитые записи");
         std::fs::write(cache_in(&dir), "garbage").unwrap();
-        assert_eq!(cached_catalog(&cache_in(&dir)).await, bundled());
+        assert_eq!(cached_catalog(&cache_in(&dir)).await, None, "битый кэш — сравнивать не с чем");
     }
 }

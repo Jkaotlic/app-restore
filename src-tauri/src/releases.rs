@@ -8,6 +8,8 @@ use std::sync::Mutex;
 
 /// Сколько держится бейдж «Новое» после сигнала.
 pub const BADGE_SECS: u64 = 14 * 24 * 60 * 60;
+/// Время записи тихой точки отсчёта (`Signal::Baseline`): старше любого бейджа.
+pub const BASELINE_AT: u64 = 0;
 /// Больше названий в одном уведомлении не перечисляется.
 const NAMES_IN_NOTICE: usize = 3;
 
@@ -29,6 +31,23 @@ pub fn new_releases(before: &[RemovedApp], after: &[RemovedApp]) -> Vec<i64> {
     after.iter().filter(|a| available(a) && !was.contains(&a.track_id) && seen.insert(a.track_id)).map(|a| a.track_id).collect()
 }
 
+/// Итог сравнения каталогов. `Notify` — был годный прежний кэш: новые выпуски, о них говорим.
+/// `Baseline` — кэша не было (первый запуск, кэш пропал или битый): тихая точка отсчёта — все
+/// доступные сейчас записи запоминаются без уведомления и без бейджа, иначе новичку пришло бы
+/// «Вышли новые выпуски: N» обо всём, что добавили после сборки.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Signal {
+    Notify(Vec<i64>),
+    Baseline(Vec<i64>),
+}
+
+pub fn signal(before: Option<&[RemovedApp]>, after: &[RemovedApp]) -> Signal {
+    match before {
+        Some(b) => Signal::Notify(new_releases(b, after)),
+        None => Signal::Baseline(new_releases(&[], after)),
+    }
+}
+
 /// trackId → когда о нём впервые сказали (секунды Unix).
 pub type Notified = HashMap<i64, u64>;
 
@@ -48,6 +67,7 @@ pub fn badge_ids(notified: &Notified, now: u64) -> Vec<i64> {
 /// Заголовок и текст уведомления по названиям новых выпусков (`None` — говорить не о чем).
 pub fn notice(names: &[String]) -> Option<(String, String)> {
     const TAIL: &str = "Возьмите его в App Store на iPhone, пока не убрали: программа потом сохранит копию.";
+    const TAIL_MANY: &str = "Возьмите их в App Store на iPhone, пока не убрали: программа потом сохранит копии.";
     match names {
         [] => None,
         [one] => Some((format!("Вышел новый выпуск: {one}"), TAIL.into())),
@@ -55,7 +75,7 @@ pub fn notice(names: &[String]) -> Option<(String, String)> {
             let shown = many[..many.len().min(NAMES_IN_NOTICE)].join(", ");
             let more = many.len().saturating_sub(NAMES_IN_NOTICE);
             let list = if more > 0 { format!("{shown} и ещё {more}.") } else { format!("{shown}.") };
-            Some((format!("Вышли новые выпуски: {}", many.len()), format!("{list} {TAIL}")))
+            Some((format!("Вышли новые выпуски: {}", many.len()), format!("{list} {TAIL_MANY}")))
         }
     }
 }
@@ -154,6 +174,22 @@ mod tests {
     }
 
     #[test]
+    fn no_previous_cache_is_a_silent_baseline() {
+        let after = vec![app(1, "А", Some("back_in_store"), false), app(2, "Б", None, false), app(3, "В", None, true), app(4, "Г", Some("removed"), true)];
+        assert_eq!(signal(None, &after), Signal::Baseline(vec![1, 3]));
+        assert_eq!(signal(Some(&after[1..2]), &after), Signal::Notify(vec![1, 3]));
+        assert_eq!(signal(Some(&after), &after), Signal::Notify(vec![]));
+        // точка отсчёта записана без бейджа, и потом о тех же записях не говорят
+        let t = tempfile::tempdir().unwrap();
+        let s = NotifiedStore::open(t.path().join("n.json"));
+        assert_eq!(s.record(&[1, 3], BASELINE_AT), vec![1, 3]);
+        assert!(s.badges(10_000_000).is_empty());
+        assert!(s.record(&[1, 3], 10_000_000).is_empty());
+        assert_eq!(s.record(&[1, 3, 5], 10_000_000), vec![5]);
+        assert_eq!(s.badges(10_000_000), vec![5]);
+    }
+
+    #[test]
     fn to_notify_skips_already_told_and_repeats() {
         let told: Notified = [(2, 100)].into();
         assert_eq!(to_notify(&[10, 2, 13, 10], &told), vec![10, 13]);
@@ -173,8 +209,10 @@ mod tests {
         let (title, body) = notice(&["СБОЛ".into()]).unwrap();
         assert_eq!(title, "Вышел новый выпуск: СБОЛ");
         assert!(body.contains("App Store"), "{body}");
+        assert!(body.contains("Возьмите его"), "{body}");
         let (title, body) = notice(&["А".into(), "Б".into(), "В".into(), "Г".into(), "Д".into()]).unwrap();
         assert_eq!(title, "Вышли новые выпуски: 5");
+        assert!(body.contains("Возьмите их") && !body.contains(" его "), "{body}");
         assert!(body.starts_with("А, Б, В и ещё 2."), "{body}");
         let (_, body) = notice(&["А".into(), "Б".into()]).unwrap();
         assert!(body.starts_with("А, Б."), "{body}");
