@@ -20,6 +20,7 @@ import {
   matchesRow,
   pendingChecks,
   recheckIds,
+  rovingIndex,
   selectionLabel,
   selectionSummary,
   tileA11y,
@@ -355,6 +356,17 @@ describe("tileA11y", () => {
   });
   it("a retry tile is a plain button, not a toggle", () => {
     expect(tileA11y("Маруся", { text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" }, false, false)).toEqual({ pressed: null, disabled: false, label: null });
+  });
+});
+
+describe("rovingIndex", () => {
+  it("arrows move through the chips and wrap, Home and End jump, other keys do nothing", () => {
+    expect(rovingIndex("ArrowRight", 0, 7)).toBe(1);
+    expect(rovingIndex("ArrowRight", 6, 7)).toBe(0);
+    expect(rovingIndex("ArrowLeft", 0, 7)).toBe(6);
+    expect(rovingIndex("Home", 4, 7)).toBe(0);
+    expect(rovingIndex("End", 1, 7)).toBe(6);
+    expect(rovingIndex("Enter", 1, 7)).toBeNull();
   });
 });
 

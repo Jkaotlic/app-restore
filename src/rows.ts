@@ -45,6 +45,15 @@ export function chipList(withPhone: boolean): { key: Chip; label: string }[] {
   return withPhone ? CHIPS : CHIPS.filter((c) => c.key !== "on" && c.key !== "new");
 }
 
+/** Стрелки в панели чипов (roving tabindex): куда перевести фокус; `null` — клавиша не наша. */
+export function rovingIndex(key: string, current: number, n: number): number | null {
+  if (key === "ArrowRight") return (current + 1) % n;
+  if (key === "ArrowLeft") return (current - 1 + n) % n;
+  if (key === "Home") return 0;
+  if (key === "End") return n - 1;
+  return null;
+}
+
 export type GroupKey = "catalog" | "phone" | "buy";
 
 function groupOf(r: RowDto): GroupKey {

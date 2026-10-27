@@ -18,6 +18,7 @@ import {
   mergePurchases,
   pendingChecks,
   recheckIds,
+  rovingIndex,
   hiddenCount,
   selectionLabel,
   selectionSummary,
@@ -89,6 +90,16 @@ register("choose", () => {
   const list = h("div", { class: "scroll tiles-list" });
   const found = h("p", { class: "found", attrs: { role: "status" } });
   const chips = h("div", { class: "chips", attrs: { role: "toolbar", "aria-label": "Фильтры" } });
+  chips.addEventListener("keydown", (e: KeyboardEvent) => {
+    const all = [...chips.querySelectorAll<HTMLButtonElement>(".chip")];
+    const i = rovingIndex(e.key, all.indexOf(document.activeElement as HTMLButtonElement), all.length);
+    if (i === null || !all.length) return;
+    e.preventDefault();
+    for (const b of all) b.tabIndex = -1;
+    all[i].tabIndex = 0;
+    all[i].focus();
+    all[i].scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
 
   const search = h("input", {
     class: "input",
@@ -230,6 +241,8 @@ register("choose", () => {
           h("span", { text: String(counts[c.key]) }),
         );
         b.dataset.chip = c.key;
+        // в Tab один чип (выбранный), по остальным — стрелками
+        b.tabIndex = c.key === chip ? 0 : -1;
         return b;
       }),
     );
