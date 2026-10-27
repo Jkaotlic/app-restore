@@ -44,7 +44,7 @@ pub enum AppError {
     /// Смена Apple ID посреди скачивания: ipatool скачивал бы уже с другого входа.
     #[error("downloads running")]
     DownloadsRunning,
-    /// Очередь к ipatool не дошла: идёт скачивание (или предыдущий шаг ждёт связку ключей).
+    /// Очередь к ipatool не дошла: идёт скачивание, шаг со связкой ключей или очередь запросов.
     #[error("ipatool busy")]
     Busy,
     /// ipatool не ответил в срок и остановлен.
@@ -90,7 +90,7 @@ impl AppError {
             AppError::NotIpa => "Это не файл приложения iPhone (.ipa)".into(),
             AppError::SaveSessionFailed => "Не получилось сохранить вход текущего Apple ID".into(),
             AppError::DownloadsRunning => "Дождитесь окончания скачивания".into(),
-            AppError::Busy => "Программа ещё скачивает приложение. Дождитесь окончания скачивания и попробуйте снова.".into(),
+            AppError::Busy => "Программа занята другой операцией (скачивание или Связка ключей) — подождите немного и попробуйте снова.".into(),
             AppError::Timeout => "Apple слишком долго не отвечает. Попробуйте ещё раз.".into(),
             AppError::KeychainWaiting => "macOS ждёт разрешения на доступ к Связке ключей — найдите окно (оно может быть за окном программы), введите пароль Mac и нажмите «Разрешать всегда».".into(),
             AppError::Unknown { .. } => "Что-то пошло не так. Попробуйте ещё раз.".into(),
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(AppError::NotIpa.user_text(), "Это не файл приложения iPhone (.ipa)");
         assert_eq!(AppError::SaveSessionFailed.user_text(), "Не получилось сохранить вход текущего Apple ID");
         assert_eq!(AppError::DownloadsRunning.user_text(), "Дождитесь окончания скачивания");
-        assert!(AppError::Busy.user_text().contains("Дождитесь окончания скачивания"));
+        assert!(!AppError::Busy.user_text().contains("скачивает"), "Busy бывает и без скачивания");
         assert!(AppError::KeychainWaiting.user_text().contains("Разрешать всегда"));
         assert_eq!(AppError::BadLink.user_text(), "Это не ссылка на приложение. Нужна ссылка вида apps.apple.com/…/id123456789");
     }

@@ -142,7 +142,7 @@ export const LOGIN_SLOW_AFTER_S = 10;
 
 /** Подпись под «Входим…», когда ждём дольше `LOGIN_SLOW_AFTER_S`; раньше — ничего. */
 export function loginWaitNote(seconds: number): string | null {
-  return seconds >= LOGIN_SLOW_AFTER_S ? "Apple иногда долго отвечает при первом входе — подождите до минуты." : null;
+  return seconds >= LOGIN_SLOW_AFTER_S ? "Apple иногда долго отвечает при первом входе — подождите до двух–трёх минут." : null;
 }
 
 /** Подсказка у поля кода 2FA. */

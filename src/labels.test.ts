@@ -246,7 +246,7 @@ describe("errorText", () => {
 describe("login waiting", () => {
   it("after ~10 s says Apple can be slow, before that nothing", () => {
     expect(loginWaitNote(3)).toBeNull();
-    expect(loginWaitNote(10)).toBe("Apple иногда долго отвечает при первом входе — подождите до минуты.");
+    expect(loginWaitNote(10)).toBe("Apple иногда долго отвечает при первом входе — подождите до двух–трёх минут.");
   });
   it("code hint tells where the code comes from", () => {
     expect(CODE_HINT).toBe(

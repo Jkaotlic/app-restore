@@ -775,12 +775,12 @@ pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result
         dropped = state.drop_waiting();
     }
     let s = state.sessions.clone();
+    // не забыли (очередь к ipatool, связка ключей) — сказать, а не делать вид, что вышло
     match state.session.exclusive(move || s.forget(&email)).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => crate::log::write("forget_account", &e),
-        Err(e) => log_err("forget_account", &e),
+        Ok(Ok(())) => Ok(dropped),
+        Ok(Err(e)) => Err(ui("forget_account", AppError::Unknown { detail: format!("forget: {e}") })),
+        Err(e) => Err(ui("forget_account", e)),
     }
-    Ok(dropped)
 }
 
 /// «Все копии»: каждая ipa из «Мои приложения» и папок аккаунтов. Без входа тоже.

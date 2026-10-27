@@ -3,7 +3,7 @@ import { asUiError, call, go, refreshSidebar, register, safe, state } from "../a
 import { accountCopiesText, accountStatus, afterUseAccount, offersSkipSave, pickStatusText, skipSaveNote, staysOnRefusal } from "../copies";
 import { errorText } from "../labels";
 import { h } from "../dom";
-import type { AccountEntry, UseAccountDto } from "../types";
+import type { Account, AccountEntry, UseAccountDto } from "../types";
 
 /** Аккаунт сменился: галочки, ответы про телефон и итог прошлого запуска не годятся. */
 export function resetForAccount(dropped: number[]): void {
@@ -104,9 +104,18 @@ register("accounts", () => {
     try {
       dropped = await call<number[]>("forget_account", { email: a.email });
     } catch (e) {
-      // выйти не вышло — ничего не забыли, вход прежний
+      // не забыли (или забыли наполовину: вышли, а снимок остался) — вход сверяем с ipatool
       msg.textContent = errorText(asUiError(e));
       msg.hidden = false;
+      const before = state.account?.email ?? null;
+      try {
+        state.account = await call<Account | null>("session_info");
+      } catch {
+        // оставляем как было
+      }
+      if (before && (!state.account || !sameId(state.account.email, before))) resetForAccount([]);
+      refreshSidebar();
+      await load();
       return;
     }
     if (state.account && sameId(state.account.email, a.email)) {

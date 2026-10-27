@@ -495,7 +495,7 @@ mod tests {
         let t = std::time::Instant::now();
         assert_eq!(s.login("user@example.com", "pw", None).await, Err(AppError::Busy));
         assert!(t.elapsed() < Duration::from_secs(1));
-        assert_eq!(AppError::Busy.user_text(), "Программа ещё скачивает приложение. Дождитесь окончания скачивания и попробуйте снова.");
+        assert_eq!(AppError::Busy.user_text(), "Программа занята другой операцией (скачивание или Связка ключей) — подождите немного и попробуйте снова.");
         dl.abort();
     }
 
