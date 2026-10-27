@@ -42,6 +42,8 @@ base64 = "0.22"
 tauri-plugin-dialog = "2"
 # Второй запуск не должен убирать недописанные .part первого: окно одно.
 tauri-plugin-single-instance = "2"
+# Сигнал о новом выпуске: уведомление шлёт Rust, интерфейсу разрешений не нужно.
+tauri-plugin-notification = "=2.7.0"
 
 [dev-dependencies]
 tempfile = "3"

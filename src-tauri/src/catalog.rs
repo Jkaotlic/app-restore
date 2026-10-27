@@ -308,6 +308,7 @@ mod tests {
             seller: None,
             ipad_only: false,
             category: None,
+            disguised: false,
         }
     }
 

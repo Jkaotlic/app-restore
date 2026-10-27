@@ -969,6 +969,20 @@ pub fn is_report_url(url: &str) -> bool {
         .is_some_and(|q| !q.is_empty() && q.chars().all(|c| c.is_ascii_alphanumeric() || "-_.~%=&".contains(c)))
 }
 
+/// «Открыть в App Store»: страница приложения в российском магазине. Открывает Rust, адрес
+/// проверяет `is_store_url` — разрешения opener у интерфейса не расширяются.
+pub const STORE_PREFIX: &str = "https://apps.apple.com/ru/app/id";
+
+pub fn store_url(track_id: i64) -> String {
+    format!("{STORE_PREFIX}{track_id}")
+}
+
+/// Ровно `STORE_PREFIX` и номер из цифр (без знака, не ноль, до 19 цифр).
+pub fn is_store_url(url: &str) -> bool {
+    url.strip_prefix(STORE_PREFIX)
+        .is_some_and(|n| (1..=19).contains(&n.len()) && n.bytes().all(|b| b.is_ascii_digit()) && n.parse::<i64>().is_ok_and(|id| id > 0))
+}
+
 /// Итог «Забыть»: убранные задания и вышли ли из нынешнего входа — даже если снимок убрать
 /// не вышло (`error`): тогда адрес остаётся в списке.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1022,6 +1036,29 @@ impl<F: Fn(Option<String>)> Drop for HintScope<'_, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn store_url_only_for_app_ids() {
+        assert_eq!(store_url(1631810724), "https://apps.apple.com/ru/app/id1631810724");
+        assert!(is_store_url(&store_url(1631810724)));
+        for bad in [
+            "",
+            "https://apps.apple.com/ru/app/id",
+            "https://apps.apple.com/ru/app/id0",
+            "https://apps.apple.com/ru/app/id-5",
+            "https://apps.apple.com/ru/app/id12a",
+            "https://apps.apple.com/ru/app/id123?x=1",
+            "https://apps.apple.com/ru/app/id123/../../evil",
+            "https://apps.apple.com/ru/app/id123 ",
+            "https://apps.apple.com/us/app/id123",
+            "http://apps.apple.com/ru/app/id123",
+            "https://apps.apple.com.evil.example/ru/app/id123",
+            "https://apps.apple.com/ru/app/id99999999999999999999",
+        ] {
+            assert!(!is_store_url(bad), "{bad}");
+        }
+        assert!(!is_store_url(&store_url(0)) && !is_store_url(&store_url(-7)));
+    }
 
     #[test]
     fn drop_dto_masks_purchaser_and_maps_errors() {
@@ -1156,6 +1193,7 @@ mod tests {
             seller: None,
             ipad_only: false,
             category: None,
+            disguised: false,
         }
     }
     fn app(id: i64, bundle: &str, name: &str) -> OwnedApp {

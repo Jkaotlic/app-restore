@@ -26,7 +26,8 @@ use crate::library::Library;
 use crate::owned_cache::{self, Entry, OwnedCache};
 use crate::lookup::{Fetch, HttpLookup, Lookup, ReqwestFetch, app_name};
 use crate::queue::{FsSpace, JobState, Queue};
-use crate::removed_catalog::{RemovedApp, bundled, fetch_catalog};
+use crate::releases::NotifiedStore;
+use crate::removed_catalog::{RemovedApp, bundled, cached_catalog, fetch_catalog};
 use logic::*;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -97,6 +98,8 @@ pub struct AppState {
     fetch: Arc<dyn Fetch>,
     catalog_cache: PathBuf,
     catalog: RwLock<Vec<RemovedApp>>,
+    /// О каких новых выпусках уже сказали (`releases`): один раз на trackId за установку.
+    notified: NotifiedStore,
     /// Итоги `check_owned` по записям каталога: строки «Выбора» их подставляют.
     owned: Mutex<HashMap<i64, bool>>,
     /// Те же итоги между запусками, по Apple ID (`owned-cache.json`).
@@ -182,6 +185,7 @@ impl AppState {
             fetch: Arc::new(ReqwestFetch::new()),
             catalog_cache: data_dir.join("catalog-cache.json"),
             catalog: RwLock::new(bundled()),
+            notified: NotifiedStore::open(data_dir.join("notified-releases.json")),
             owned: Mutex::new(HashMap::new()),
             owned_cache: OwnedCache::open(data_dir.join("owned-cache.json")),
             visible: Mutex::new(HashSet::new()),
@@ -477,7 +481,7 @@ pub fn setup<R: Runtime>(app: &AppHandle<R>) {
     });
 
     let h = app.clone();
-    tauri::async_runtime::spawn(async move { refresh(&h.state::<AppState>()).await });
+    tauri::async_runtime::spawn(async move { refresh(&h).await });
 }
 
 async fn poll_phones<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PhoneDto>, UiError> {
@@ -505,9 +509,37 @@ async fn poll_phones<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PhoneDto>, Ui
     }
 }
 
-async fn refresh(st: &AppState) {
+/// Свежий каталог; записи, ставшие доступными с прежнего (`releases::new_releases`), — сигнал:
+/// уведомление о тех, о ком ещё не говорили, и событие `new_releases` (trackId с бейджем «Новое»).
+async fn refresh<R: Runtime>(app: &AppHandle<R>) {
+    let st = app.state::<AppState>();
+    let before = cached_catalog(&st.catalog_cache).await;
     let apps = fetch_catalog(st.fetch.as_ref(), &st.catalog_cache).await;
+    let new = crate::releases::new_releases(&before, &apps);
+    let now = owned_cache::now();
+    let fresh = st.notified.record(&new, now);
+    let notice = crate::releases::notice(&crate::releases::names(&fresh, &apps));
     *st.catalog.write().await = apps;
+    if let Some((title, body)) = notice {
+        crate::log::write("new releases", &format!("{fresh:?}"));
+        notify(app, title, body);
+        let _ = app.emit("new_releases", st.notified.badges(now));
+    }
+}
+
+/// Системное уведомление. Разрешения нет или не вышло — только запись в журнал: бейдж «Новое»
+/// на плитке остаётся.
+fn notify<R: Runtime>(app: &AppHandle<R>, title: String, body: String) {
+    use tauri_plugin_notification::{NotificationExt, PermissionState};
+    let n = app.notification();
+    let granted = matches!(n.permission_state(), Ok(PermissionState::Granted)) || matches!(n.request_permission(), Ok(PermissionState::Granted));
+    if !granted {
+        crate::log::write("notify", "permission denied");
+        return;
+    }
+    if let Err(e) = n.builder().title(title).body(body).show() {
+        crate::log::write("notify", &format!("{e}"));
+    }
 }
 
 // Пароль приходит только сюда и уходит в ipatool один раз. Аргументы команд нигде не логируются.
@@ -649,9 +681,29 @@ pub async fn switch_account(app: AppHandle, state: State<'_, AppState>) -> Resul
 
 /// Свежий каталог с GitHub (кэш, затем вшитая копия). Вызывается и сам при запуске.
 #[tauri::command]
-pub async fn refresh_catalog(state: State<'_, AppState>) -> Result<(), ()> {
-    refresh(&state).await;
+pub async fn refresh_catalog(app: AppHandle) -> Result<(), ()> {
+    refresh(&app).await;
     Ok(())
+}
+
+/// trackId записей каталога с бейджем «Новое» (`releases::badge_ids`).
+#[tauri::command]
+pub fn release_badges(state: State<'_, AppState>) -> Vec<i64> {
+    state.notified.badges(owned_cache::now())
+}
+
+/// «Открыть в App Store»: страница приложения в браузере (лицензию человек берёт сам, покупки
+/// программа не делает). Адрес строит и проверяет Rust (`store_url`, `is_store_url`).
+#[tauri::command]
+pub fn open_in_store(app: AppHandle, track_id: i64) -> Result<(), UiError> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = store_url(track_id);
+    if !is_store_url(&url) {
+        return Err(ui("open_in_store", AppError::Unknown { detail: "store url rejected".into() }));
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| ui("open_in_store", AppError::Unknown { detail: format!("open url: {e}") }))
 }
 
 /// Каталог и сохранённые копии — сразу, без обращения к Apple. Покупки догружает `load_purchases`.

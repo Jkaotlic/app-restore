@@ -11,6 +11,7 @@ mod log;
 mod owned_cache;
 mod lookup;
 mod queue;
+mod releases;
 mod removed_catalog;
 mod retry;
 mod passphrase;
@@ -30,6 +31,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
+        // уведомления шлёт только Rust (`commands::notify`): в capabilities интерфейса их нет
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             // macOS: ~/Library/Logs/<identifier>/, Windows: %LOCALAPPDATA%\<identifier>\logs
             if let Ok(dir) = app.path().app_log_dir() {
@@ -50,6 +53,8 @@ pub fn run() {
             commands::session_info,
             commands::logout,
             commands::refresh_catalog,
+            commands::release_badges,
+            commands::open_in_store,
             commands::load_catalog_rows,
             commands::load_purchases,
             commands::installed_apps,
