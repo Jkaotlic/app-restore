@@ -28,6 +28,13 @@ pub enum JobState {
     Installed,
     /// `saved`: ipa уже в библиотеке (упала установка) — можно «Повторить» без скачивания.
     Failed { error: AppError, saved: Option<PathBuf> },
+    /// Apple ответил 429/503: повтор скачивания через `seconds` (`retry::with_retry_notify`).
+    Waiting { seconds: u64 },
+}
+
+/// Пауза повтора в целых секундах, с округлением вверх: «через 0 с» при паузе 300 мс не врёт.
+fn wait_seconds(d: Duration) -> u64 {
+    d.as_secs() + u64::from(d.subsec_nanos() > 0)
 }
 
 pub trait SpaceProbe: Send + Sync {
@@ -152,7 +159,8 @@ async fn run_job(
     emit(JobState::Downloading { bytes: 0 });
     let result = {
         let started = std::sync::atomic::AtomicBool::new(false);
-        let download = session.download_marked(id, &partial, version, &started);
+        let on_wait = |d: Duration| emit(JobState::Waiting { seconds: wait_seconds(d) });
+        let download = session.download_marked(id, &partial, version, &started, &on_wait);
         tokio::pin!(download);
         let mut tick = tokio::time::interval(POLL);
         tick.tick().await; // первый тик срабатывает сразу
@@ -162,9 +170,11 @@ async fn run_job(
                 r = &mut download => break r,
                 _ = tick.tick() => {
                     let bytes = dir_size(&partial);
-                    // пока ждём очереди к ipatool, часы простоя стоят
+                    // пока ждём очереди к ipatool или паузы повтора, часы простоя стоят, а прогресс
+                    // не перебивает «Apple просит подождать»
                     if !started.load(std::sync::atomic::Ordering::SeqCst) {
                         grew = tokio::time::Instant::now();
+                        continue;
                     } else if bytes != last {
                         (last, grew) = (bytes, tokio::time::Instant::now());
                     } else if grew.elapsed() >= idle {
@@ -851,6 +861,52 @@ mod tests {
         q.enqueue(vec![(444, "D".into())]);
         let ev = collect(&mut rx, 1).await;
         assert!(matches!(of(&ev, 444).last().unwrap(), JobState::Saved { .. }));
+    }
+
+    /// Первый ответ Apple — 503, дальше как DownloadRunner.
+    struct BusyOnceRunner {
+        inner: DownloadRunner,
+        busy: std::sync::atomic::AtomicBool,
+    }
+    #[async_trait]
+    impl IpaRunner for BusyOnceRunner {
+        async fn run(&self, args: &[String]) -> RunResult {
+            if !self.busy.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                return RunResult {
+                    stdout: "{\"level\":\"error\",\"error\":\"unexpected status code 503\",\"success\":false}\n".into(),
+                    exit_code: 1,
+                    stderr: String::new(),
+                };
+            }
+            self.inner.run(args).await
+        }
+    }
+
+    /// Apple просит подождать: задание говорит «повтор через N с» и потом скачивается.
+    #[tokio::test]
+    async fn apple_busy_shows_the_wait_then_downloads() {
+        let t = tempfile::tempdir().unwrap();
+        let lib = Arc::new(Library::new(t.path().join("lib")));
+        lib.set_account(Some("me@example.com")).unwrap();
+        let r = Arc::new(BusyOnceRunner { inner: DownloadRunner { fail: vec![], calls: Mutex::new(vec![]) }, busy: Default::default() });
+        let session = Arc::new(Session::new(r, vec![]).with_delays(vec![Duration::from_millis(1100)]));
+        let q = Queue::new(session, lib, Arc::new(Space(10 * GB)), Arc::new(FakeHub::new(Behavior::Ok)));
+        let mut rx = q.subscribe();
+        q.enqueue(vec![(111, "A".into())]);
+        let ev = collect(&mut rx, 1).await;
+        let s = of(&ev, 111);
+        let wait = s.iter().position(|s| **s == JobState::Waiting { seconds: 2 }).expect("«повтор через 2 с»");
+        // пока ждём повтора, прогресс скачивания не перебивает «подождите»
+        assert!(!matches!(s[wait + 1], JobState::Downloading { bytes: 0 }), "{s:?}");
+        assert!(matches!(s.last().unwrap(), JobState::Saved { .. }));
+    }
+
+    #[test]
+    fn wait_seconds_round_up() {
+        assert_eq!(wait_seconds(Duration::ZERO), 0);
+        assert_eq!(wait_seconds(Duration::from_millis(1)), 1);
+        assert_eq!(wait_seconds(Duration::from_secs(5)), 5);
+        assert_eq!(wait_seconds(Duration::from_millis(10_200)), 11);
     }
 
     #[test]

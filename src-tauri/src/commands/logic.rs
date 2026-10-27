@@ -623,7 +623,8 @@ pub fn stops_owned_check(e: &AppError) -> bool {
     matches!(e, AppError::NotLoggedIn | AppError::AccountDisabled | AppError::AppleChangedLogin)
 }
 
-/// Состояние задания для интерфейса. `kind`: queued, downloading, saved, installing, installed, failed.
+/// Состояние задания для интерфейса. `kind`: queued, downloading, saved, installing, installed,
+/// failed, waiting.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobDto {
@@ -635,6 +636,8 @@ pub enum JobDto {
     Installed,
     /// `saved`: копия уже скачана — «Повторить» поставит её без скачивания.
     Failed { error: UiError, saved: bool },
+    /// Apple просит подождать (429/503): повтор скачивания через `seconds`.
+    Waiting { seconds: u64 },
 }
 
 pub fn job_dto(s: &JobState) -> JobDto {
@@ -645,6 +648,7 @@ pub fn job_dto(s: &JobState) -> JobDto {
         JobState::Installing { percent } => JobDto::Installing { percent: *percent },
         JobState::Installed => JobDto::Installed,
         JobState::Failed { error, saved } => JobDto::Failed { error: error.clone().into(), saved: saved.is_some() },
+        JobState::Waiting { seconds } => JobDto::Waiting { seconds: *seconds },
     }
 }
 
@@ -937,7 +941,7 @@ pub fn copy_job_id(path: &std::path::Path) -> i64 {
 /// «Повторить» у копии — всегда установка этого файла (скачивать нечего); идущую не повторяем.
 pub fn copy_retry(last: Option<&JobState>, path: &std::path::Path) -> RetryAction {
     match last {
-        Some(JobState::Queued | JobState::Downloading { .. } | JobState::Installing { .. }) => RetryAction::Nothing,
+        Some(JobState::Queued | JobState::Downloading { .. } | JobState::Waiting { .. } | JobState::Installing { .. }) => RetryAction::Nothing,
         _ => RetryAction::Install(path.to_path_buf()),
     }
 }
@@ -952,15 +956,15 @@ pub fn account_changed(before: Option<&str>, after: Option<&str>) -> bool {
     }
 }
 
-/// Идёт ли скачивание по аккаунту: задание из `downloads` в `Queued` или `Downloading`.
+/// Идёт ли скачивание по аккаунту: задание из `downloads` в `Queued`, `Downloading` или `Waiting`.
 /// Установки (копии, сохранённые копии каталога) ipatool не трогают и смене входа не мешают.
 pub fn downloads_running(jobs: &HashMap<i64, JobState>, downloads: &HashSet<i64>) -> bool {
-    downloads.iter().any(|id| matches!(jobs.get(id), Some(JobState::Queued | JobState::Downloading { .. })))
+    downloads.iter().any(|id| matches!(jobs.get(id), Some(JobState::Queued | JobState::Downloading { .. } | JobState::Waiting { .. })))
 }
 
 /// Скачивание кончилось (скачано, ошибка, дальше установка) — ключ больше не скачивание.
 pub fn track_download(downloads: &mut HashSet<i64>, id: i64, state: &JobState) {
-    if !matches!(state, JobState::Queued | JobState::Downloading { .. }) {
+    if !matches!(state, JobState::Queued | JobState::Downloading { .. } | JobState::Waiting { .. }) {
         downloads.remove(&id);
     }
 }
@@ -1639,6 +1643,18 @@ mod tests {
         assert_eq!(json["saved"], true);
         assert_eq!(json["error"]["code"], "device_locked");
         assert_eq!(serde_json::to_value(JobDto::Installing { percent: 5 }).unwrap(), serde_json::json!({"kind":"installing","percent":5}));
+        assert_eq!(serde_json::to_value(job_dto(&JobState::Waiting { seconds: 5 })).unwrap(), serde_json::json!({"kind":"waiting","seconds":5}));
+    }
+
+    /// Пауза повтора после 429/503 — скачивание ещё идёт: вход не сменить, «Повторить» не нужен.
+    #[test]
+    fn waiting_for_apple_is_still_a_download() {
+        let waiting = JobState::Waiting { seconds: 10 };
+        let mut downloads = HashSet::from([1]);
+        track_download(&mut downloads, 1, &waiting);
+        assert!(downloads_running(&HashMap::from([(1, waiting.clone())]), &downloads));
+        assert_eq!(retry_action(Some(&waiting)), RetryAction::Nothing);
+        assert_eq!(copy_retry(Some(&waiting), std::path::Path::new("/x.ipa")), RetryAction::Nothing);
     }
 
     #[test]

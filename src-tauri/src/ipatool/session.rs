@@ -3,7 +3,7 @@
 use super::output::{IpaOutcome, OwnedApp, parse_output};
 use super::runner::{Args, IpaRunner, RunResult};
 use crate::errors::AppError;
-use crate::retry::{APPLE_DELAYS, with_retry};
+use crate::retry::{APPLE_DELAYS, with_retry, with_retry_notify};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -375,13 +375,21 @@ impl Session {
     /// Скачивание по trackId (`-i`): `-b` не работает для удалённых из магазина приложений.
     #[cfg(test)]
     pub async fn download(&self, track_id: i64, out_dir: &Path) -> Result<PathBuf, AppError> {
-        self.download_marked(track_id, out_dir, None, &AtomicBool::new(false)).await
+        self.download_marked(track_id, out_dir, None, &AtomicBool::new(false), &|_| {}).await
     }
 
     /// `download`; `version` — выбранная человеком версия (external version id), `None` —
     /// последняя. `started` — ipatool запущен (своя очередь дошла). До этого скачивание не
-    /// идёт, и простоем ожидание очереди не считается (`queue`).
-    pub async fn download_marked(&self, track_id: i64, out_dir: &Path, version: Option<&str>, started: &AtomicBool) -> Result<PathBuf, AppError> {
+    /// идёт, и простоем ожидание очереди не считается (`queue`). `on_wait` — Apple ответил 429/503,
+    /// пауза перед повтором такой длины (интерфейс: «Apple просит подождать»).
+    pub async fn download_marked(
+        &self,
+        track_id: i64,
+        out_dir: &Path,
+        version: Option<&str>,
+        started: &AtomicBool,
+        on_wait: &(dyn Fn(Duration) + Send + Sync),
+    ) -> Result<PathBuf, AppError> {
         let out = out_dir
             .to_str()
             .ok_or_else(|| AppError::Unknown { detail: "output path is not valid UTF-8".into() })?;
@@ -389,7 +397,7 @@ impl Session {
         if let Some(v) = version {
             args.extend(["--external-version-id".to_string(), v.to_string()]);
         }
-        match with_retry(&self.delays, || self.call_marked(Kind::Download, args.clone(), Some(started))).await? {
+        match with_retry_notify(&self.delays, on_wait, || self.call_marked(Kind::Download, args.clone(), Some(started))).await? {
             IpaOutcome::Downloaded { path } => Ok(path),
             o => Err(unexpected(&o)),
         }
@@ -592,7 +600,7 @@ mod tests {
         let s = session(&r, &[]);
         let started = AtomicBool::new(false);
         let t = tempfile::tempdir().unwrap();
-        let _ = s.download_marked(1, t.path(), None, &started).await;
+        let _ = s.download_marked(1, t.path(), None, &started, &|_| {}).await;
         assert!(!started.load(Ordering::SeqCst), "после запуска флаг снят");
     }
 
@@ -854,7 +862,7 @@ mod tests {
     #[tokio::test]
     async fn download_of_chosen_version_never_purchases() {
         let r = Arc::new(FakeRunner::new(vec![fx("download-by-id")]));
-        session(&r, &[]).download_marked(492224193, Path::new("/tmp/out"), Some("812236754"), &AtomicBool::new(false)).await.unwrap();
+        session(&r, &[]).download_marked(492224193, Path::new("/tmp/out"), Some("812236754"), &AtomicBool::new(false), &|_| {}).await.unwrap();
         assert_eq!(
             r.calls()[0],
             strs(&["download", "-i", "492224193", "-o", "/tmp/out", "--external-version-id", "812236754", "--non-interactive", "--format", "json"])
@@ -867,6 +875,19 @@ mod tests {
         let r = Arc::new(FakeRunner::new(vec![busy(), fx("list-versions-owned"), busy(), fx("version-metadata")]));
         assert_eq!(session(&r, &[]).latest_version(492224193).await, Ok(Some("12.15.0".into())));
         assert_eq!(r.calls().len(), 4);
+    }
+
+    /// Скачивание тоже повторяется после 429/503, и о каждой паузе слышно снаружи.
+    #[tokio::test]
+    async fn download_retries_apple_unavailable_and_reports_waits() {
+        let ok = RunResult { stdout: "{\"output\":\"/tmp/out/1_1.0.ipa\",\"success\":true}\n".into(), exit_code: 0, stderr: String::new() };
+        let r = Arc::new(FakeRunner::new(vec![busy(), busy(), ok]));
+        let s = session(&r, &[]).with_delays(vec![Duration::from_millis(1), Duration::from_millis(2), Duration::from_millis(3)]);
+        let waits = std::sync::Mutex::new(vec![]);
+        let got = s.download_marked(1, Path::new("/tmp/out"), None, &AtomicBool::new(false), &|d| waits.lock().unwrap().push(d)).await;
+        assert_eq!(got, Ok(PathBuf::from("/tmp/out/1_1.0.ipa")));
+        assert_eq!(r.calls().len(), 3);
+        assert_eq!(*waits.lock().unwrap(), [Duration::from_millis(1), Duration::from_millis(2)]);
     }
 
     #[tokio::test]
