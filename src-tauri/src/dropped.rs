@@ -29,12 +29,42 @@ pub fn kind(path: &Path) -> Kind {
     }
 }
 
-/// Номера из текстового файла (первый мегабайт; не UTF-8 — с заменой символов).
+/// Номера из текстового файла (первый мегабайт). Только обычный файл: папка или FIFO с именем
+/// `*.txt` — `NotIpa` (FIFO иначе повесил бы чтение). `.webloc` в двоичном plist — по ключу `URL`;
+/// UTF-16 с BOM (Блокнот Windows) раскодируется; прочий не UTF-8 — с заменой символов.
 pub fn text_ids(path: &Path) -> Result<Vec<i64>, AppError> {
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file()) {
+        return Err(AppError::NotIpa);
+    }
     let f = std::fs::File::open(path).map_err(|e| AppError::Unknown { detail: format!("dropped text: {e}") })?;
     let mut buf = vec![];
     f.take(MAX_TEXT_BYTES).read_to_end(&mut buf).map_err(|e| AppError::Unknown { detail: format!("dropped text: {e}") })?;
-    Ok(ids_in_text(&String::from_utf8_lossy(&buf)))
+    if let Some(url) = plist_url(&buf) {
+        let ids = ids_in_text(&url);
+        if !ids.is_empty() {
+            return Ok(ids);
+        }
+    }
+    Ok(ids_in_text(&decode(&buf)))
+}
+
+/// Ключ `URL` из plist (`.webloc`, в том числе двоичный `bplist00`).
+fn plist_url(buf: &[u8]) -> Option<String> {
+    let v = plist::Value::from_reader(std::io::Cursor::new(buf)).ok()?;
+    v.as_dictionary()?.get("URL")?.as_string().map(str::to_string)
+}
+
+/// Текст файла: UTF-16 LE/BE по BOM, иначе UTF-8 с заменой битых байтов.
+fn decode(buf: &[u8]) -> String {
+    let utf16 = |rest: &[u8], le: bool| {
+        let units: Vec<u16> = rest.chunks_exact(2).map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) }).collect();
+        String::from_utf16_lossy(&units)
+    };
+    match buf {
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, true),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, false),
+        _ => String::from_utf8_lossy(buf).into_owned(),
+    }
 }
 
 /// Итог одного перетаскивания: принятые копии, номера (по порядку, без повторов, не больше
@@ -110,13 +140,49 @@ mod tests {
         let png2 = t.path().join("b.png");
         let empty = t.path().join("notes.txt");
         std::fs::write(&empty, "ничего полезного 492224193").unwrap();
-        let out = handle(&lib, &[ipa, list, webloc, winurl, junk, png, png2, empty, t.path().join("missing.txt")]);
+        let folder = t.path().join("папка.txt");
+        std::fs::create_dir(&folder).unwrap();
+        let out = handle(&lib, &[ipa, list, webloc, winurl, junk, png, png2, empty, t.path().join("missing.txt"), folder]);
         assert_eq!(out.copies.len(), 1);
         assert_eq!(out.copies[0].bundle_id, "com.example.bank");
         assert_eq!(out.ids, vec![492224193, 1631810724, 564177498]);
-        assert_eq!(out.errors.len(), 3, "{:?}", out.errors);
-        assert_eq!(&out.errors[..2], &[AppError::NotIpa, AppError::BadLink]);
-        assert!(matches!(out.errors[2], AppError::Unknown { .. }));
+        assert_eq!(out.errors, vec![AppError::NotIpa, AppError::BadLink], "нет файла и папка — NotIpa, не Unknown");
+    }
+
+    #[test]
+    fn text_file_must_be_a_regular_file() {
+        let t = tempfile::tempdir().unwrap();
+        let folder = t.path().join("x.txt");
+        std::fs::create_dir(&folder).unwrap();
+        assert_eq!(text_ids(&folder).unwrap_err(), AppError::NotIpa);
+        assert_eq!(text_ids(&t.path().join("нет.txt")).unwrap_err(), AppError::NotIpa);
+    }
+
+    #[test]
+    fn binary_webloc_is_read_as_plist() {
+        let t = tempfile::tempdir().unwrap();
+        let p = t.path().join("Сбер.webloc");
+        let mut d = plist::Dictionary::new();
+        d.insert("URL".into(), "https://apps.apple.com/ru/app/sber/id492224193".into());
+        plist::Value::Dictionary(d).to_file_binary(&p).unwrap();
+        assert!(std::fs::read(&p).unwrap().starts_with(b"bplist00"));
+        assert_eq!(text_ids(&p).unwrap(), vec![492224193]);
+    }
+
+    #[test]
+    fn utf16_text_with_bom_is_decoded() {
+        let t = tempfile::tempdir().unwrap();
+        let text = "[InternetShortcut]\r\nURL=https://apps.apple.com/ru/app/vk/id564177498\r\n";
+        let le = t.path().join("ВК.url");
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+        std::fs::write(&le, bytes).unwrap();
+        assert_eq!(text_ids(&le).unwrap(), vec![564177498]);
+        let be = t.path().join("Список.txt");
+        let mut bytes = vec![0xFE, 0xFF];
+        bytes.extend("Сбер: 492224193\nВК: 564177498".encode_utf16().flat_map(u16::to_be_bytes));
+        std::fs::write(&be, bytes).unwrap();
+        assert_eq!(text_ids(&be).unwrap(), vec![492224193, 564177498]);
     }
 
     #[test]
