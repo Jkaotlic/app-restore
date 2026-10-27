@@ -3,7 +3,7 @@
 use crate::errors::AppError;
 use async_trait::async_trait;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use crate::retry::{APPLE_DELAYS, with_retry};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,9 +11,17 @@ use std::time::Duration;
 pub const BATCH: usize = 150;
 const LOOKUP_URL: &str = "https://itunes.apple.com/lookup";
 
+/// Итог Lookup: какие trackId есть в магазине страны и размер (`fileSizeBytes`) тех, у кого
+/// Apple его дал. Размер берётся из того же ответа, отдельных запросов ради него нет.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Presence {
+    pub ids: HashSet<i64>,
+    pub sizes: HashMap<i64, u64>,
+}
+
 #[async_trait]
 pub trait Lookup: Send + Sync {
-    async fn present_in(&self, ids: &[i64], country: &str) -> Result<HashSet<i64>, AppError>;
+    async fn present_in(&self, ids: &[i64], country: &str) -> Result<Presence, AppError>;
 }
 
 /// Подаёт тело ответа по URL. Выделено, чтобы тесты работали на фикстурах без сети.
@@ -77,14 +85,24 @@ impl HttpLookup {
     }
 }
 
-fn parse(body: &str) -> Result<HashSet<i64>, AppError> {
+fn parse(body: &str) -> Result<Presence, AppError> {
     let v: Value = serde_json::from_str(body)
         .map_err(|e| AppError::Unknown { detail: format!("lookup: неверный JSON: {e}") })?;
     let results = v
         .get("results")
         .and_then(Value::as_array)
         .ok_or_else(|| AppError::Unknown { detail: "lookup: нет поля results".into() })?;
-    Ok(results.iter().filter_map(|r| r.get("trackId").and_then(Value::as_i64)).collect())
+    let mut p = Presence::default();
+    for r in results {
+        let Some(id) = r.get("trackId").and_then(Value::as_i64) else { continue };
+        p.ids.insert(id);
+        // Apple отдаёт размер строкой («243731456»); на всякий случай и числом
+        let size = r.get("fileSizeBytes").and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()));
+        if let Some(n) = size {
+            p.sizes.insert(id, n);
+        }
+    }
+    Ok(p)
 }
 
 /// Имя и bundle id приложения из ответа Lookup; запись ищется по trackId.
@@ -105,12 +123,14 @@ pub async fn app_name(fetch: &dyn Fetch, track_id: i64) -> Option<(String, Strin
 
 #[async_trait]
 impl Lookup for HttpLookup {
-    async fn present_in(&self, ids: &[i64], country: &str) -> Result<HashSet<i64>, AppError> {
-        let mut present = HashSet::new();
+    async fn present_in(&self, ids: &[i64], country: &str) -> Result<Presence, AppError> {
+        let mut present = Presence::default();
         for batch in ids.chunks(BATCH) {
             let url = self.url(batch, country);
             let body = with_retry(&self.delays, || self.fetch.get(&url)).await?;
-            present.extend(parse(&body)?);
+            let p = parse(&body)?;
+            present.ids.extend(p.ids);
+            present.sizes.extend(p.sizes);
         }
         Ok(present)
     }
@@ -138,7 +158,7 @@ mod tests {
     async fn retries_503_then_succeeds() {
         let f = Arc::new(FlakyFetch { fails: 2, calls: Mutex::new(0) });
         let l = HttpLookup::with_fetch(f.clone(), "https://lookup.example.com/lookup").with_delays(vec![Duration::ZERO; 3]);
-        assert!(l.present_in(&[686449807], "ru").await.unwrap().contains(&686449807));
+        assert!(l.present_in(&[686449807], "ru").await.unwrap().ids.contains(&686449807));
         assert_eq!(*f.calls.lock().unwrap(), 3);
     }
 
@@ -173,8 +193,11 @@ mod tests {
     async fn removed_app_absent_present_app_listed() {
         let (l, _) = lookup(Ok(fixture("lookup-ru.json")));
         let got = l.present_in(&[492224193, 564177498, 686449807], "ru").await.unwrap();
-        assert!(got.contains(&686449807));
-        assert!(!got.contains(&492224193));
+        assert!(got.ids.contains(&686449807));
+        assert!(!got.ids.contains(&492224193));
+        // размер из того же ответа: строкой у Apple
+        assert_eq!(got.sizes.get(&686449807), Some(&243731456));
+        assert_eq!(got.sizes.get(&492224193), None);
     }
 
     #[tokio::test]
@@ -188,7 +211,7 @@ mod tests {
     #[tokio::test]
     async fn empty_ids_make_no_requests() {
         let (l, f) = lookup(Ok(fixture("lookup-ru.json")));
-        assert!(l.present_in(&[], "ru").await.unwrap().is_empty());
+        assert_eq!(l.present_in(&[], "ru").await.unwrap(), Presence::default());
         assert!(f.urls.lock().unwrap().is_empty());
     }
 
@@ -202,6 +225,13 @@ mod tests {
         assert_eq!(parse_name(&fixture("lookup-ru-removed.json"), 492224193), None, "пустой results");
         assert_eq!(parse_name("<html>", 1), None);
         assert_eq!(parse_name(r#"{"results":[{"trackId":5,"trackName":"  "}]}"#, 5), None, "пустое имя");
+    }
+
+    #[test]
+    fn size_as_string_or_number_and_bad_size_ignored() {
+        let p = parse(r#"{"results":[{"trackId":1,"fileSizeBytes":"100"},{"trackId":2,"fileSizeBytes":200},{"trackId":3,"fileSizeBytes":"x"},{"trackId":4}]}"#).unwrap();
+        assert_eq!(p.ids, [1, 2, 3, 4].into());
+        assert_eq!(p.sizes, [(1, 100), (2, 200)].into());
     }
 
     #[test]

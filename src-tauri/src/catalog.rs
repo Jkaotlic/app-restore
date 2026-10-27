@@ -62,6 +62,10 @@ pub struct AppRow {
     pub install_state: InstallState,
     /// Только для iPad: флаг каталога или UIDeviceFamily сохранённой копии.
     pub ipad_only: bool,
+    /// Категория записи каталога (`RemovedApp::category`); у покупок `None`.
+    pub category: Option<&'static str>,
+    /// Другие названия записи каталога — для поиска.
+    pub aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -199,6 +203,8 @@ pub fn build_rows(
                 installed_version: None,
                 install_state: InstallState::NotInstalled,
                 ipad_only,
+                category: Some(r.category()),
+                aliases: r.aliases.clone(),
             }
         })
         .collect();
@@ -222,6 +228,8 @@ pub fn build_rows(
                 available_version,
                 install_state: InstallState::NotInstalled,
                 ipad_only,
+                category: None,
+                aliases: vec![],
             }
         })
         .collect();

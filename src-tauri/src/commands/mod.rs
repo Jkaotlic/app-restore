@@ -92,6 +92,8 @@ pub struct AppState {
     owned: Mutex<HashMap<i64, bool>>,
     /// Последние версии у Apple (`latest_version`) по trackId.
     latest: Mutex<HashMap<i64, String>>,
+    /// Размеры из Lookup (`fileSizeBytes`) по trackId: для «≈ размер» на «Выборе».
+    sizes: Mutex<HashMap<i64, u64>>,
     /// Что стоит на телефоне (udid, список) из `installed_apps`; `None` — без телефона.
     installed: Mutex<Option<(String, Vec<InstalledApp>)>>,
     /// Последний итог `phone_account` (udid, сравнение): для подстановки адреса в `switch_account`.
@@ -150,6 +152,7 @@ impl AppState {
             catalog: RwLock::new(bundled()),
             owned: Mutex::new(HashMap::new()),
             latest: Mutex::new(HashMap::new()),
+            sizes: Mutex::new(HashMap::new()),
             installed: Mutex::new(None),
             phone_match: Mutex::new(None),
             jobs: Mutex::new(HashMap::new()),
@@ -170,6 +173,8 @@ impl AppState {
         let catalog = self.catalog.read().await.clone();
         let owned = self.owned.lock().unwrap().clone();
         let latest = self.latest.lock().unwrap().clone();
+        let sizes = self.sizes.lock().unwrap().clone();
+        let account = self.current_email();
         let installed = self.installed.lock().unwrap().clone().map(|(_, apps)| apps);
         let saved = self.library.list();
         let unknown = self.library.list_unknown();
@@ -177,7 +182,7 @@ impl AppState {
             let p = self.phones.lock().unwrap();
             p.target.as_deref().is_some_and(|t| p.last.iter().any(|d| d.udid == t && d.device_class == "iPhone"))
         };
-        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, target_iphone })
+        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, target_iphone, sizes: &sizes, account: account.as_deref() })
     }
 
     /// Что стоит на телефоне, с запоминанием. Во время установки телефон не трогаем — прошлый список.
@@ -533,15 +538,22 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
         }
         let rows = match result {
             Ok(purchases) => {
-                let ids: Vec<i64> = purchases.iter().map(|a| a.id).collect();
+                // одним Lookup и покупки, и кандидаты «С этого iPhone» (нет в каталоге и покупках)
+                let mut ids: Vec<i64> = purchases.iter().map(|a| a.id).collect();
+                let taken: HashSet<i64> = st.catalog.read().await.iter().map(|r| r.track_id).chain(ids.iter().copied()).collect();
+                let installed = st.installed.lock().unwrap().clone().map(|(_, apps)| apps).unwrap_or_default();
+                ids.extend(phone_candidates(&installed, &taken));
                 let present = match st.lookup.present_in(&ids, "ru").await {
-                    Ok(p) => Some(p),
+                    Ok(p) => {
+                        st.sizes.lock().unwrap().extend(p.sizes.iter().map(|(k, v)| (*k, *v)));
+                        Some(p)
+                    }
                     Err(e) => {
                         log_err("lookup ru", &e);
                         None
                     }
                 };
-                st.with_ctx(|ctx| purchase_rows(ctx, purchases, present.as_ref())).await
+                st.with_ctx(|ctx| purchase_rows(ctx, purchases, present.as_ref().map(|p| &p.ids))).await
             }
             Err(e) => {
                 // Без покупок список всё равно нужен: каталог и сохранённые копии ставятся и без входа.
