@@ -112,6 +112,9 @@ pub struct AppState {
     sweep: Mutex<Option<u64>>,
     /// trackId последнего ответа «В App Store»: их устаревшие ответы тоже перепроверяются.
     store_ids: Mutex<Vec<i64>>,
+    /// trackId строк «Из истории покупок» и добавленных по ссылке: они тоже на «Выборе» —
+    /// повтор истории их не считает новыми, устаревшие ответы перепроверяются. Сброс — со сменой Apple ID.
+    screen_extra: Mutex<HashSet<i64>>,
     /// Последние версии у Apple (`latest_version`) по trackId.
     latest: Mutex<HashMap<i64, String>>,
     /// Размеры из Lookup (`fileSizeBytes`) по trackId: для «≈ размер» на «Выборе».
@@ -211,6 +214,7 @@ impl AppState {
             visible: Mutex::new(HashSet::new()),
             sweep: Mutex::new(None),
             store_ids: Mutex::new(vec![]),
+            screen_extra: Mutex::new(HashSet::new()),
             latest: Mutex::new(HashMap::new()),
             sizes: Mutex::new(HashMap::new()),
             min_os: Mutex::new(HashMap::new()),
@@ -457,6 +461,7 @@ impl AppState {
         self.chosen_versions.lock().unwrap().clear();
         *self.phone_taken.lock().unwrap() = None;
         *self.sweep.lock().unwrap() = None;
+        self.screen_extra.lock().unwrap().clear();
     }
 
     /// «Проверить весь каталог» идёт для нынешнего Apple ID.
@@ -605,7 +610,8 @@ impl AppState {
         let taken = self.phone_taken.lock().unwrap().clone();
         let phones = self.phone_lists.lock().unwrap().clone();
         let store = self.store_ids.lock().unwrap().clone();
-        screen_ids(&catalog, taken.as_ref(), &phones, &store)
+        let extra = self.screen_extra.lock().unwrap().clone();
+        screen_ids(&catalog, taken.as_ref(), &phones, &store, &extra)
     }
 
     fn emit_job<R: Runtime>(&self, app: &AppHandle<R>, track_id: i64, state: &JobState) {
@@ -782,7 +788,10 @@ async fn refresh<R: Runtime>(app: &AppHandle<R>) {
     let apps = fetch_catalog(st.fetch.as_ref(), &st.catalog_cache).await;
     let now = owned_cache::now();
     // без годного прежнего кэша — тихая точка отсчёта: запомнить, не говорить
-    let notice = match crate::releases::signal(before.as_deref(), &apps) {
+    // первый раз после обновления программы — тихо: в каталог могли влить старые выпуски
+    let version = app.package_info().version.to_string();
+    let upgraded = st.notified.upgraded(&version);
+    let notice = match crate::releases::quiet_after_upgrade(crate::releases::signal(before.as_deref(), &apps), upgraded) {
         crate::releases::Signal::Notify(new) => {
             let fresh = st.notified.record(&new, now);
             crate::releases::notice(&crate::releases::names(&fresh, &apps)).map(|n| (n, fresh))
@@ -792,6 +801,9 @@ async fn refresh<R: Runtime>(app: &AppHandle<R>) {
             None
         }
     };
+    if upgraded {
+        st.notified.set_version(&version);
+    }
     *st.catalog.write().await = apps;
     if let Some(((title, body), fresh)) = notice {
         crate::log::write("new releases", &format!("{fresh:?}"));
@@ -1301,6 +1313,7 @@ pub async fn add_by_link(state: State<'_, AppState>, link: String) -> Result<Row
     if let Some(v) = latest {
         state.latest.lock().unwrap().insert(id, v);
     }
+    state.screen_extra.lock().unwrap().insert(id);
     let in_catalog = state.catalog.read().await.iter().any(|r| r.track_id == id);
     let looked_up = if in_catalog { None } else { app_name(state.fetch.as_ref(), id).await };
     Ok(state.with_ctx(|ctx| link_row(id, ctx, looked_up)).await)

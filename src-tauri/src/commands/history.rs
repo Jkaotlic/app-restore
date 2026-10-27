@@ -6,7 +6,7 @@
 //! (`incognito`: nonPersistent на macOS), закрыли окно — сессии сайта нет.
 //!
 //! События (только главному окну): `history_progress` {found}, `history` {rows, found, error}.
-//! Окно ходит и открывает новые окна только на https *.apple.com.
+//! Окно ходит только на https *.apple.com; всплывающих окон не открывает (ссылка Apple — в нём же).
 use super::AppState;
 use super::logic::{RowCtx, RowDto, UiError};
 use crate::history::{Collected, Found, PageBatch, Problem, allowed_navigation, allowed_url, fresh, timed_out};
@@ -111,7 +111,22 @@ pub async fn open_history(app: AppHandle) -> Result<(), UiError> {
                 }
                 ok
             })
-            .on_new_window(|url, _| if allowed_url(&url) { NewWindowResponse::Allow } else { NewWindowResponse::Deny })
+            // всплывающих окон нет: окно платформы обошло бы on_navigation; ссылку Apple открываем здесь же,
+            // переход снова проходит on_navigation — одна точка фильтра
+            .on_new_window({
+                let app = app.clone();
+                move |url, _| {
+                    if allowed_url(&url) {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Some(w) = app.get_webview_window(LABEL) {
+                                let _ = w.navigate(url);
+                            }
+                        });
+                    }
+                    NewWindowResponse::Deny
+                }
+            })
             .build()
             .map_err(|e| format!("{e}"))
     });
@@ -198,6 +213,8 @@ async fn finish(app: &AppHandle, round: u64, problem: Option<Problem>) {
     let st = app.state::<AppState>();
     let known = st.on_screen().await;
     let new = fresh(&run.collected.items, &known);
+    // всё найденное теперь на «Выборе»: повтор не посчитает его новым, устаревшее перепроверится
+    st.screen_extra.lock().unwrap().extend(run.collected.items.iter().map(|f| f.id));
     // в журнал — только счётчики и вид ошибки, без названий и номеров
     crate::log::write("history", &format!("найдено {found}, новых {}, итог {problem:?}", new.len()));
     let rows = st.with_ctx(|ctx| new.iter().map(|f| history_row(f, ctx)).collect()).await;

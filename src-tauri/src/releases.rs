@@ -48,6 +48,15 @@ pub fn signal(before: Option<&[RemovedApp]>, after: &[RemovedApp]) -> Signal {
     }
 }
 
+/// Первый `refresh` после обновления программы — тихий: новая версия могла принести массовый
+/// импорт старых выпусков в каталог, это не «вышли новые выпуски».
+pub fn quiet_after_upgrade(sig: Signal, upgraded: bool) -> Signal {
+    match sig {
+        Signal::Notify(ids) if upgraded => Signal::Baseline(ids),
+        other => other,
+    }
+}
+
 /// trackId → когда о нём впервые сказали (секунды Unix).
 pub type Notified = HashMap<i64, u64>;
 
@@ -80,16 +89,49 @@ pub fn notice(names: &[String]) -> Option<(String, String)> {
     }
 }
 
+/// Файл: `{app_version, ids}`; 0.2 писала только `ids` (карту trackId → время) — читается тоже.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoreFile {
+    #[serde(default)]
+    app_version: Option<String>,
+    ids: Notified,
+}
+
 /// Кому уже сказали — файл в папке данных; битый или чужого вида — пусто.
 pub struct NotifiedStore {
     path: PathBuf,
     data: Mutex<Notified>,
+    /// Версия программы, при которой последний раз сравнивали каталоги.
+    version: Mutex<Option<String>>,
 }
 
 impl NotifiedStore {
     pub fn open(path: PathBuf) -> Self {
-        let data = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-        Self { path, data: Mutex::new(data) }
+        let text = std::fs::read_to_string(&path).ok();
+        let file = text.as_deref().and_then(|t| {
+            serde_json::from_str::<StoreFile>(t).ok().or_else(|| serde_json::from_str::<Notified>(t).ok().map(|ids| StoreFile { app_version: None, ids }))
+        });
+        let (version, data) = file.map(|f| (f.app_version, f.ids)).unwrap_or_default();
+        Self { path, data: Mutex::new(data), version: Mutex::new(version) }
+    }
+
+    /// Программа обновилась (или файла не было) с последнего сравнения каталогов.
+    pub fn upgraded(&self, current: &str) -> bool {
+        self.version.lock().unwrap().as_deref() != Some(current)
+    }
+
+    /// Запомнить версию, при которой сравнили каталоги.
+    pub fn set_version(&self, current: &str) {
+        *self.version.lock().unwrap() = Some(current.to_string());
+        self.save(&self.data.lock().unwrap());
+    }
+
+    fn save(&self, ids: &Notified) {
+        let file = StoreFile { app_version: self.version.lock().unwrap().clone(), ids: ids.clone() };
+        let r = serde_json::to_vec(&file).map_err(|e| e.to_string()).and_then(|b| crate::accounts::write_atomic(&self.path, &b));
+        if let Err(e) = r {
+            crate::log::write("notified releases", &e);
+        }
     }
 
     /// Запомнить, что о `ids` сказали в `now` (о ком уже говорили — время прежнее), и сохранить.
@@ -101,10 +143,7 @@ impl NotifiedStore {
             return fresh;
         }
         d.extend(fresh.iter().map(|id| (*id, now)));
-        let r = serde_json::to_vec(&*d).map_err(|e| e.to_string()).and_then(|b| crate::accounts::write_atomic(&self.path, &b));
-        if let Err(e) = r {
-            crate::log::write("notified releases", &e);
-        }
+        self.save(&d);
         fresh
     }
 
@@ -236,5 +275,29 @@ mod tests {
         assert_eq!(again.badges(700), vec![10, 13, 14]);
         std::fs::write(&path, "{битый").unwrap();
         assert_eq!(NotifiedStore::open(path).record(&[10], 800), vec![10]);
+    }
+
+    #[test]
+    fn first_refresh_after_an_app_update_is_quiet() {
+        let t = tempfile::tempdir().unwrap();
+        let path = t.path().join("notified-releases.json");
+        // файл 0.2: только trackId → время, версии программы нет — это обновление
+        std::fs::write(&path, r#"{"10":500}"#).unwrap();
+        let s = NotifiedStore::open(path.clone());
+        assert!(s.upgraded("0.3.0"));
+        assert_eq!(s.badges(600), vec![10], "old records are kept");
+        assert_eq!(quiet_after_upgrade(Signal::Notify(vec![11, 12]), true), Signal::Baseline(vec![11, 12]));
+        assert_eq!(quiet_after_upgrade(Signal::Notify(vec![11]), false), Signal::Notify(vec![11]));
+        assert_eq!(quiet_after_upgrade(Signal::Baseline(vec![11]), false), Signal::Baseline(vec![11]));
+        s.set_version("0.3.0");
+        let again = NotifiedStore::open(path.clone());
+        assert!(!again.upgraded("0.3.0"));
+        assert!(again.upgraded("0.3.1"));
+        assert_eq!(again.badges(600), vec![10]);
+        // запись новых не теряет версию
+        again.record(&[20], 700);
+        assert!(!NotifiedStore::open(path.clone()).upgraded("0.3.0"));
+        // нет файла — тоже «обновление» (но там и так тихая точка отсчёта)
+        assert!(NotifiedStore::open(t.path().join("none.json")).upgraded("0.3.0"));
     }
 }
