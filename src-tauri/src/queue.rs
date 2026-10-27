@@ -17,7 +17,8 @@ use tokio::sync::{broadcast, mpsc, watch};
 
 pub const MIN_FREE_MB: u64 = 500;
 pub const POLL: Duration = Duration::from_millis(500);
-/// Скачивание без роста файла столько — зависло: ipatool останавливается, задание `Timeout`
+/// Скачивание без роста файла столько — зависло (сеть пропала, после сна Mac ipatool часто
+/// мёртв): ipatool останавливается, задание `DownloadStalled`
 /// («Повторить» скачает заново), очередь идёт дальше.
 pub const DOWNLOAD_IDLE: Duration = Duration::from_secs(180);
 
@@ -189,7 +190,7 @@ async fn run_job(
                     } else if grew.elapsed() >= idle {
                         // `download` бросается ниже: ipatool убивается, замок ipatool свободен
                         crate::log::write(&format!("job {id}"), &format!("download stalled at {bytes} bytes for {} s, stopped", idle.as_secs()));
-                        break Some(Err(AppError::Timeout));
+                        break Some(Err(AppError::DownloadStalled));
                     }
                     emit(JobState::Downloading { bytes });
                 }
@@ -613,7 +614,7 @@ mod tests {
         let mut rx = q.subscribe();
         q.enqueue(vec![(111, "A".into())]);
         let ev = collect(&mut rx, 1).await;
-        assert_eq!(of(&ev, 111).last().unwrap(), &&JobState::Failed { error: AppError::Timeout, saved: None });
+        assert_eq!(of(&ev, 111).last().unwrap(), &&JobState::Failed { error: AppError::DownloadStalled, saved: None });
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst), "ipatool остановлен");
         assert!(!lib.root().unwrap().join(".partial/111").exists());
     }

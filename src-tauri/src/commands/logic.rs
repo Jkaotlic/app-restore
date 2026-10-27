@@ -44,6 +44,7 @@ fn code(e: &AppError) -> &'static str {
         AppError::DownloadsRunning => "downloads_running",
         AppError::Busy => "busy",
         AppError::Timeout => "timeout",
+        AppError::DownloadStalled => "download_stalled",
         AppError::KeychainWaiting => "keychain_waiting",
         AppError::IosTooOld { .. } => "ios_too_old",
         AppError::Unknown { .. } => "unknown",
@@ -729,7 +730,7 @@ pub fn copy_device(phones: &[PhoneInfo], udid: &str) -> Result<String, AppError>
 
 /// Ошибки скачивания, при которых вместо свежей версии ставится сохранённая копия.
 fn copy_helps(e: &AppError) -> bool {
-    matches!(e, AppError::AppleChangedLogin | AppError::AppleUnavailable { .. } | AppError::NotLoggedIn | AppError::Timeout)
+    matches!(e, AppError::AppleChangedLogin | AppError::AppleUnavailable { .. } | AppError::NotLoggedIn | AppError::Timeout | AppError::DownloadStalled)
 }
 
 /// Запасной путь для покупки: скачать не вышло из-за входа или серверов Apple, а копия есть.
@@ -1267,6 +1268,7 @@ mod tests {
             AppError::BadLink,
             AppError::Busy,
             AppError::Timeout,
+            AppError::DownloadStalled,
             AppError::KeychainWaiting,
             AppError::Unknown { detail: String::new() },
         ];
@@ -1788,7 +1790,7 @@ mod tests {
     #[test]
     fn fallback_copy_only_for_login_and_server_errors() {
         let lib = [SavedIpa { version: "9.1".into(), ..saved(5, "/x/5_b_9.1.ipa") }];
-        for e in [AppError::AppleChangedLogin, AppError::AppleUnavailable { status: Some(503) }, AppError::NotLoggedIn, AppError::Timeout] {
+        for e in [AppError::AppleChangedLogin, AppError::AppleUnavailable { status: Some(503) }, AppError::NotLoggedIn, AppError::Timeout, AppError::DownloadStalled] {
             assert_eq!(fallback_copy(&e, 5, &lib), Some((PathBuf::from("/x/5_b_9.1.ipa"), "9.1".into())), "{e:?}");
         }
         assert_eq!(fallback_copy(&AppError::NotLoggedIn, 6, &lib), None, "копии нет");

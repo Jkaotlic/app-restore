@@ -53,6 +53,10 @@ pub enum AppError {
     /// ipatool не ответил в срок и остановлен.
     #[error("ipatool timeout")]
     Timeout,
+    /// Файл скачивания долго не растёт: сеть пропала или Mac засыпал (ipatool после сна часто
+    /// мёртв). ipatool остановлен; «Повторить» скачает заново.
+    #[error("download stalled")]
+    DownloadStalled,
     /// Связка ключей не ответила в срок: macOS, скорее всего, ждёт разрешения в своём окне.
     #[error("keychain waiting")]
     KeychainWaiting,
@@ -99,6 +103,7 @@ impl AppError {
             AppError::DownloadsRunning => "Дождитесь окончания скачивания".into(),
             AppError::Busy => "Программа занята другой операцией (скачивание или Связка ключей) — подождите немного и попробуйте снова.".into(),
             AppError::Timeout => "Apple слишком долго не отвечает. Попробуйте ещё раз.".into(),
+            AppError::DownloadStalled => "Скачивание остановилось: пропала сеть или компьютер засыпал. Нажмите «Повторить» — скачаем заново.".into(),
             AppError::KeychainWaiting => "macOS ждёт разрешения на доступ к Связке ключей — найдите окно (оно может быть за окном программы), введите пароль Mac и нажмите «Разрешать всегда».".into(),
             AppError::IosTooOld { need, have } => format!("Нужна iOS {need}, на iPhone {have}"),
             AppError::Unknown { .. } => "Что-то пошло не так. Попробуйте ещё раз.".into(),
@@ -152,6 +157,10 @@ mod tests {
         assert!(!AppError::Busy.user_text().contains("скачивает"), "Busy бывает и без скачивания");
         assert!(AppError::KeychainWaiting.user_text().contains("Разрешать всегда"));
         assert_eq!(AppError::AppGone.user_text(), "Apple больше не отдаёт это приложение для скачивания");
+        assert_eq!(
+            AppError::DownloadStalled.user_text(),
+            "Скачивание остановилось: пропала сеть или компьютер засыпал. Нажмите «Повторить» — скачаем заново."
+        );
         assert_eq!(AppError::BadLink.user_text(), "Это не ссылка на приложение. Нужна ссылка вида apps.apple.com/…/id123456789");
     }
 
