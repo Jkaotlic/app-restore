@@ -148,9 +148,19 @@ impl Session {
         };
         let res = {
             let _turn = self.turn(wait).await?;
+            // флаг поднят только на время этого запуска: пауза повтора и очередь — не простой
+            struct Running<'a>(Option<&'a AtomicBool>);
+            impl Drop for Running<'_> {
+                fn drop(&mut self) {
+                    if let Some(f) = self.0 {
+                        f.store(false, Ordering::SeqCst);
+                    }
+                }
+            }
             if let Some(f) = started {
                 f.store(true, Ordering::SeqCst);
             }
+            let _running = Running(started);
             let mut repeated = false;
             loop {
                 let r = match tokio::time::timeout(run, self.runner.run(&args.0)).await {
@@ -550,6 +560,17 @@ mod tests {
     fn short() -> Limits {
         let ms = Duration::from_millis;
         Limits { quick_run: ms(100), quick_wait: ms(100), login_run: ms(100), login_wait: ms(100), download_run: ms(300), keychain_run: ms(100), keychain_hint: ms(50), keychain_wait: ms(100) }
+    }
+
+    /// «ipatool идёт» только на время запуска: в паузе повтора и в очереди за замком — нет.
+    #[tokio::test]
+    async fn started_flag_is_down_between_attempts() {
+        let r = Arc::new(FakeRunner::new(vec![busy(), fx("download-by-id")]));
+        let s = session(&r, &[]);
+        let started = AtomicBool::new(false);
+        let t = tempfile::tempdir().unwrap();
+        let _ = s.download_marked(1, t.path(), &started).await;
+        assert!(!started.load(Ordering::SeqCst), "после запуска флаг снят");
     }
 
     #[tokio::test]
