@@ -506,7 +506,13 @@ register("choose", () => {
     }
     // новые строки «С этого iPhone» проверяются вместе с ещё ждущими: новый вызов отменяет прежний
     if (stale && chosenSource) {
-      void loadSource(chosenSource).catch(() => undefined);
+      // сбой перечитывания показываем, а не глотаем: иначе строки «С этого iPhone» молча старые
+      void loadSource(chosenSource).catch((e) => {
+        sourceBusy = false;
+        sourceError = errorText(asUiError(e));
+        renderChips();
+        renderList();
+      });
       return;
     }
     const phoneIds = idsToCheck(d.rows.filter((r) => r.source === "phone"));
