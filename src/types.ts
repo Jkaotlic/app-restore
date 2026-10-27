@@ -13,8 +13,9 @@ export interface Account {
   name: string;
 }
 
-/** `phone` — «С этого iPhone»: стоит на телефоне, нет ни в каталоге, ни в покупках, ни в магазине RU. */
-export type RowSource = "removed" | "purchase" | "link" | "saved" | "phone";
+/** `phone` — «С этого iPhone»: стоит на телефоне, нет ни в каталоге, ни в покупках, ни в магазине RU.
+ * `store` — «В App Store»: найдено поиском по магазину (`search_store`). */
+export type RowSource = "removed" | "purchase" | "link" | "saved" | "phone" | "store";
 
 /** Фильтр каталога; у покупок категории нет. */
 export type Category = "bank" | "social" | "travel" | "other";
@@ -50,6 +51,8 @@ export interface RowDto {
   other_account: boolean;
   /** Маска покупателя у `other_account` («ma***@example.com»); полного адреса нет. */
   purchaser_masked: string | null;
+  /** Только у `store`, ставит интерфейс: запрос, на который App Store вернул строку. */
+  store_term?: string;
 }
 
 export type InstallState = "not_installed" | "installed" | "update_available" | "unknown";

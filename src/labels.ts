@@ -9,15 +9,15 @@ export interface JobView {
 
 const MB = 1024 * 1024;
 
-/** Строка задания на экране «iPhone». */
-export function jobView(s: JobDto, fromSaved: string | null): JobView {
+/** Строка задания на экране «iPhone». `downloadOnly` — «Только скачать»: скачанное и есть итог. */
+export function jobView(s: JobDto, fromSaved: string | null, downloadOnly = false): JobView {
   switch (s.kind) {
     case "queued":
       return { text: "В очереди", bar: 0, retry: false };
     case "downloading":
       return { text: `Скачано ${Math.round(s.bytes / MB)} МБ`, bar: "indeterminate", retry: false };
     case "saved":
-      return { text: "Скачано, ждём iPhone", bar: null, retry: false };
+      return { text: downloadOnly ? "Сохранено" : "Скачано, ждём iPhone", bar: null, retry: false };
     case "installing":
       return { text: `Устанавливается, ${s.percent}%`, bar: s.percent, retry: false };
     case "installed":
@@ -27,14 +27,14 @@ export function jobView(s: JobDto, fromSaved: string | null): JobView {
   }
 }
 
-/** Дальше задание само не сдвинется: установлено или ошибка. */
-export function isFinished(s: JobDto): boolean {
-  return s.kind === "installed" || s.kind === "failed";
+/** Дальше задание само не сдвинется: установлено, ошибка или сохранено по «Только скачать». */
+export function isFinished(s: JobDto, downloadOnly = false): boolean {
+  return s.kind === "installed" || s.kind === "failed" || (downloadOnly && s.kind === "saved");
 }
 
 /** Строка на экране «Готово». С другим Apple ID говорим, в какой ID войти при первом запуске. */
-export function doneText(s: JobDto, fromSaved: string | null, sameAppleId: boolean | null, email: string | null): string {
-  const base = jobView(s, fromSaved).text;
+export function doneText(s: JobDto, fromSaved: string | null, sameAppleId: boolean | null, email: string | null, downloadOnly = false): string {
+  const base = jobView(s, fromSaved, downloadOnly).text;
   if (s.kind !== "installed" || sameAppleId !== false) return base;
   return `${base}. При первом запуске войдите в ${email ?? "Apple ID, с которого скачивали"}`;
 }

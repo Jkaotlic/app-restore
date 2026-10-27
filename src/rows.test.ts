@@ -31,6 +31,12 @@ import {
   sourceChoices,
   SOURCE_HINT,
   OTHER_ID_LOGIN_NOTE,
+  autoChecks,
+  barState,
+  dropStoreRows,
+  replaceStoreRows,
+  storeTerm,
+  NO_PHONE_HINT,
 } from "./rows";
 import type { OwnedEvent, PhoneDto, RowDto } from "./types";
 
@@ -97,7 +103,8 @@ describe("visibleGroups", () => {
   });
   it("search applies to every group, the catalog too", () => {
     const g = visibleGroups(rows, "all", "  tele ");
-    expect(g.map((x) => x.rows.map((r) => r.track_id))).toEqual([[], [], [11]]);
+    // от трёх букв — ещё и пустая группа «В App Store»
+    expect(g.map((x) => x.rows.map((r) => r.track_id))).toEqual([[], [], [11], []]);
   });
   it("link rows join the catalog group", () => {
     const withLink = addLinkRow(rows, row(50, "Новое", { source: "link" }));
@@ -498,5 +505,68 @@ describe("purchases built for another source", () => {
     expect(r.rows.map((x) => x.track_id)).toEqual([1, 10, 60]);
     // без группы (Lookup упал) — тоже не тот источник: перестроить
     expect(purchasesForSource(list, incoming, null, "NEW").stale).toBe(true);
+  });
+});
+
+describe("«В App Store»", () => {
+  const store = (id: number, name: string, term: string, over: Partial<RowDto> = {}) => row(id, name, { source: "store", owned: null, store_term: term, ...over });
+
+  it("storeTerm: от трёх букв, без пробелов по краям", () => {
+    expect(storeTerm("  сб ")).toBeNull();
+    expect(storeTerm("")).toBeNull();
+    expect(storeTerm(" Сбер ")).toBe("Сбер");
+  });
+
+  it("группа есть только при запросе от трёх букв и показывает ответ на этот запрос", () => {
+    const list = [cat(1, "Сбербанк"), store(20, "Пример Банк", "сбер"), store(21, "Старое", "почта")];
+    expect(visibleGroups(list, "all", "").map((g) => g.key)).toEqual(["catalog", "phone", "buy"]);
+    expect(visibleGroups(list, "all", "сб").map((g) => g.key)).toEqual(["catalog", "phone", "buy"]);
+    const g = visibleGroups(list, "all", "Сбер ");
+    expect(g.map((x) => x.key)).toEqual(["catalog", "phone", "buy", "store"]);
+    expect(g[3]).toMatchObject({ title: "В App Store" });
+    // имя не совпадает, но это ответ App Store на тот же запрос; ответ на прежний — скрыт
+    expect(g[3].rows.map((r) => r.track_id)).toEqual([20]);
+    expect(g[2].rows).toEqual([]);
+    expect(hiddenCount([list[2]], "all", "сбер", false)).toBe(1);
+    expect(chipCounts(list, "сбер", false).all).toBe(2);
+    expect(visibleGroups(list, "buy", "сбер")[3].rows).toEqual([]);
+  });
+
+  it("replaceStoreRows: новый ответ вместо прежнего, выбранные остаются, повторы со строками экрана — нет", () => {
+    const cur = [cat(1, "Сбер"), row(2, "Покупка"), store(20, "Выбрана", "сбер"), store(21, "Не выбрана", "сбер")];
+    const incoming = [row(1, "Сбер", { source: "store" }), row(2, "x", { source: "store" }), row(30, "Новая", { source: "store" }), row(20, "Выбрана", { source: "store" })];
+    const got = replaceStoreRows(cur, incoming, new Set([20]), "почта");
+    expect(got.map((r) => [r.track_id, r.store_term ?? null])).toEqual([[1, null], [2, null], [20, "сбер"], [30, "почта"]]);
+    expect(dropStoreRows(got, new Set([20])).map((r) => r.track_id)).toEqual([1, 2, 20]);
+  });
+
+  it("покупки не стирают строки App Store, а свои строки берут вместо них", () => {
+    const cur = [store(20, "A", "сбер"), store(21, "B", "сбер")];
+    expect(mergePurchases(cur, [row(21, "B")]).map((r) => [r.track_id, r.source])).toEqual([[21, "purchase"], [20, "store"]]);
+  });
+
+  it("права проверяются, выбрать можно только купленное, сама не отмечается", () => {
+    const s = store(20, "A", "сбер");
+    expect(idsToCheck([s])).toEqual([20]);
+    expect(pendingChecks([s], new Map([[20, { kind: "checking" }]]))).toEqual([20]);
+    expect(canSelect(s, { kind: "checking" })).toBe(false);
+    expect(canSelect(s, { kind: "no" })).toBe(false);
+    expect(canSelect(s, { kind: "yes" })).toBe(true);
+    expect(tileLine(s, { kind: "no" }, false, false)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
+    expect(tileLine({ ...s, available_version: "2.0" }, { kind: "yes" }, false, false)).toEqual({ text: "доступно 2.0", tone: "plain" });
+    expect(autoChecks(s)).toBe(false);
+    expect(autoChecks(cat(1, "Сбер"))).toBe(true);
+  });
+});
+
+describe("barState", () => {
+  it("ничего не выбрано: обе кнопки неактивны", () => {
+    expect(barState(0, true)).toEqual({ go: { text: "Вернуть", disabled: true }, only: { text: "Только скачать", disabled: true }, hint: null });
+  });
+  it("с телефоном активны обе", () => {
+    expect(barState(3, true)).toEqual({ go: { text: "Вернуть 3", disabled: false }, only: { text: "Только скачать 3", disabled: false }, hint: null });
+  });
+  it("без телефона «Вернуть» неактивна с подсказкой, «Только скачать» — активна", () => {
+    expect(barState(2, false)).toEqual({ go: { text: "Вернуть 2", disabled: true }, only: { text: "Только скачать 2", disabled: false }, hint: NO_PHONE_HINT });
   });
 });

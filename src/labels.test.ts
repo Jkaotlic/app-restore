@@ -224,3 +224,14 @@ describe("loginNote", () => {
     expect(loginNote(null, 12)).toBe(loginWaitNote(12));
   });
 });
+
+describe("«Только скачать»", () => {
+  it("скачанное — «Сохранено», задание закончено", () => {
+    expect(jobView({ kind: "saved" }, null, true)).toEqual({ text: "Сохранено", bar: null, retry: false });
+    expect(jobView({ kind: "saved" }, null)).toEqual({ text: "Скачано, ждём iPhone", bar: null, retry: false });
+    expect(isFinished({ kind: "saved" }, true)).toBe(true);
+    expect(isFinished({ kind: "saved" })).toBe(false);
+    expect(isFinished({ kind: "downloading", bytes: 1 }, true)).toBe(false);
+    expect(doneText({ kind: "saved" }, null, false, "friend@users.noreply.github.com", true)).toBe("Сохранено");
+  });
+});
