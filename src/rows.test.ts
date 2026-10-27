@@ -40,8 +40,13 @@ import {
   replaceStoreRows,
   storeTerm,
   NO_PHONE_HINT,
+  isNewRow,
+  retryCatalogErrors,
+  showSweepButton,
+  sweepText,
 } from "./rows";
 import type { OwnedEvent, PhoneDto, RowDto } from "./types";
+import type { OwnedMap, OwnedState } from "./rows";
 
 function row(id: number, name: string, over: Partial<RowDto> = {}): RowDto {
   return {
@@ -597,5 +602,43 @@ describe("barState", () => {
   });
   it("без телефона «Вернуть» неактивна с подсказкой, «Только скачать» — активна", () => {
     expect(barState(2, false)).toEqual({ go: { text: "Вернуть 2", disabled: true }, only: { text: "Только скачать 2", disabled: false }, hint: NO_PHONE_HINT });
+  });
+});
+
+describe("«Проверить весь каталог» и «Новое»", () => {
+  it("sweep text and button", () => {
+    expect(sweepText(null)).toBeNull();
+    expect(sweepText({ checked: 3, total: 10, running: true })).toBe("Проверено 3 из 10");
+    expect(sweepText({ checked: 0, total: 0, running: true })).toBe("Проверяем…");
+    expect(sweepText({ checked: 10, total: 10, running: false })).toBe("Весь каталог проверен");
+    expect(sweepText({ checked: 4, total: 10, running: false })).toBe("Проверено 4 из 10");
+    expect(showSweepButton(null, true)).toBe(true);
+    expect(showSweepButton(null, false)).toBe(false);
+    expect(showSweepButton({ checked: 3, total: 10, running: true }, true)).toBe(false);
+    expect(showSweepButton({ checked: 4, total: 10, running: false }, true)).toBe(true);
+    expect(showSweepButton({ checked: 10, total: 10, running: false }, true)).toBe(false);
+  });
+
+  it("«Новое» only on catalog rows signalled by Rust", () => {
+    const ids = new Set([5, 6]);
+    expect(isNewRow(row(5, "А", { source: "removed" }), ids)).toBe(true);
+    expect(isNewRow(row(6, "Б", { source: "purchase" }), ids)).toBe(false);
+    expect(isNewRow(row(7, "В", { source: "removed" }), ids)).toBe(false);
+  });
+
+  it("sweep retries failed catalog rows only", () => {
+    const error = { kind: "error" as const, error: { code: "unknown", text: "x", retryable: true } };
+    const all = [row(1, "А", { source: "removed" }), row(2, "Б", { source: "removed" }), row(3, "В", { source: "store" }), row(4, "Г", { source: "removed" })];
+    const before: OwnedMap = new Map<number, OwnedState>([
+      [1, error],
+      [2, { kind: "no" as const }],
+      [3, error],
+    ]);
+    const after = retryCatalogErrors(all, before);
+    expect(after.get(1)).toEqual({ kind: "checking" });
+    expect(after.get(2)).toEqual({ kind: "no" });
+    expect(after.get(3)).toEqual(error);
+    expect(after.has(4)).toBe(false);
+    expect(before.get(1)).toEqual(error);
   });
 });

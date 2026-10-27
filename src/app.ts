@@ -3,8 +3,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { h } from "./dom";
 import { showCopiesLink, stepIndex } from "./copies";
+import { pendingNote } from "./drop";
 import { errorText, installsToIphone } from "./labels";
-import type { AccountEntry, AccountMatchDto, Account, JobDto, OwnedEvent, PhoneDto, PurchasesProgress, RowDto, RowsDto, RunDto, UiError } from "./types";
+import type { AccountEntry, AccountMatchDto, Account, DropDto, JobDto, OwnedEvent, PhoneDto, PurchasesProgress, RowDto, RowsDto, RunDto, SweepDto, UiError } from "./types";
 
 export type Screen = "warning" | "accounts" | "login" | "choose" | "phone" | "done" | "copies";
 
@@ -46,6 +47,14 @@ export interface State {
   update: string | null;
   /** macOS ждёт разрешения Связки ключей (`keychain_note`): подсказка в боковой панели. */
   keychainNote: string | null;
+  /** Записи каталога с бейджем «Новое» (`release_badges`, событие `new_releases`). */
+  newIds: Set<number>;
+  /** Номера из перетащенного текста, которые добавятся на «Выборе» (`add_by_link`). */
+  pendingLinks: number[];
+  /** Итог перетаскивания вне «Выбора» и «Все копии»: подсказка в боковой панели. */
+  dropNote: string | null;
+  /** Копия, перетащенная в окно: «Все копии» откроются с ней. */
+  pickCopy: string | null;
 }
 
 let markReady: () => void = () => undefined;
@@ -73,6 +82,10 @@ export const state: State = {
   phonesError: null,
   update: null,
   keychainNote: null,
+  newIds: new Set(),
+  pendingLinks: [],
+  dropNote: null,
+  pickCopy: null,
 };
 
 /** Что экран хочет знать о событиях, пока он на виду. */
@@ -85,6 +98,12 @@ export interface Mounted {
   onPurchases?(rows: RowsDto): void;
   /** Вход программы сменился сам (событие `account`). */
   onAccount?(): void;
+  /** «Проверить весь каталог»: прогресс (событие `catalog_check`). */
+  onCatalogCheck?(p: SweepDto): void;
+  /** Сменились записи с бейджем «Новое» (`state.newIds`). */
+  onNewReleases?(): void;
+  /** Что-то перетащили в окно; без обработчика — общий путь в `main.ts`. */
+  onDrop?(d: DropDto): void;
   /** Вызывается при уходе с экрана. */
   leave?(): void;
 }
@@ -177,6 +196,8 @@ function sidebar(screen: Screen): HTMLElement {
     openLogButton(),
     state.update ? h("div", { class: "update", text: `Есть новая версия ${state.update}` }) : null,
     state.keychainNote ? h("div", { class: "update", text: state.keychainNote, attrs: { role: "status" } }) : null,
+    pendingNote(state.pendingLinks.length) ? h("div", { class: "update", text: pendingNote(state.pendingLinks.length)!, attrs: { role: "status" } }) : null,
+    state.dropNote ? h("div", { class: "update", text: state.dropNote, attrs: { role: "status" } }) : null,
   );
   return h("nav", { class: "steps" }, h("div", { class: "brand" }, "Вернуть", h("br"), "приложения"), h("ol", {}, ...items), copies, foot);
 }

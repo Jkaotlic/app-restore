@@ -1,18 +1,21 @@
 // «Все копии»: любая ipa из «Мои приложения» (всех Apple ID) или выбранный файл — на любой
 // подключённый телефон. Работает без входа. Диалог и файлы — только в Rust.
-import { asUiError, call, go, register, safe, state, type Job } from "../app";
+import { asUiError, call, go, refreshSidebar, register, safe, state, type Job } from "../app";
 import { copyInstallButton, copyNotes, copyPhone, copyRow, copyWarning, groupCopies, markCopyPhone } from "../copies";
+import { dropMessages, mergePending, pendingNote } from "../drop";
 import { h } from "../dom";
 import { jobInbox } from "../jobs";
 import { jobView, errorText } from "../labels";
-import type { AccountMatchDto, CopyDto } from "../types";
+import type { AccountMatchDto, CopyDto, DropDto } from "../types";
 import { appIcon } from "./choose";
 import { jobRow, phoneStatus, refreshPhones, retryJob } from "./phone";
 
 register("copies", () => {
   let copies: CopyDto[] | null = null;
   let query = "";
-  let selected: string | null = null;
+  // копия, перетащенная в окно на другом экране, — сразу выбрана
+  let selected: string | null = state.pickCopy;
+  state.pickCopy = null;
   /** Итог `copy_account_match` для пары (копия, телефон). */
   let match: { key: string; m: AccountMatchDto } | null = null;
   /** Задания, запущенные с этого экрана. */
@@ -67,6 +70,7 @@ register("copies", () => {
     }
     renderList();
     renderAction();
+    if (selected) onSelect();
   }
 
   function say(text: string | null): void {
@@ -78,16 +82,33 @@ register("copies", () => {
     say(null);
     try {
       const c = await call<CopyDto | null>("pick_ipa");
-      if (!c) return;
-      if (copies && !copies.some((x) => x.path === c.path)) copies.push(c);
-      selected = c.path;
-      query = "";
-      search.value = "";
-      renderList();
-      onSelect();
+      if (c) take(c);
     } catch (e) {
       say(errorText(asUiError(e)));
     }
+  }
+
+  /** Принятая копия (диалог или перетаскивание): в список и выбрана. */
+  function take(c: CopyDto): void {
+    if (copies && !copies.some((x) => x.path === c.path)) copies.push(c);
+    selected = c.path;
+    query = "";
+    search.value = "";
+    renderList();
+    onSelect();
+  }
+
+  /** Перетащили в окно: копии — как «Выбрать файл», номера ждут «Выбора». */
+  function onDrop(d: DropDto): void {
+    for (const c of d.copies) take(c);
+    if (d.ids.length) {
+      state.pendingLinks = mergePending(state.pendingLinks, d.ids);
+      refreshSidebar();
+    }
+    const parts = dropMessages(d);
+    const note = d.ids.length ? pendingNote(state.pendingLinks.length) : null;
+    if (note) parts.push(note);
+    say(parts.join(". ") || null);
   }
 
   async function checkMatch(): Promise<void> {
@@ -211,5 +232,5 @@ register("copies", () => {
     jobsBox,
     h("div", { class: "push" }, installBtn, back),
   );
-  return { el, onJob: renderJobs, onPhones };
+  return { el, onJob: renderJobs, onPhones, onDrop };
 });

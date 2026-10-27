@@ -1,6 +1,7 @@
 // Запуск: события Rust → общее состояние → текущий экран.
 import { listen } from "@tauri-apps/api/event";
 import { call, currentScreen, go, refreshSidebar, sessionChecked, startScreen, state } from "./app";
+import { dropMessages, mergePending } from "./drop";
 import { h } from "./dom";
 import { jobInbox } from "./jobs";
 import "./screens/accounts";
@@ -11,7 +12,20 @@ import "./screens/login";
 import "./screens/phone";
 import { warningSeen } from "./screens/warning";
 import "./styles.css";
-import type { Account, JobEvent, OwnedEvent, PhonesEvent, PurchasesProgress, RowsDto } from "./types";
+import type { Account, DropDto, JobEvent, OwnedEvent, PhonesEvent, PurchasesProgress, RowsDto, SweepDto } from "./types";
+
+/** Перетаскивание, когда экран сам его не принимает: копия — на «Все копии» (не с первого
+ * экрана-предупреждения), номера ждут «Выбора», ошибки — в боковой панели. */
+function dropElsewhere(d: DropDto): void {
+  if (d.ids.length) state.pendingLinks = mergePending(state.pendingLinks, d.ids);
+  state.dropNote = dropMessages(d).join(". ") || null;
+  const last = d.copies[d.copies.length - 1];
+  if (last && state.screen !== "warning") {
+    state.pickCopy = last.path;
+    state.beforeCopies = state.screen;
+    go("copies");
+  } else refreshSidebar();
+}
 
 async function wire(): Promise<void> {
   await listen<JobEvent>("job", ({ payload }) => {
@@ -19,6 +33,16 @@ async function wire(): Promise<void> {
     if (jobInbox.apply(state.jobs, payload)) currentScreen()?.onJob?.();
   });
   await listen<OwnedEvent>("owned", ({ payload }) => currentScreen()?.onOwned?.(payload));
+  await listen<SweepDto>("catalog_check", ({ payload }) => currentScreen()?.onCatalogCheck?.(payload));
+  await listen<number[]>("new_releases", ({ payload }) => {
+    state.newIds = new Set(payload);
+    currentScreen()?.onNewReleases?.();
+  });
+  await listen<DropDto>("dropped", ({ payload }) => {
+    const screen = currentScreen();
+    if (screen?.onDrop) screen.onDrop(payload);
+    else dropElsewhere(payload);
+  });
   await listen<PurchasesProgress>("purchases_progress", ({ payload }) => currentScreen()?.onPurchasesProgress?.(payload));
   await listen<RowsDto>("purchases", ({ payload }) => currentScreen()?.onPurchases?.(payload));
   // окно Связки ключей macOS ждёт ответа (вход, снимок после входа, смена Apple ID); null — всё

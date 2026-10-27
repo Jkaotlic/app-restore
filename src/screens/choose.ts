@@ -1,5 +1,7 @@
-import { asUiError, call, go, register, safe, state, targetIsIphone, targetPhone, type Job } from "../app";
+import { asUiError, call, go, refreshSidebar, register, safe, state, targetIsIphone, targetPhone, type Job } from "../app";
 import { h } from "../dom";
+import { addedText, dropMessages, mergePending } from "../drop";
+import { HELP_STEPS, type HelpAction } from "../help";
 import { purchasesProgressText, errorText } from "../labels";
 import {
   addLinkRow,
@@ -37,12 +39,16 @@ import {
   tileLine,
   visibleGroups,
   visibleChecks,
+  isNewRow,
+  retryCatalogErrors,
+  showSweepButton,
+  sweepText,
   type Chip,
   type GroupKey,
   type OwnedMap,
   type TileLine,
 } from "../rows";
-import type { InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, UiError } from "../types";
+import type { DropDto, InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, SweepDto, UiError } from "../types";
 
 export function appIcon(r: RowDto): HTMLElement {
   const { letter, color } = iconFor(r);
@@ -101,6 +107,12 @@ register("choose", () => {
   /** Видимые строки, что ждут проверки прав (`owned_visible`): дебаунс 300 мс, без повторов. */
   let visibleTimer: ReturnType<typeof setTimeout> | undefined;
   let visibleSent = "";
+  /** «Проверить весь каталог»: последний прогресс; номер события — ответ команды старше события не берём. */
+  let sweep: SweepDto | null = null;
+  let sweepSeq = 0;
+  let sweepError: string | null = null;
+  /** Идёт добавление по ссылкам (поле или перетаскивание): следующие ждут в `state.pendingLinks`. */
+  let linkBusy = false;
   /** Подключённые телефоны (udid через запятую): выбор источника перерисовывается, только когда они меняются. */
   let phonesKey = state.phones.map((p) => p.udid).join(",");
   // «Только для iPad» зависит от устройства, на которое ставим, а не от «Дальше» (как и `checked` в Rust)
@@ -176,6 +188,54 @@ register("choose", () => {
     linkMsg,
   );
 
+  // «Проверить весь каталог»: кнопка и «проверено N из M» над плитками каталога, один элемент на экран
+  const sweepBtn = h("button", { class: "link", text: "Проверить весь каталог", attrs: { type: "button" }, on: { click: safe(checkCatalog) } });
+  const sweepStatus = h("span", { class: "note", attrs: { role: "status" } });
+  const sweepBox = h("div", { class: "sweepbox" }, sweepBtn, sweepStatus);
+
+  // «Не нашли приложение?» под поиском: шаги для того, чего нет в списке
+  const dropMsg = h("p", { class: "note drop-msg", attrs: { role: "status", "aria-live": "polite" } });
+  dropMsg.hidden = true;
+  const helpPanel = h(
+    "div",
+    { class: "helppanel", attrs: { id: "help-panel" } },
+    h(
+      "ol",
+      {},
+      ...HELP_STEPS.map((st) =>
+        h(
+          "li",
+          {},
+          h("b", { text: st.title }),
+          h("span", { text: ` ${st.text}` }),
+          st.action ? h("button", { class: "link", text: st.action.label, attrs: { type: "button" }, on: { click: safe(() => helpGo(st.action!)) } }) : null,
+        ),
+      ),
+    ),
+  );
+  helpPanel.hidden = true;
+  const helpLink = h("button", {
+    class: "link help-link",
+    text: "Не нашли приложение?",
+    attrs: { type: "button", "aria-expanded": "false", "aria-controls": "help-panel" },
+    on: {
+      click: () => {
+        helpPanel.hidden = !helpPanel.hidden;
+        helpLink.setAttribute("aria-expanded", String(!helpPanel.hidden));
+      },
+    },
+  });
+
+  async function helpGo(a: HelpAction) {
+    if (a.kind === "accounts") return go("accounts");
+    if (a.kind === "phone") return go("phone");
+    if (a.kind === "link") {
+      linkInput.scrollIntoView({ block: "nearest" });
+      return linkInput.focus();
+    }
+    if (!purchasesLoading) await loadPurchases();
+  }
+
   const switchId = h("button", {
     class: "link",
     text: "Войти в другой Apple ID",
@@ -222,7 +282,13 @@ register("choose", () => {
         },
       },
       appIcon(r),
-      h("span", { class: "tt" }, h("span", { class: "nm", text: r.name }), ver, line.note ? h("span", { class: "ver note", text: line.note }) : null),
+      h(
+        "span",
+        { class: "tt" },
+        h("span", { class: "nm" }, isNewRow(r, state.newIds) ? h("span", { class: "badge-new", text: "Новое" }) : null, r.name),
+        ver,
+        line.note ? h("span", { class: "ver note", text: line.note }) : null,
+      ),
       h("span", { class: "tbox", attrs: { "aria-hidden": "true" } }),
     );
     tile.dataset.id = String(r.track_id);
@@ -265,6 +331,28 @@ register("choose", () => {
         })
       : null;
     return h("div", { class: "tilewrap" }, tile, h("div", { class: "tile-actions" }, login, report, msg));
+  }
+
+  /** Плитка нового выпуска («Новое»): под ней «Открыть в App Store» — лицензию человек берёт сам. */
+  function newTile(r: RowDto, tile: HTMLButtonElement): HTMLElement {
+    const msg = h("span", { class: "note", attrs: { role: "status" } });
+    const open = h("button", {
+      class: "link",
+      text: "Открыть в App Store",
+      attrs: { type: "button", title: "Откроет страницу приложения в App Store: возьмите его там, потом программа сохранит копию" },
+      on: {
+        click: safe(async () => {
+          msg.textContent = "";
+          try {
+            await call("open_in_store", { trackId: r.track_id });
+            msg.textContent = "Открыто в браузере";
+          } catch (e) {
+            msg.textContent = errorText(asUiError(e));
+          }
+        }),
+      },
+    });
+    return h("div", { class: "tilewrap" }, tile, h("div", { class: "tile-actions" }, open, msg));
   }
 
   /** «Телефон-источник» над группой: другой подключённый телефон, цель установки та же. */
@@ -417,7 +505,7 @@ register("choose", () => {
     for (const r of items) {
       const t = tileEl(r);
       tiles.set(r.track_id, t);
-      grid.append(r.source === "phone" ? phoneTile(r, t) : t);
+      grid.append(r.source === "phone" ? phoneTile(r, t) : isNewRow(r, state.newIds) ? newTile(r, t) : t);
     }
     return h(
       "section",
@@ -464,6 +552,10 @@ register("choose", () => {
     for (const g of groups) {
       const extra: HTMLElement[] = [];
       if (g.key === "catalog" && !g.rows.length && plain) extra.push(h("p", { class: "empty", text: "Пока пусто. Добавьте приложение по ссылке ниже." }));
+      if (g.key === "catalog" && g.rows.length && state.account) {
+        renderSweep();
+        extra.push(sweepBox);
+      }
       if (g.key === "buy" && plain) {
         const purchases = rows.filter((r) => r.source === "purchase" || r.source === "saved");
         if (purchasesLoading) {
@@ -609,18 +701,116 @@ register("choose", () => {
     await call("check_owned", { trackIds: ids });
   }
 
+  function renderSweep() {
+    sweepBtn.hidden = !showSweepButton(sweep, !!state.account);
+    const text = sweepError ?? sweepText(sweep);
+    sweepStatus.textContent = text ?? "";
+    sweepStatus.hidden = !text;
+    sweepStatus.classList.toggle("error", !!sweepError);
+  }
+
+  /** «Проверить весь каталог»: Rust ставит все записи без свежего ответа в конец очереди. */
+  async function checkCatalog() {
+    const seq = ++sweepSeq;
+    sweepError = null;
+    // ждущие — как были (новая очередь заменяет прежнюю); строки с ошибкой — вместе со всем каталогом
+    const waiting = pendingChecks(rows, owned);
+    owned = retryCatalogErrors(rows, owned);
+    sweep = { checked: 0, total: 0, running: true };
+    renderList();
+    try {
+      const p = await call<SweepDto>("check_catalog", { trackIds: waiting });
+      if (seq === sweepSeq) sweep = p;
+    } catch (e) {
+      if (seq === sweepSeq) {
+        sweep = null;
+        sweepError = errorText(asUiError(e));
+      }
+    }
+    renderSweep();
+  }
+
+  function onCatalogCheck(p: SweepDto) {
+    sweepSeq++;
+    sweep = p;
+    sweepError = null;
+    renderSweep();
+  }
+
+  /** Строка из `add_by_link`: наверх, права есть, отмечена. */
+  function takeLinkRow(row: RowDto) {
+    rows = addLinkRow(rows, row);
+    owned = new Map(owned).set(row.track_id, { kind: "yes" });
+    setSelected(row.track_id, true);
+  }
+
+  /** Несколько номеров (текст со ссылками, перетаскивание): каждый через `add_by_link` с проверкой
+   * владения, по одному. Итог — в `out`. Пока идёт, новые номера ждут в `state.pendingLinks`. */
+  async function addMany(ids: number[], out: HTMLElement) {
+    if (linkBusy) {
+      state.pendingLinks = mergePending(state.pendingLinks, ids);
+      refreshSidebar();
+      return;
+    }
+    linkBusy = true;
+    linkBtn.disabled = true;
+    out.hidden = true;
+    let added = 0;
+    const errors = new Set<string>();
+    for (const [i, id] of ids.entries()) {
+      linkBtn.textContent = `Проверяем ${i + 1} из ${ids.length}…`;
+      try {
+        takeLinkRow(await call<RowDto>("add_by_link", { link: String(id) }));
+        added++;
+        renderChips();
+        renderList();
+      } catch (err) {
+        errors.add(errorText(asUiError(err)));
+      }
+    }
+    out.textContent = [addedText(added, ids.length), ...errors].join(". ");
+    out.hidden = false;
+    linkBusy = false;
+    linkBtn.disabled = false;
+    linkBtn.textContent = "Добавить";
+    takePending();
+  }
+
+  /** Номера, перетащенные до «Выбора» или пока шло добавление. */
+  function takePending() {
+    const next = state.pendingLinks;
+    if (!next.length || linkBusy) return;
+    state.pendingLinks = [];
+    state.dropNote = null;
+    refreshSidebar();
+    void addMany(next, dropMsg);
+  }
+
+  /** Перетащили в окно: номера — по ссылкам сюда же; копии уже в «Мои приложения». */
+  function onDrop(d: DropDto) {
+    const parts = dropMessages(d);
+    if (d.copies.length) parts.unshift(`Сохранено в «Мои приложения»: ${d.copies.map((c) => c.name).join(", ")}`);
+    dropMsg.textContent = parts.join(". ");
+    dropMsg.hidden = !parts.length;
+    if (d.ids.length) void addMany(d.ids, dropMsg);
+  }
+
   async function addLink(e: Event) {
     e.preventDefault();
     const link = linkInput.value.trim();
-    if (!link) return;
+    if (!link || linkBusy) return;
+    // несколько ссылок сразу — каждая по очереди
+    const ids = await call<number[]>("links_in_text", { text: link }).catch(() => [] as number[]);
+    if (ids.length > 1) {
+      linkInput.value = "";
+      return addMany(ids, linkMsg);
+    }
+    linkBusy = true;
     linkBtn.disabled = true;
     linkBtn.textContent = "Проверяем…";
     linkMsg.hidden = true;
     try {
-      const row = await call<RowDto>("add_by_link", { link });
-      rows = addLinkRow(rows, row);
-      owned = new Map(owned).set(row.track_id, { kind: "yes" });
-      setSelected(row.track_id, true);
+      takeLinkRow(await call<RowDto>("add_by_link", { link }));
       linkInput.value = "";
       renderChips();
       renderList();
@@ -628,8 +818,10 @@ register("choose", () => {
       linkMsg.textContent = errorText(asUiError(err));
       linkMsg.hidden = false;
     }
+    linkBusy = false;
     linkBtn.disabled = false;
     linkBtn.textContent = "Добавить";
+    takePending();
   }
 
   /** «Вернуть» или «Только скачать» (`downloadOnly`: в «Мои приложения», на телефон не ставить). */
@@ -662,6 +854,7 @@ register("choose", () => {
 
   async function load() {
     renderList();
+    state.newIds = new Set(await call<number[]>("release_badges").catch(() => [] as number[]));
     const phone = targetPhone();
     if (state.withPhone && phone) {
       try {
@@ -689,6 +882,7 @@ register("choose", () => {
     const ids = idsToCheck(rows);
     if (ids.length) await call("check_owned", { trackIds: ids });
     await loadPurchases();
+    takePending();
   }
 
   const heading = h("h2", { text: "Что вернуть" });
@@ -701,6 +895,9 @@ register("choose", () => {
       heading,
       h("label", { class: "searchbox" }, searchIcon(), search),
       h("p", { class: "hint", text: "Ищет в каталоге, ваших покупках, на телефоне и в App Store, в том числе по прежним названиям." }),
+      helpLink,
+      helpPanel,
+      dropMsg,
     ),
     chips,
     found,
@@ -735,6 +932,11 @@ register("choose", () => {
     onPhones,
     onPurchasesProgress,
     onPurchases,
+    onCatalogCheck,
+    onDrop,
+    onNewReleases: () => {
+      if (loaded) renderList();
+    },
     // Уход с «Выбора» останавливает проверку прав: пустой список отменяет идущую.
     leave: () => {
       clearTimeout(visibleTimer);

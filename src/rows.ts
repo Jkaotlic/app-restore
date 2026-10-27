@@ -1,5 +1,5 @@
 // Строки экрана «Выбор»: группы, поиск, проверка покупок. Чистые функции, без DOM.
-import type { OwnedEvent, PhoneDto, RowDto, UiError } from "./types";
+import type { OwnedEvent, PhoneDto, RowDto, SweepDto, UiError } from "./types";
 
 /** `gone` — Apple больше не отдаёт приложение (`app_gone`): окончательный ответ, как «нет». */
 export type OwnedState = { kind: "checking" } | { kind: "yes" } | { kind: "no" } | { kind: "gone" } | { kind: "error"; error: UiError };
@@ -375,4 +375,30 @@ export function replacePhoneRows(rows: RowDto[], incoming: RowDto[]): RowDto[] {
 export function purchasesForSource(current: RowDto[], incoming: RowDto[], tag: string | null, chosen: string | null): { rows: RowDto[]; stale: boolean } {
   if (chosen === null || tag === chosen) return { rows: incoming, stale: false };
   return { rows: replacePhoneRows(incoming, current.filter((r) => r.source === "phone")), stale: true };
+}
+
+/** «Проверено N из M» у «Проверить весь каталог»; `null` — не запускали. */
+export function sweepText(p: SweepDto | null): string | null {
+  if (!p) return null;
+  // команда ещё не ответила, сколько всего
+  if (p.running && p.total === 0) return "Проверяем…";
+  if (!p.running && p.checked >= p.total) return "Весь каталог проверен";
+  return `Проверено ${p.checked} из ${p.total}`;
+}
+
+/** Кнопка «Проверить весь каталог»: с входом, не во время проверки и пока есть что проверить. */
+export function showSweepButton(p: SweepDto | null, loggedIn: boolean): boolean {
+  return loggedIn && (!p || (!p.running && p.checked < p.total));
+}
+
+/** Бейдж «Новое»: запись каталога, о выпуске которой сказал Rust (`release_badges`). */
+export function isNewRow(r: RowDto, newIds: Set<number>): boolean {
+  return r.source === "removed" && newIds.has(r.track_id);
+}
+
+/** Перед проверкой всего каталога: его строки с ошибкой снова «проверяем…». */
+export function retryCatalogErrors(rows: RowDto[], map: OwnedMap): OwnedMap {
+  const m = new Map(map);
+  for (const r of rows) if (r.source === "removed" && m.get(r.track_id)?.kind === "error") m.set(r.track_id, { kind: "checking" });
+  return m;
 }

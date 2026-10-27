@@ -178,3 +178,19 @@ export interface ForgetDto {
   signed_out: boolean;
   error: UiError | null;
 }
+
+/** «Проверить весь каталог» (`check_catalog`, событие `catalog_check`): «проверено N из M».
+ * `running: false` — проверка кончилась или остановлена. */
+export interface SweepDto {
+  checked: number;
+  total: number;
+  running: boolean;
+}
+
+/** Событие `dropped`: что перетащили в окно. `no_files` — не файл (текст или ссылка из браузера). */
+export interface DropDto {
+  copies: CopyDto[];
+  ids: number[];
+  errors: UiError[];
+  no_files: boolean;
+}
