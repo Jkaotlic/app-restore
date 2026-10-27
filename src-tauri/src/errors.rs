@@ -11,6 +11,9 @@ pub enum AppError {
     CodeRejected,
     #[error("not purchased")]
     NotPurchased,
+    /// Apple больше не отдаёт приложение для скачивания: ни версии, ни записи в каталоге (HTTP 404).
+    #[error("app gone")]
+    AppGone,
     #[error("apple unavailable ({status:?})")]
     AppleUnavailable { status: Option<u16> },
     #[error("apple changed login")]
@@ -65,6 +68,7 @@ impl AppError {
                 "Apple не принял пароль или код. Проверьте и попробуйте снова.".into()
             }
             AppError::NotPurchased => "Не скачивалось с этого Apple ID".into(),
+            AppError::AppGone => "Apple больше не отдаёт это приложение для скачивания".into(),
             AppError::AppleUnavailable { .. } => {
                 "Серверы Apple сейчас не отвечают. Попробуйте через 10–15 минут.".into()
             }
@@ -143,6 +147,7 @@ mod tests {
         assert_eq!(AppError::DownloadsRunning.user_text(), "Дождитесь окончания скачивания");
         assert!(!AppError::Busy.user_text().contains("скачивает"), "Busy бывает и без скачивания");
         assert!(AppError::KeychainWaiting.user_text().contains("Разрешать всегда"));
+        assert_eq!(AppError::AppGone.user_text(), "Apple больше не отдаёт это приложение для скачивания");
         assert_eq!(AppError::BadLink.user_text(), "Это не ссылка на приложение. Нужна ссылка вида apps.apple.com/…/id123456789");
     }
 
@@ -151,6 +156,7 @@ mod tests {
         assert!(AppError::AppleUnavailable { status: None }.retryable());
         assert!(!AppError::WrongCredentials.retryable());
         assert!(!AppError::DeviceLocked.retryable());
+        assert!(!AppError::AppGone.retryable());
         assert!(!AppError::Unknown { detail: String::new() }.retryable());
     }
 }

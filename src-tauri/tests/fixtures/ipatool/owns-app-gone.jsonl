@@ -1,0 +1,1 @@
+{"level":"error","error":"failed to resolve latest iOS version for redownload: app 1466584968 in storefront RU (catalogs: enterprisestore, iphone, ipad): platform version lookup returned no app; iOS catalog fallback failed: iOS catalog lookup returned HTTP 404","success":false,"time":"2026-10-27T11:12:40+03:00"}

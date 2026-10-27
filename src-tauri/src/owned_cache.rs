@@ -19,6 +19,25 @@ pub struct Entry {
     /// Последняя версия у Apple из того же ответа (у «нет прав» её нет).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Apple больше не отдаёт приложение (`AppGone`): `owned = false`, плитка называет причину.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
+}
+
+impl Entry {
+    /// Ответ проверки прав для кэша; сбой (`None`) не кэшируется.
+    pub fn from_result(r: &Result<(bool, Option<String>), crate::errors::AppError>, now: u64) -> Option<Entry> {
+        match r {
+            Ok((owned, version)) => Some(Entry { owned: *owned, checked_at: now, version: version.clone(), gone: false }),
+            Err(crate::errors::AppError::AppGone) => Some(Entry { owned: false, checked_at: now, version: None, gone: true }),
+            Err(_) => None,
+        }
+    }
+
+    /// Обратно в ответ проверки: для события `owned` из кэша.
+    pub fn as_result(&self) -> Result<(bool, Option<String>), crate::errors::AppError> {
+        if self.gone { Err(crate::errors::AppError::AppGone) } else { Ok((self.owned, self.version.clone())) }
+    }
 }
 
 /// Apple ID → trackId → ответ.
@@ -102,7 +121,7 @@ pub fn stale_ids(entries: &HashMap<i64, Entry>, on_screen: &HashSet<i64>, now: u
 pub fn from_purchases(purchases: &[crate::ipatool::output::OwnedApp], now: u64) -> Vec<(i64, Entry)> {
     purchases
         .iter()
-        .map(|a| (a.id, Entry { owned: true, checked_at: now, version: Some(a.version.clone()).filter(|v| !v.is_empty()) }))
+        .map(|a| (a.id, Entry { owned: true, checked_at: now, version: Some(a.version.clone()).filter(|v| !v.is_empty()), gone: false }))
         .collect()
 }
 
@@ -172,7 +191,7 @@ mod tests {
     use super::*;
 
     fn e(owned: bool, at: u64) -> Entry {
-        Entry { owned, checked_at: at, version: None }
+        Entry { owned, checked_at: at, version: None, gone: false }
     }
 
     const NOW: u64 = 1_000_000_000;
@@ -249,7 +268,26 @@ mod tests {
     fn purchases_are_owned() {
         let a = |id, v: &str| crate::ipatool::output::OwnedApp { id, bundle_id: "com.example.a".into(), name: "A".into(), version: v.into(), platforms: vec![] };
         let got = from_purchases(&[a(1, "2.0"), a(2, "")], NOW);
-        assert_eq!(got, vec![(1, Entry { owned: true, checked_at: NOW, version: Some("2.0".into()) }), (2, e(true, NOW))]);
+        assert_eq!(got, vec![(1, Entry { owned: true, checked_at: NOW, version: Some("2.0".into()), gone: false }), (2, e(true, NOW))]);
+    }
+
+    #[test]
+    fn answers_to_entries_and_back() {
+        use crate::errors::AppError;
+        let ok = Entry::from_result(&Ok((true, Some("1.0".into()))), NOW).unwrap();
+        assert_eq!(ok, Entry { owned: true, checked_at: NOW, version: Some("1.0".into()), gone: false });
+        assert_eq!(ok.as_result(), Ok((true, Some("1.0".into()))));
+        // пропавшее у Apple кэшируется как «нет прав» с тем же TTL, но помнит причину
+        let gone = Entry::from_result(&Err(AppError::AppGone), NOW).unwrap();
+        assert_eq!(gone, Entry { owned: false, checked_at: NOW, version: None, gone: true });
+        assert_eq!(gone.as_result(), Err(AppError::AppGone));
+        assert!(fresh(&gone, NOW + TTL_SECS - 1) && !fresh(&gone, NOW + TTL_SECS));
+        // сбой не кэшируется
+        assert_eq!(Entry::from_result(&Err(AppError::Timeout), NOW), None);
+        // старый файл без поля `gone` читается; обычный ответ пишется без него
+        let d = parse(r#"{"a@example.com":{"1":{"owned":false,"checked_at":5}}}"#);
+        assert!(!d["a@example.com"][&1].gone);
+        assert!(!serde_json::to_string(&e(false, 5)).unwrap().contains("gone"));
     }
 
     #[test]

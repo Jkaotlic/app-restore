@@ -822,7 +822,7 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
     // ответы кэша — без ipatool, сразу
     st.apply_cached(&plan.cached.iter().cloned().collect(), epoch);
     for (id, e) in &plan.cached {
-        let ev = st.with_ctx(|ctx| owned_event(*id, &Ok((e.owned, e.version.clone())), ctx)).await;
+        let ev = st.with_ctx(|ctx| owned_event(*id, &e.as_result(), ctx)).await;
         if current(&st) {
             let _ = app.emit("owned", ev);
         }
@@ -838,29 +838,30 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
             let Some(i) = owned_cache::next_check(&queue, &st.visible.lock().unwrap()) else { return };
             let (id, stale) = queue.remove(i);
             let r = owned_result(st.session.latest_version(id).await);
+            // ответ (и «Apple больше не отдаёт» — как «нет прав»); сбой — `None`
+            let answer = Entry::from_result(&r, owned_cache::now());
             // ответ прежнего Apple ID новому не годится: эпоха — под замком прав
             {
                 let mut owned_map = st.owned.lock().unwrap();
                 if st.account_epoch.load(Ordering::SeqCst) != epoch {
                     return;
                 }
-                if let Ok((owned, latest)) = &r {
-                    owned_map.insert(id, *owned);
-                    if let Some(v) = latest {
+                if let Some(a) = &answer {
+                    owned_map.insert(id, a.owned);
+                    if let Some(v) = &a.version {
                         st.latest.lock().unwrap().insert(id, v.clone());
                     }
                 }
             }
-            if let (Ok((owned, latest)), Some(e)) = (&r, &email) {
-                let now = owned_cache::now();
-                st.owned_cache.put(e, [(id, Entry { owned: *owned, checked_at: now, version: latest.clone() })], now);
+            if let (Some(a), Some(e)) = (&answer, &email) {
+                st.owned_cache.put(e, [(id, a.clone())], a.checked_at);
             }
             let stop = r.as_ref().err().is_some_and(stops_owned_check);
             if let Err(e) = &r {
                 log_err(&format!("owns {id}"), e);
             }
             // перепроверка не вышла — плитка остаётся с ответом из кэша
-            if !(stale && r.is_err()) {
+            if !(stale && answer.is_none()) {
                 let ev = st.with_ctx(|ctx| owned_event(id, &r, ctx)).await;
                 if current(&st) {
                     let _ = h.emit("owned", ev);
@@ -899,7 +900,7 @@ pub async fn add_by_link(state: State<'_, AppState>, link: String) -> Result<Row
     state.owned.lock().unwrap().insert(id, true);
     if let Some(e) = state.current_email() {
         let now = owned_cache::now();
-        state.owned_cache.put(&e, [(id, Entry { owned: true, checked_at: now, version: latest.clone() })], now);
+        state.owned_cache.put(&e, [(id, Entry { owned: true, checked_at: now, version: latest.clone(), gone: false })], now);
     }
     if let Some(v) = latest {
         state.latest.lock().unwrap().insert(id, v);

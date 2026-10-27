@@ -66,6 +66,9 @@ fn map_error(raw: &str) -> AppError {
         AppError::AccountDisabled
     } else if has(&["something went wrong", "unsupported authentication redirect"]) {
         AppError::AppleChangedLogin
+    } else if has(&["platform version lookup returned no app", "catalog lookup returned http 404"]) {
+        // до `status_of`: пропавшее у Apple — не «серверы не отвечают», даже с кодом в тексте
+        AppError::AppGone
     } else if let Some(st) = status_of(&e) {
         AppError::AppleUnavailable { status: Some(st) }
     } else if has(&["too many requests", "service unavailable"]) {
@@ -271,6 +274,18 @@ mod tests {
             }
             o => panic!("{o:?}"),
         }
+    }
+
+    #[test]
+    fn app_gone_live_text_fixture() {
+        // живой ответ 27.10 (owns 1466584968): HTTP 404 — не «Apple не отвечает» и не Unknown
+        assert_eq!(parse_fx("owns-app-gone"), Err(AppError::AppGone));
+        for t in ["platform version lookup returned no app", "iOS catalog lookup returned HTTP 404"] {
+            assert_eq!(parse_output(&err_line(t), 1), Err(AppError::AppGone), "{t}");
+        }
+        // 5xx в том же тексте — всё равно приложение пропало, а не сбой Apple
+        let l = err_line("platform version lookup returned no app; fallback: unexpected status code 503");
+        assert_eq!(parse_output(&l, 1), Err(AppError::AppGone));
     }
 
     #[test]

@@ -26,6 +26,7 @@ fn code(e: &AppError) -> &'static str {
         AppError::WrongCredentials => "wrong_credentials",
         AppError::CodeRejected => "code_rejected",
         AppError::NotPurchased => "not_purchased",
+        AppError::AppGone => "app_gone",
         AppError::AppleUnavailable { .. } => "apple_unavailable",
         AppError::AppleChangedLogin => "apple_changed_login",
         AppError::NotLoggedIn => "not_logged_in",
@@ -486,7 +487,8 @@ pub fn owned_result(r: Result<Option<String>, AppError>) -> Result<(bool, Option
     }
 }
 
-/// Событие `owned`: `owned = null` и `error`, если проверить не вышло. Версии и отметка
+/// Событие `owned`: `owned = null` и `error`, если проверить не вышло; у пропавшего у Apple
+/// (`app_gone`) — `owned = false` и `error` с причиной. Версии и отметка
 /// посчитаны по строке каталога из `ctx` (кэш уже обновлён этим итогом).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct OwnedEvent {
@@ -502,6 +504,7 @@ pub fn owned_event(track_id: i64, r: &Result<(bool, Option<String>), AppError>, 
     let row = catalog_row(track_id, ctx);
     let (owned, error) = match r {
         Ok((o, _)) => (Some(*o), None),
+        Err(e @ AppError::AppGone) => (Some(false), Some(e.clone().into())),
         Err(e) => (None, Some(e.clone().into())),
     };
     // строка «С этого iPhone»: уже стоит, сама не отмечается
@@ -1080,6 +1083,7 @@ mod tests {
             AppError::WrongCredentials,
             AppError::CodeRejected,
             AppError::NotPurchased,
+            AppError::AppGone,
             AppError::AppleUnavailable { status: None },
             AppError::AppleChangedLogin,
             AppError::NotLoggedIn,
@@ -1354,6 +1358,17 @@ mod tests {
         assert_eq!(owned_result(Ok(None)), Ok((true, None)));
         assert_eq!(owned_result(Err(AppError::NotPurchased)), Ok((false, None)));
         assert_eq!(owned_result(Err(AppError::NotLoggedIn)), Err(AppError::NotLoggedIn));
+        // пропавшее у Apple — отдельный ответ, не «нет прав» и не сбой
+        assert_eq!(owned_result(Err(AppError::AppGone)), Err(AppError::AppGone));
+    }
+
+    #[test]
+    fn owned_event_app_gone_is_not_owned_with_reason() {
+        let c = Ctx::new(vec![removed(1, "A")]);
+        let e = owned_event(1, &Err(AppError::AppGone), &c.get());
+        assert_eq!((e.owned, e.checked), (Some(false), false));
+        let err = e.error.unwrap();
+        assert_eq!((err.code.as_str(), err.retryable), ("app_gone", false));
     }
 
     #[test]
