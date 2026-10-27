@@ -933,12 +933,14 @@ pub async fn check_owned(app: AppHandle, track_ids: Vec<i64>, recheck: Option<bo
 /// `catalog_check`; следующие `check_owned` проверку не прерывают, «стоп» и смена Apple ID — да.
 #[tauri::command]
 pub async fn check_catalog(app: AppHandle, state: State<'_, AppState>, track_ids: Vec<i64>) -> Result<SweepDto, UiError> {
+    // эпоха — до адреса: смена Apple ID между ними оставит проверку за прежним, то есть неактивной
+    let epoch = state.account_epoch.load(Ordering::SeqCst);
     let email = state.current_email().ok_or_else(|| ui("check_catalog", AppError::NotLoggedIn))?;
     let entries = state.owned_cache.entries(&email);
     let (checked, total) = owned_cache::sweep_progress(&state.catalog_ids().await, &entries, owned_cache::now());
     let running = checked < total;
     if running {
-        *state.sweep.lock().unwrap() = Some(state.account_epoch.load(Ordering::SeqCst));
+        *state.sweep.lock().unwrap() = Some(epoch);
     }
     run_checks(app.clone(), track_ids, true).await;
     Ok(SweepDto { checked, total, running })
