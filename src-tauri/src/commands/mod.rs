@@ -1,7 +1,7 @@
 //! Команды Tauri для интерфейса. Логика, которую стоит проверять, вынесена в `logic`;
 //! здесь тонкая склейка: состояние, вызовы модулей, события.
 //!
-//! События: `job` {track_id, state}, `owned` {track_id, owned, error, available_version,
+//! События: `job` {track_id, state}, `queue_paused` (bool), `owned` {track_id, owned, error, available_version,
 //! install_state, checked}, `phones` {phones, error}, `purchases_progress` {page, pages},
 //! `purchases` (RowsDto).
 //!
@@ -1224,6 +1224,29 @@ pub fn retry(app: AppHandle, state: State<'_, AppState>, track_id: i64) {
         }
         RetryAction::Nothing => {}
     }
+}
+
+/// «Пауза» очереди: новые задания не начинаются, идущее скачивание обрывается (ipatool
+/// останавливается, недокачанное удаляется) и становится «на паузе». Событие `queue_paused`.
+#[tauri::command]
+pub fn pause_queue(app: AppHandle, state: State<'_, AppState>) {
+    state.queue.pause();
+    crate::log::write("queue", "paused");
+    let _ = app.emit("queue_paused", true);
+}
+
+/// «Продолжить»: прерванное скачивание начинается заново, за ним остальные.
+#[tauri::command]
+pub fn resume_queue(app: AppHandle, state: State<'_, AppState>) {
+    state.queue.resume();
+    crate::log::write("queue", "resumed");
+    let _ = app.emit("queue_paused", false);
+}
+
+/// Очередь на паузе? Для экрана «Готово» при входе на него.
+#[tauri::command]
+pub fn queue_paused(state: State<'_, AppState>) -> bool {
+    state.queue.paused()
 }
 
 /// «Другая версия…»: страница версий приложения от новой к старой (`before` — external id

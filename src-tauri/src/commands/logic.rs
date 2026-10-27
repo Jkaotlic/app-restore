@@ -624,7 +624,7 @@ pub fn stops_owned_check(e: &AppError) -> bool {
 }
 
 /// Состояние задания для интерфейса. `kind`: queued, downloading, saved, installing, installed,
-/// failed, waiting.
+/// failed, waiting, paused.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum JobDto {
@@ -638,6 +638,8 @@ pub enum JobDto {
     Failed { error: UiError, saved: bool },
     /// Apple просит подождать (429/503): повтор скачивания через `seconds`.
     Waiting { seconds: u64 },
+    /// «Пауза» оборвала скачивание; после «Продолжить» начнётся заново.
+    Paused,
 }
 
 pub fn job_dto(s: &JobState) -> JobDto {
@@ -649,6 +651,7 @@ pub fn job_dto(s: &JobState) -> JobDto {
         JobState::Installed => JobDto::Installed,
         JobState::Failed { error, saved } => JobDto::Failed { error: error.clone().into(), saved: saved.is_some() },
         JobState::Waiting { seconds } => JobDto::Waiting { seconds: *seconds },
+        JobState::Paused => JobDto::Paused,
     }
 }
 
@@ -773,7 +776,7 @@ pub fn drop_pending(jobs: &mut HashMap<i64, JobState>, queue_dropped: &[i64]) ->
         .filter(|(id, _)| **id > 0)
         .filter(|(id, s)| match s {
             JobState::Saved { .. } => true,
-            JobState::Queued => queue_dropped.contains(id),
+            JobState::Queued | JobState::Paused => queue_dropped.contains(id),
             _ => false,
         })
         .map(|(id, _)| *id)
@@ -941,7 +944,7 @@ pub fn copy_job_id(path: &std::path::Path) -> i64 {
 /// «Повторить» у копии — всегда установка этого файла (скачивать нечего); идущую не повторяем.
 pub fn copy_retry(last: Option<&JobState>, path: &std::path::Path) -> RetryAction {
     match last {
-        Some(JobState::Queued | JobState::Downloading { .. } | JobState::Waiting { .. } | JobState::Installing { .. }) => RetryAction::Nothing,
+        Some(JobState::Queued | JobState::Downloading { .. } | JobState::Waiting { .. } | JobState::Paused | JobState::Installing { .. }) => RetryAction::Nothing,
         _ => RetryAction::Install(path.to_path_buf()),
     }
 }
@@ -956,15 +959,16 @@ pub fn account_changed(before: Option<&str>, after: Option<&str>) -> bool {
     }
 }
 
-/// Идёт ли скачивание по аккаунту: задание из `downloads` в `Queued`, `Downloading` или `Waiting`.
+/// Идёт ли скачивание по аккаунту: задание из `downloads` в `Queued`, `Downloading`, `Waiting`
+/// или `Paused` (ждёт «Продолжить»).
 /// Установки (копии, сохранённые копии каталога) ipatool не трогают и смене входа не мешают.
 pub fn downloads_running(jobs: &HashMap<i64, JobState>, downloads: &HashSet<i64>) -> bool {
-    downloads.iter().any(|id| matches!(jobs.get(id), Some(JobState::Queued | JobState::Downloading { .. } | JobState::Waiting { .. })))
+    downloads.iter().any(|id| matches!(jobs.get(id), Some(JobState::Queued | JobState::Downloading { .. } | JobState::Waiting { .. } | JobState::Paused)))
 }
 
 /// Скачивание кончилось (скачано, ошибка, дальше установка) — ключ больше не скачивание.
 pub fn track_download(downloads: &mut HashSet<i64>, id: i64, state: &JobState) {
-    if !matches!(state, JobState::Queued | JobState::Downloading { .. } | JobState::Waiting { .. }) {
+    if !matches!(state, JobState::Queued | JobState::Downloading { .. } | JobState::Waiting { .. } | JobState::Paused) {
         downloads.remove(&id);
     }
 }
@@ -1646,15 +1650,18 @@ mod tests {
         assert_eq!(serde_json::to_value(job_dto(&JobState::Waiting { seconds: 5 })).unwrap(), serde_json::json!({"kind":"waiting","seconds":5}));
     }
 
-    /// Пауза повтора после 429/503 — скачивание ещё идёт: вход не сменить, «Повторить» не нужен.
+    /// Пауза повтора после 429/503 и «Пауза» очереди — скачивание ещё не кончилось: вход не
+    /// сменить, «Повторить» не нужен (паузу снимает «Продолжить»).
     #[test]
-    fn waiting_for_apple_is_still_a_download() {
-        let waiting = JobState::Waiting { seconds: 10 };
-        let mut downloads = HashSet::from([1]);
-        track_download(&mut downloads, 1, &waiting);
-        assert!(downloads_running(&HashMap::from([(1, waiting.clone())]), &downloads));
-        assert_eq!(retry_action(Some(&waiting)), RetryAction::Nothing);
-        assert_eq!(copy_retry(Some(&waiting), std::path::Path::new("/x.ipa")), RetryAction::Nothing);
+    fn waiting_and_paused_are_still_downloads() {
+        for st in [JobState::Waiting { seconds: 10 }, JobState::Paused] {
+            let mut downloads = HashSet::from([1]);
+            track_download(&mut downloads, 1, &st);
+            assert!(downloads_running(&HashMap::from([(1, st.clone())]), &downloads), "{st:?}");
+            assert_eq!(retry_action(Some(&st)), RetryAction::Nothing);
+            assert_eq!(copy_retry(Some(&st), std::path::Path::new("/x.ipa")), RetryAction::Nothing);
+        }
+        assert_eq!(serde_json::to_value(job_dto(&JobState::Paused)).unwrap(), serde_json::json!({"kind":"paused"}));
     }
 
     #[test]
@@ -1897,6 +1904,14 @@ mod tests {
         left.sort();
         assert_eq!(left, vec![3, 4, 5, 6, 7], "идущую установку и итоги не трогаем");
         assert!(drop_pending(&mut jobs, &[]).is_empty());
+    }
+
+    /// Прерванное «Паузой» ждёт в очереди, как `Queued`: отброшено очередью — убирается.
+    #[test]
+    fn drop_pending_removes_paused_the_queue_dropped() {
+        let mut jobs: HashMap<i64, JobState> = [(1, JobState::Paused), (2, JobState::Paused)].into();
+        assert_eq!(drop_pending(&mut jobs, &[1]), vec![1]);
+        assert!(jobs.contains_key(&2));
     }
 
     #[test]

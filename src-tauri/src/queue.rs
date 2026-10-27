@@ -2,6 +2,9 @@
 //! Очередь: один рабочий поток делает скачивание, затем установку на телефон, строго
 //! последовательно (следующее скачивание ждёт конца предыдущей установки).
 //! Прогресс скачивания — опросом размера `.partial/<track_id>/`.
+//! «Пауза» (`pause`): новые задания не начинаются; идущее скачивание обрывается (ipatool
+//! останавливается, недокачанное удаляется) и после «Продолжить» (`resume`) начинается заново
+//! первым. Идущую установку на телефон пауза не прерывает.
 use crate::device::DeviceHub;
 use crate::errors::AppError;
 use crate::ipatool::session::Session;
@@ -10,7 +13,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 
 pub const MIN_FREE_MB: u64 = 500;
 pub const POLL: Duration = Duration::from_millis(500);
@@ -30,6 +33,8 @@ pub enum JobState {
     Failed { error: AppError, saved: Option<PathBuf> },
     /// Apple ответил 429/503: повтор скачивания через `seconds` (`retry::with_retry_notify`).
     Waiting { seconds: u64 },
+    /// «Пауза» оборвала скачивание: после «Продолжить» оно начнётся заново.
+    Paused,
 }
 
 /// Пауза повтора в целых секундах, с округлением вверх: «через 0 с» при паузе 300 мс не врёт.
@@ -73,6 +78,8 @@ pub struct Queue {
     target: Arc<Mutex<Option<String>>>,
     /// iOS подключённых телефонов (udid → ProductVersion): проверка перед установкой.
     ios: Arc<Mutex<HashMap<String, String>>>,
+    /// «Пауза»: `true` — новые задания не начинаются, идущее скачивание обрывается.
+    pause: watch::Sender<bool>,
 }
 
 /// Ставит сохранённую ipa на телефон; возвращает итоговое состояние. `Installed` только при `Ok`.
@@ -133,15 +140,15 @@ fn dir_size(dir: &Path) -> u64 {
         .unwrap_or(0)
 }
 
+/// Скачивание в библиотеку. `Ok(None)` — оборвала «Пауза» (недокачанное удалено).
 async fn run_job(
     id: i64,
     version: Option<&str>,
-    session: &Session,
-    library: &Library,
-    space: &dyn SpaceProbe,
-    idle: Duration,
+    w: &Worker,
+    mut pause: watch::Receiver<bool>,
     emit: &(dyn Fn(JobState) + Send + Sync),
-) -> Result<PathBuf, AppError> {
+) -> Result<Option<PathBuf>, AppError> {
+    let (session, library, space, idle) = (&w.session, &w.library, w.space.as_ref(), w.idle);
     let _ = std::fs::create_dir_all(library.base());
     // Если свободное место определить не вышло, не блокируем скачивание.
     match space.available_bytes(library.base()) {
@@ -167,7 +174,9 @@ async fn run_job(
         let (mut last, mut grew) = (0u64, tokio::time::Instant::now());
         loop {
             tokio::select! {
-                r = &mut download => break r,
+                r = &mut download => break Some(r),
+                // «Пауза»: `download` бросается ниже — ipatool убивается, как при простое
+                Ok(_) = pause.wait_for(|p| *p) => break None,
                 _ = tick.tick() => {
                     let bytes = dir_size(&partial);
                     // пока ждём очереди к ipatool или паузы повтора, часы простоя стоят, а прогресс
@@ -180,16 +189,21 @@ async fn run_job(
                     } else if grew.elapsed() >= idle {
                         // `download` бросается ниже: ipatool убивается, замок ipatool свободен
                         crate::log::write(&format!("job {id}"), &format!("download stalled at {bytes} bytes for {} s, stopped", idle.as_secs()));
-                        break Err(AppError::Timeout);
+                        break Some(Err(AppError::Timeout));
                     }
                     emit(JobState::Downloading { bytes });
                 }
             }
         }
     };
+    let Some(result) = result else {
+        let _ = std::fs::remove_dir_all(&partial);
+        crate::log::write(&format!("job {id}"), "paused, download stopped");
+        return Ok(None);
+    };
     let saved = result.and_then(|file| library.commit(&partial, &file));
     let _ = std::fs::remove_dir_all(&partial);
-    saved
+    saved.map(Some)
 }
 
 /// Всё, чем рабочий поток делает задания.
@@ -205,12 +219,13 @@ struct Worker {
 }
 
 /// Один job целиком: скачивание (если нужно), затем установка (если задан телефон).
-async fn process(job: Job, w: Worker, emit: Arc<dyn Fn(JobState) + Send + Sync>) {
-    let Worker { session, library, space, hub, tgt, ios, idle } = w;
+/// Скачивание оборвала «Пауза» — задание возвращается: его поставят снова первым.
+async fn process(job: Job, w: Worker, pause: watch::Receiver<bool>, emit: Arc<dyn Fn(JobState) + Send + Sync>) -> Option<Job> {
     // explicit: установку попросили прямо (`install_saved`) — без телефона это ошибка.
     let (saved, explicit) = match job {
-        Job::Download(id, only, version) => match run_job(id, version.as_deref(), &session, &library, space.as_ref(), idle, emit.as_ref()).await {
-            Ok(path) => {
+        Job::Download(id, only, version) => match run_job(id, version.as_deref(), &w, pause, emit.as_ref()).await {
+            Ok(None) => return Some(Job::Download(id, only, version)),
+            Ok(Some(path)) => {
                 emit(JobState::Saved { path: path.clone() });
                 ((!only).then_some((path, None)), false)
             }
@@ -221,6 +236,7 @@ async fn process(job: Job, w: Worker, emit: Arc<dyn Fn(JobState) + Send + Sync>)
         },
         Job::Install(_, path, device) => (Some((path, device)), true),
     };
+    let Worker { hub, tgt, ios, .. } = w;
     if let Some((path, device)) = saved {
         let udid = device.or_else(|| tgt.lock().unwrap().clone());
         // Без телефона скачанное остаётся в `Saved`; `install_saved` поставит позже.
@@ -229,6 +245,7 @@ async fn process(job: Job, w: Worker, emit: Arc<dyn Fn(JobState) + Send + Sync>)
             emit(run_install(hub.as_ref(), udid, phone_ios, &path, emit.as_ref()).await);
         }
     }
+    None
 }
 
 impl Queue {
@@ -258,11 +275,25 @@ impl Queue {
         let ev = events.clone();
         let ios: Arc<Mutex<HashMap<String, String>>> = Arc::default();
         let worker = Worker { session, library, space, hub, tgt: target.clone(), ios: ios.clone(), idle };
+        let (pause, mut paused) = watch::channel(false);
         tokio::spawn(async move {
-            while let Some((seq, job)) = rx.recv().await {
+            // прерванное «Паузой» — первым, раньше новых из канала
+            let mut back: Option<(u64, Job)> = None;
+            loop {
+                let (seq, job) = match back.take() {
+                    Some(j) => j,
+                    None => match rx.recv().await {
+                        Some(j) => j,
+                        None => break,
+                    },
+                };
                 let id = match &job {
                     Job::Download(id, _, _) | Job::Install(id, _, _) => *id,
                 };
+                // на паузе задание ждёт здесь и остаётся в `waiting`: `drop_pending` его видит
+                if paused.wait_for(|p| !*p).await.is_err() {
+                    break;
+                }
                 {
                     let mut p = current.lock().unwrap();
                     match p.waiting.iter().position(|(s, _)| *s == seq) {
@@ -277,13 +308,34 @@ impl Queue {
                     let _ = ev2.send((id, s));
                 });
                 // Работа в отдельной задаче: паника не должна убить очередь.
-                let work = tokio::spawn(process(job, worker.clone(), emit.clone()));
-                if work.await.is_err() {
-                    emit(JobState::Failed { error: AppError::Unknown { detail: "internal error".into() }, saved: None });
+                let work = tokio::spawn(process(job, worker.clone(), paused.clone(), emit.clone()));
+                match work.await {
+                    Ok(Some(job)) => {
+                        // снова ждёт: до события, чтобы смена Apple ID уже видела его в `waiting`
+                        current.lock().unwrap().waiting.push((seq, id));
+                        back = Some((seq, job));
+                        emit(JobState::Paused);
+                    }
+                    Ok(None) => {}
+                    Err(_) => emit(JobState::Failed { error: AppError::Unknown { detail: "internal error".into() }, saved: None }),
                 }
             }
         });
-        Self { tx, pending, events, target, ios }
+        Self { tx, pending, events, target, ios, pause }
+    }
+
+    /// «Пауза»: новые задания не начинаются; идущее скачивание обрывается (`JobState::Paused`).
+    pub fn pause(&self) {
+        self.pause.send_replace(true);
+    }
+
+    /// «Продолжить»: прерванное скачивание начинается заново, за ним остальные.
+    pub fn resume(&self) {
+        self.pause.send_replace(false);
+    }
+
+    pub fn paused(&self) -> bool {
+        *self.pause.borrow()
     }
 
     /// iOS подключённых телефонов (udid, ProductVersion) после опроса: по ней установка
@@ -899,6 +951,102 @@ mod tests {
         // пока ждём повтора, прогресс скачивания не перебивает «подождите»
         assert!(!matches!(s[wait + 1], JobState::Downloading { bytes: 0 }), "{s:?}");
         assert!(matches!(s.last().unwrap(), JobState::Saved { .. }));
+    }
+
+    /// Пауза до старта: новые задания не начинаются; «Продолжить» — идут по порядку.
+    #[tokio::test]
+    async fn pause_holds_new_jobs_until_resume() {
+        let r = ok_runner();
+        let (q, _t, _) = setup(r.clone(), 10 * GB);
+        let mut rx = q.subscribe();
+        q.pause();
+        assert!(q.paused());
+        q.enqueue(vec![(111, "A".into()), (222, "B".into())]);
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(r.calls.lock().unwrap().is_empty(), "на паузе ipatool не запускается");
+        q.resume();
+        assert!(!q.paused());
+        let ev = collect(&mut rx, 2).await;
+        assert!(matches!(of(&ev, 222).last().unwrap(), JobState::Saved { .. }));
+        assert_eq!(*r.calls.lock().unwrap(), [111, 222]);
+    }
+
+    /// Самый первый запуск висит (пока его не бросят), следующие — как DownloadRunner.
+    struct HangFirstRunner {
+        inner: DownloadRunner,
+        hung: std::sync::atomic::AtomicBool,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+    #[async_trait]
+    impl IpaRunner for HangFirstRunner {
+        async fn run(&self, args: &[String]) -> RunResult {
+            let track: i64 = args[args.iter().position(|a| a == "-i").unwrap() + 1].parse().unwrap();
+            if !self.hung.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                self.inner.calls.lock().unwrap().push(track);
+                let _g = OnDrop(self.dropped.clone());
+                let o = args.iter().position(|a| a == "-o").unwrap() + 1;
+                std::fs::write(Path::new(&args[o]).join("half.ipa.part"), vec![0u8; 10]).unwrap();
+                std::future::pending::<()>().await;
+            }
+            self.inner.run(args).await
+        }
+    }
+
+    /// «Пауза» посреди скачивания: ipatool остановлен, недокачанное удалено, задание «на паузе»;
+    /// «Продолжить» качает его заново первым, потом остальные.
+    #[tokio::test]
+    async fn pause_cancels_the_running_download_and_resume_restarts_it() {
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let r = Arc::new(HangFirstRunner { inner: DownloadRunner { fail: vec![], calls: Mutex::new(vec![]) }, hung: Default::default(), dropped: dropped.clone() });
+        let (q, _t, lib) = setup(r.clone(), 10 * GB);
+        let mut rx = q.subscribe();
+        q.enqueue(vec![(111, "A".into()), (222, "B".into())]);
+        while !lib.root().unwrap().join(".partial/111/half.ipa.part").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        q.pause();
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+            assert!(!matches!(ev.1, JobState::Failed { .. }), "пауза — не ошибка: {ev:?}");
+            if ev == (111, JobState::Paused) {
+                break;
+            }
+        }
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst), "ipatool остановлен");
+        assert!(!lib.root().unwrap().join(".partial/111").exists(), "недокачанное удалено");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(*r.inner.calls.lock().unwrap(), [111], "222 на паузе не начинается");
+        q.resume();
+        let ev = collect(&mut rx, 2).await;
+        assert!(matches!(of(&ev, 111).last().unwrap(), JobState::Saved { .. }));
+        assert!(matches!(of(&ev, 222).last().unwrap(), JobState::Saved { .. }));
+        assert_eq!(*r.inner.calls.lock().unwrap(), [111, 111, 222], "прерванное — первым");
+    }
+
+    /// Смена Apple ID на паузе: прерванное задание аккаунта тоже отбрасывается.
+    #[tokio::test]
+    async fn drop_pending_takes_the_paused_job_too() {
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let r = Arc::new(HangFirstRunner { inner: DownloadRunner { fail: vec![], calls: Mutex::new(vec![]) }, hung: Default::default(), dropped });
+        let (q, _t, lib) = setup(r.clone(), 10 * GB);
+        let mut rx = q.subscribe();
+        q.enqueue(vec![(111, "A".into())]);
+        while !lib.root().unwrap().join(".partial/111/half.ipa.part").exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        q.pause();
+        loop {
+            let ev = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.unwrap().unwrap();
+            if ev == (111, JobState::Paused) {
+                break;
+            }
+        }
+        assert_eq!(q.drop_pending(), vec![111]);
+        q.resume();
+        q.enqueue(vec![(222, "B".into())]);
+        let ev = collect(&mut rx, 1).await;
+        assert!(of(&ev, 111).is_empty(), "{ev:?}");
+        assert_eq!(*r.inner.calls.lock().unwrap(), [111, 222]);
     }
 
     #[test]
