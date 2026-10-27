@@ -107,7 +107,7 @@ register("login", () => {
     skipBox.hidden = true;
     note(null);
     const slow = setTimeout(() => note(loginWaitNote(LOGIN_SLOW_AFTER_S)), LOGIN_SLOW_AFTER_S * 1000);
-    const unlisten = await listen<string>("login_note", ({ payload }) => note(payload)).catch(() => () => undefined);
+    const unlisten = await listen<string | null>("keychain_note", ({ payload }) => note(payload)).catch(() => () => undefined);
     const done = () => {
       clearTimeout(slow);
       unlisten();

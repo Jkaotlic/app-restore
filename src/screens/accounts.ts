@@ -1,6 +1,6 @@
 // Шаг «Apple ID»: все, кто входил в программу или чьи копии лежат в «Мои приложения».
 import { asUiError, call, go, refreshSidebar, register, safe, state } from "../app";
-import { accountCopiesText, accountStatus, afterUseAccount, offersSkipSave, pickStatusText, skipSaveNote, staysOnRefusal } from "../copies";
+import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, skipSaveNote, staysOnRefusal } from "../copies";
 import { errorText } from "../labels";
 import { h } from "../dom";
 import type { Account, AccountEntry, UseAccountDto } from "../types";
@@ -53,7 +53,7 @@ register("accounts", () => {
       slow = true;
       render();
     }, 3000);
-    let res: UseAccountDto = { restored: false, account: state.account, prefill: a.email, dropped: [], error: null };
+    let res: UseAccountDto = { restored: false, account: state.account, prefill: a.email, dropped: [], error: null, can_skip_save: false };
     try {
       res = await call<UseAccountDto>("use_account", { email: a.email, skipSave });
     } catch (e) {
@@ -66,10 +66,18 @@ register("accounts", () => {
     slow = false;
     const next = afterUseAccount(res);
     if (next === "stay") {
-      // нынешний вход не сохранился — ничего не меняли
+      // нынешний вход не сохранился — ничего не меняли; или запись входа ещё ждёт окна macOS —
+      // тогда программа пока без входа (Rust сообщит событием `account`, когда допишется)
+      if (!res.error || res.error.code !== "busy") {
+        const was = state.account?.email ?? null;
+        if (was && (!res.account || !sameId(was, res.account.email))) resetForAccount(res.dropped);
+        state.account = res.account;
+        refreshSidebar();
+      }
       msg.textContent = res.error ? errorText(res.error) : "";
       msg.hidden = false;
-      if (offersSkipSave(res.error)) {
+      // только если не сохранился нынешний вход: при прочих сбоях «без сохранения» не поможет
+      if (res.can_skip_save) {
         const skip = h("button", {
           class: "btn ghost small",
           text: "Перейти без сохранения",

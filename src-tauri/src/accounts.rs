@@ -500,7 +500,7 @@ pub enum Saved {
 }
 
 /// Итог выбора аккаунта: вошли снимком или нужен вход с подставленным адресом.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct UseOutcome {
     pub restored: bool,
     /// Вход ipatool после смены (при `restored`).
@@ -509,22 +509,17 @@ pub struct UseOutcome {
     /// неудаче — ipatool чистый, без входа.
     pub kept: bool,
     pub error: Option<crate::errors::AppError>,
-}
-
-/// Работа с хранилищами под замком ipatool: ни один его запуск не читает вход, пока его меняем.
-/// Связка ключей не ответила в срок — `Err(KeychainWaiting)` (`Session::exclusive`).
-async fn quiet<T: Send + 'static>(session: &Session, f: impl FnOnce() -> T + Send + 'static) -> Result<T, AppError> {
-    session.exclusive(f).await
+    /// Ошибка — на шаге сохранения нынешнего входа: «Перейти без сохранения» поможет.
+    pub save_failed: bool,
+    /// Шаг со связкой ключей ещё доделывается в фоне: вход ipatool может смениться позже,
+    /// его надо сверить, когда шаг кончится (`Session::info` дождётся очереди).
+    pub unsettled: bool,
 }
 
 /// Снимок нынешнего входа под `email` (до того, как ipatool его перезапишет). Ошибки — в лог.
 /// `SaveSessionFailed` — хранилище отказало (например, «Запретить» в окне macOS);
 /// `KeychainWaiting` — окно разрешения ждёт ответа, снимок отменён; `Busy` — очередь к ipatool.
-pub async fn save_current(session: &Session, sessions: &Arc<Sessions>, email: &str) -> Result<(), AppError> {
-    save_current_hinted(session, sessions, email, &|| {}).await
-}
-
-/// `save_current`; `on_slow` — подсказка про окно macOS, пока ждём связку ключей.
+/// `on_slow` — подсказка про окно macOS, пока ждём связку ключей.
 pub async fn save_current_hinted(session: &Session, sessions: &Arc<Sessions>, email: &str, on_slow: &(dyn Fn() + Send + Sync)) -> Result<(), AppError> {
     let (s, e) = (sessions.clone(), email.to_string());
     match session.exclusive_cancelable(move |cancel| s.save_unless(&e, cancel), on_slow).await {
@@ -581,26 +576,34 @@ fn stale(e: &crate::errors::AppError) -> bool {
 /// мёртвый вход — «нужен вход». Сеть недоступна на шаге 3 — вход оставляем.
 #[cfg(test)]
 pub async fn switch_to(session: &Session, sessions: &Arc<Sessions>, current: Option<&str>, email: &str) -> UseOutcome {
-    switch_to_with(session, sessions, current, email, false).await
+    switch_to_with(session, sessions, current, email, false, &|| {}).await
 }
 
 /// `switch_to`; `skip_save` — прежний вход не сохранять («Перейти без сохранения»), он в списке
-/// «нужен вход». Связка ключей ждёт окна разрешения — `KeychainWaiting` в `error`.
-pub async fn switch_to_with(session: &Session, sessions: &Arc<Sessions>, current: Option<&str>, email: &str, skip_save: bool) -> UseOutcome {
-    let kept = |error| UseOutcome { restored: false, account: None, kept: true, error };
+/// «нужен вход». Связка ключей ждёт окна разрешения — `on_slow` (подсказка) через
+/// `keychain_hint`, а по сроку `KeychainWaiting` в `error`.
+pub async fn switch_to_with(
+    session: &Session,
+    sessions: &Arc<Sessions>,
+    current: Option<&str>,
+    email: &str,
+    skip_save: bool,
+    on_slow: &(dyn Fn() + Send + Sync),
+) -> UseOutcome {
+    let kept = |error| UseOutcome { kept: true, error, ..Default::default() };
     if let Some(cur) = current {
         if same_id(cur, email) {
             if let Ok(Some(acc)) = session.info().await
                 && same_id(&acc.email, email)
             {
-                return UseOutcome { restored: true, account: Some(acc), kept: false, error: None };
+                return UseOutcome { restored: true, account: Some(acc), ..Default::default() };
             }
-        } else if let Err(e) = prepare_login(session, sessions, Some(cur), email, skip_save, &|| {}).await {
-            return kept(Some(e));
+        } else if let Err(e) = prepare_login(session, sessions, Some(cur), email, skip_save, on_slow).await {
+            return UseOutcome { save_failed: true, ..kept(Some(e)) };
         }
     }
     let (s, e) = (sessions.clone(), email.to_string());
-    let snap = match quiet(session, move || s.snapshot_of(&e)).await {
+    let snap = match session.exclusive_hinted(move || s.snapshot_of(&e), on_slow).await {
         Ok(Ok(Some(raw))) => raw,
         Ok(Ok(None)) => return kept(None),
         Ok(Err(err)) => {
@@ -608,11 +611,11 @@ pub async fn switch_to_with(session: &Session, sessions: &Arc<Sessions>, current
             sessions.drop_snapshot(email);
             return kept(None);
         }
-        // ждём окно разрешения: снимок не трогаем, он, скорее всего, цел
+        // ждём окно разрешения: снимок не трогаем, он, скорее всего, цел; чтение ничего не меняет
         Err(e) => return kept(Some(e)),
     };
     let s = sessions.clone();
-    let before = match quiet(session, move || s.capture()).await {
+    let before = match session.exclusive_hinted(move || s.capture(), on_slow).await {
         Ok(Ok(raw)) => raw,
         Ok(Err(err)) => {
             crate::log::write("restore session", &err);
@@ -623,19 +626,22 @@ pub async fn switch_to_with(session: &Session, sessions: &Arc<Sessions>, current
     let rollback = |before: Raw| {
         let s = sessions.clone();
         async move {
-            let ok = quiet(session, move || s.rollback(&before)).await.unwrap_or(false);
-            UseOutcome { restored: false, account: None, kept: ok, error: None }
+            match session.exclusive_hinted(move || s.rollback(&before), on_slow).await {
+                Ok(ok) => UseOutcome { kept: ok, ..Default::default() },
+                // откат ещё пишет: каким будет вход, узнаем, когда допишет
+                Err(e) => UseOutcome { error: Some(e), unsettled: true, ..Default::default() },
+            }
         }
     };
     let s = sessions.clone();
-    match quiet(session, move || s.apply(&snap)).await {
+    match session.exclusive_hinted(move || s.apply(&snap), on_slow).await {
         Ok(Ok(())) => {}
         Ok(Err(err)) => {
             crate::log::write("restore session", &err);
             return rollback(before).await;
         }
         // запись ещё ждёт окна и доделается сама: каким будет вход, заранее не знаем
-        Err(e) => return UseOutcome { restored: false, account: None, kept: false, error: Some(e) },
+        Err(e) => return UseOutcome { error: Some(e), unsettled: true, ..Default::default() },
     }
     let acc = match session.info().await {
         Ok(Some(acc)) if same_id(&acc.email, email) => acc,
@@ -661,7 +667,7 @@ pub async fn switch_to_with(session: &Session, sessions: &Arc<Sessions>, current
                 // сеть или серверы Apple: вход оставляем, его проверит первый же запрос
                 crate::log::write("token check", &format!("{e}"));
             }
-            UseOutcome { restored: true, account: Some(acc), kept: false, error: None }
+            UseOutcome { restored: true, account: Some(acc), ..Default::default() }
         }
     }
 }
@@ -716,6 +722,8 @@ pub(crate) mod fake {
         pub fail_cookies: AtomicU32,
         /// Чтение записи висит столько (окно разрешения macOS, которого никто не видит).
         pub read_hang: Mutex<Option<std::time::Duration>>,
+        /// Запись `account` висит столько.
+        pub write_hang: Mutex<Option<std::time::Duration>>,
     }
     fn take(n: &AtomicU32) -> bool {
         n.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_sub(1)).is_ok()
@@ -734,6 +742,10 @@ pub(crate) mod fake {
             Ok(self.account.lock().unwrap().clone())
         }
         fn write_account(&self, data: &[u8]) -> Result<(), String> {
+            let hang = *self.write_hang.lock().unwrap();
+            if let Some(d) = hang {
+                std::thread::sleep(d);
+            }
             if take(&self.fail_account) {
                 return Err("keychain write failed".into());
             }
@@ -1191,9 +1203,39 @@ mod tests {
         e.store.fail_sets.store(true, Ordering::SeqCst);
         e.s.remember(ME);
         let r = Arc::new(FakeRunner::new(vec![info(OTHER), token_ok()]));
-        let out = switch_to_with(&session(&r), &e.s, Some(ME), OTHER, true).await;
+        let out = switch_to_with(&session(&r), &e.s, Some(ME), OTHER, true, &|| {}).await;
         assert!(out.restored && out.error.is_none());
         assert!(e.s.known().contains(&(ME.to_string(), false)));
+    }
+
+    /// «Перейти без сохранения» предлагается, только когда не сохранился нынешний вход.
+    #[tokio::test]
+    async fn save_failure_is_marked_skippable_others_are_not() {
+        let e = env(None, CHUNK_MAC);
+        e.me_now_other_saved();
+        e.store.fail_sets.store(true, Ordering::SeqCst);
+        let r = Arc::new(FakeRunner::new(vec![]));
+        let out = switch_to(&session(&r), &e.s, Some(ME), OTHER).await;
+        assert!(out.save_failed && !out.unsettled);
+        // снимок читается дольше срока — это не сохранение, «без сохранения» не поможет
+        let e = env(None, CHUNK_MAC);
+        e.me_now_other_saved();
+        let r = Arc::new(FakeRunner::new(vec![]));
+        let s = session(&r).with_limits(fast_limits());
+        let slow_store = e.s.clone();
+        *e.auth.write_hang.lock().unwrap() = Some(std::time::Duration::from_millis(300));
+        let hinted = std::sync::atomic::AtomicU32::new(0);
+        let hint = || {
+            hinted.fetch_add(1, Ordering::SeqCst);
+        };
+        let out = switch_to_with(&s, &slow_store, Some(ME), OTHER, false, &hint).await;
+        assert_eq!(out.error, Some(AppError::KeychainWaiting));
+        assert!(!out.save_failed, "сохранить вышло, повисла запись снимка");
+        assert!(out.unsettled, "вход ipatool ещё может смениться");
+        assert!(hinted.load(Ordering::SeqCst) >= 1, "подсказка про окно macOS");
+        // запись доделалась в фоне: ipatool уже во входе OTHER, а следующий запуск ждал её
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert_eq!(e.auth.state().account, Some(b"token-other".to_vec()));
     }
 
     #[tokio::test]

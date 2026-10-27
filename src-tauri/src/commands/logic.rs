@@ -668,11 +668,13 @@ pub struct UseAccountDto {
     pub dropped: Vec<i64>,
     /// Ничего не меняли: «Не получилось сохранить вход текущего Apple ID».
     pub error: Option<UiError>,
+    /// Ошибка на шаге сохранения нынешнего входа: можно «Перейти без сохранения».
+    pub can_skip_save: bool,
 }
 
 pub fn use_account_dto(out: crate::accounts::UseOutcome, email: &str) -> UseAccountDto {
     let prefill = (!out.restored && out.error.is_none()).then(|| email.trim().to_string());
-    UseAccountDto { restored: out.restored, account: out.account, prefill, dropped: vec![], error: None }
+    UseAccountDto { restored: out.restored, account: out.account, prefill, dropped: vec![], error: None, can_skip_save: out.save_failed }
 }
 
 #[cfg(test)]
@@ -1363,12 +1365,15 @@ mod tests {
         use crate::accounts::UseOutcome;
         use crate::ipatool::session::Account;
         let acc = Account { email: "me@example.com".into(), name: "Me".into() };
-        let ok = use_account_dto(UseOutcome { restored: true, account: Some(acc.clone()), kept: false, error: None }, "me@example.com");
-        assert_eq!(ok, UseAccountDto { restored: true, account: Some(acc), prefill: None, dropped: vec![], error: None });
-        let no = use_account_dto(UseOutcome { restored: false, account: None, kept: false, error: None }, " other@example.com ");
-        assert_eq!(no, UseAccountDto { restored: false, account: None, prefill: Some("other@example.com".into()), dropped: vec![], error: None });
+        let ok = use_account_dto(UseOutcome { restored: true, account: Some(acc.clone()), ..Default::default() }, "me@example.com");
+        assert_eq!(ok, UseAccountDto { restored: true, account: Some(acc), prefill: None, dropped: vec![], error: None, can_skip_save: false });
+        let no = use_account_dto(UseOutcome::default(), " other@example.com ");
+        assert_eq!(no, UseAccountDto { restored: false, account: None, prefill: Some("other@example.com".into()), dropped: vec![], error: None, can_skip_save: false });
         // не сохранили нынешний вход — остаёмся, без подстановки
-        let err = use_account_dto(UseOutcome { restored: false, account: None, kept: true, error: Some(AppError::SaveSessionFailed) }, "other@example.com");
+        let err = use_account_dto(UseOutcome { kept: true, error: Some(AppError::SaveSessionFailed), save_failed: true, ..Default::default() }, "other@example.com");
         assert_eq!(err.prefill, None);
+        assert!(err.can_skip_save);
+        let waiting = use_account_dto(UseOutcome { error: Some(AppError::KeychainWaiting), unsettled: true, ..Default::default() }, "other@example.com");
+        assert!(!waiting.can_skip_save, "повисла запись снимка, не сохранение — «без сохранения» не поможет");
     }
 }

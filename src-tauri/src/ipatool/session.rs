@@ -146,6 +146,15 @@ impl Session {
         self.exclusive_inner(move |_| f(), false, &|| {}).await
     }
 
+    /// `exclusive` с подсказкой `on_slow` через `keychain_hint` (окно macOS); ожидание идёт дальше.
+    pub async fn exclusive_hinted<T: Send + 'static>(
+        &self,
+        f: impl FnOnce() -> T + Send + 'static,
+        on_slow: &(dyn Fn() + Send + Sync),
+    ) -> Result<T, AppError> {
+        self.exclusive_inner(move |_| f(), false, on_slow).await
+    }
+
     /// Как `exclusive`, но по истечении срока замок отпускается сразу, а `f` получает отмену
     /// (`true` во флаге): после неё `f` ничего не должен записывать. Для снимка перед входом:
     /// вход тогда может идти дальше без него. `on_slow` — один раз через `keychain_hint`, если

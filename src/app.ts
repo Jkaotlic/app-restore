@@ -40,6 +40,8 @@ export interface State {
   phones: PhoneDto[];
   phonesError: UiError | null;
   update: string | null;
+  /** macOS ждёт разрешения Связки ключей (`keychain_note`): подсказка в боковой панели. */
+  keychainNote: string | null;
 }
 
 let markReady: () => void = () => undefined;
@@ -65,6 +67,7 @@ export const state: State = {
   phones: [],
   phonesError: null,
   update: null,
+  keychainNote: null,
 };
 
 /** Что экран хочет знать о событиях, пока он на виду. */
@@ -166,6 +169,7 @@ function sidebar(screen: Screen): HTMLElement {
     state.account ? openLibraryButton() : null,
     openLogButton(),
     state.update ? h("div", { class: "update", text: `Есть новая версия ${state.update}` }) : null,
+    state.keychainNote ? h("div", { class: "update", text: state.keychainNote, attrs: { role: "status" } }) : null,
   );
   return h("nav", { class: "steps" }, h("div", { class: "brand" }, "Вернуть", h("br"), "приложения"), h("ol", {}, ...items), copies, foot);
 }

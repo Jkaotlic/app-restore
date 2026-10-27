@@ -144,4 +144,6 @@ export interface UseAccountDto {
   dropped: number[];
   /** Ничего не меняли (не сохранился нынешний вход): показать и остаться. */
   error: UiError | null;
+  /** Ошибка на шаге сохранения нынешнего входа: можно «Перейти без сохранения». */
+  can_skip_save: boolean;
 }

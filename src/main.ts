@@ -21,6 +21,16 @@ async function wire(): Promise<void> {
   await listen<OwnedEvent>("owned", ({ payload }) => currentScreen()?.onOwned?.(payload));
   await listen<PurchasesProgress>("purchases_progress", ({ payload }) => currentScreen()?.onPurchasesProgress?.(payload));
   await listen<RowsDto>("purchases", ({ payload }) => currentScreen()?.onPurchases?.(payload));
+  // окно Связки ключей macOS ждёт ответа (вход, снимок после входа, смена Apple ID); null — всё
+  await listen<string | null>("keychain_note", ({ payload }) => {
+    state.keychainNote = payload;
+    refreshSidebar();
+  });
+  // вход ipatool определился после шага со Связкой ключей, который доделывался в фоне
+  await listen<Account | null>("account", ({ payload }) => {
+    state.account = payload;
+    refreshSidebar();
+  });
   await listen<PhonesEvent>("phones", ({ payload }) => {
     state.phones = payload.phones;
     state.phonesError = payload.error;

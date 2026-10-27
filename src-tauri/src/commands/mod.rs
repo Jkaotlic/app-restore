@@ -13,7 +13,7 @@
 //! `copy_account_match`): любая ipa из «Мои приложения» на любой телефон, без входа тоже.
 pub mod logic;
 
-use crate::accounts::{Sessions, account_list, same_id, save_current};
+use crate::accounts::{Sessions, account_list, same_id};
 use crate::device::{AccountMatch, DeviceHub, InstalledApp, PhoneInfo, account_match, idevice_impl::IdeviceHub};
 use crate::errors::AppError;
 use crate::ipatool::runner::SidecarRunner;
@@ -41,6 +41,19 @@ fn log_err(context: &str, e: &AppError) {
         Some(r) => crate::log::write(context, &format!("[{r}] {e}")),
         None => crate::log::write(context, &format!("{e}")),
     }
+}
+
+/// Подсказка про окно Связки ключей macOS — событие `keychain_note` (текст), видно на любом
+/// экране. Ожидание при этом идёт дальше; `keychain_done` убирает подсказку.
+fn keychain_hint<R: Runtime>(app: &AppHandle<R>) -> impl Fn() + Send + Sync + use<R> {
+    let app = app.clone();
+    move || {
+        let _ = app.emit("keychain_note", Some(AppError::KeychainWaiting.user_text()));
+    }
+}
+
+fn keychain_done<R: Runtime>(app: &AppHandle<R>) {
+    let _ = app.emit("keychain_note", None::<String>);
 }
 
 fn ui(context: &str, e: AppError) -> UiError {
@@ -380,22 +393,23 @@ pub async fn login(
     if before.is_some() {
         crate::log::write("login", &format!("{who}: saving previous session"));
     }
-    // окно разрешения macOS: подсказка экрану входа, ожидание идёт дальше
-    let hint = || {
-        let _ = app.emit("login_note", AppError::KeychainWaiting.user_text());
-    };
-    crate::accounts::prepare_login(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false), &hint)
-        .await
-        .map_err(|e| ui("login", e))?;
+    // окно разрешения macOS: подсказка на экране, ожидание идёт дальше
+    let prepared = crate::accounts::prepare_login(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false), &keychain_hint(&app)).await;
+    keychain_done(&app);
+    prepared.map_err(|e| ui("login", e))?;
     crate::log::write("login", &format!("{who}: asking Apple"));
     // `password` уходит из памяти вместе с аргументами по выходу из функции (без затирания).
     let acc = state.session.login(&email, &password, normalize_code(code)).await.map_err(|e| ui("login", e))?;
     crate::log::write("login", &format!("{who}: signed in"));
     state.sessions.remember(&acc.email);
     // Снимок нового входа — в фоне: окно разрешения macOS не держит экран на «Входим…».
-    let (session, sessions, saved_email) = (state.session.clone(), state.sessions.clone(), acc.email.clone());
+    // Первое чтение записи ipatool этой программой — тут: окно macOS вероятнее всего здесь,
+    // поэтому подсказка та же, что перед входом (на «Выборе» видна в боковой панели).
+    let (session, sessions, saved_email, h) = (state.session.clone(), state.sessions.clone(), acc.email.clone(), app.clone());
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = save_current(&session, &sessions, &saved_email).await {
+        let r = crate::accounts::save_current_hinted(&session, &sessions, &saved_email, &keychain_hint(&h)).await;
+        keychain_done(&h);
+        if let Err(e) = r {
             log_err("login: save new session", &e);
         }
     });
@@ -459,7 +473,7 @@ pub struct SwitchDto {
 /// очередь ещё не взяла; идущую установку не трогаем), прав, версий и итога прошлого запуска.
 /// Адрес не логируется.
 #[tauri::command]
-pub async fn switch_account(state: State<'_, AppState>) -> Result<SwitchDto, UiError> {
+pub async fn switch_account(app: AppHandle, state: State<'_, AppState>) -> Result<SwitchDto, UiError> {
     // выход из ipatool посреди скачивания: скачивание осталось бы без входа
     if downloads_running(&state.jobs.lock().unwrap(), &state.downloads.lock().unwrap()) {
         return Err(ui("switch_account", AppError::DownloadsRunning));
@@ -471,11 +485,13 @@ pub async fn switch_account(state: State<'_, AppState>) -> Result<SwitchDto, UiE
     };
     let gone = state.drop_waiting();
     // Прежний вход остаётся в списке «Apple ID» снимком (не вышло — «нужен вход»).
-    if let Some(cur) = state.current_email()
-        && let Err(e) = save_current(&state.session, &state.sessions, &cur).await
-    {
-        log_err("switch_account: save session", &e);
-        state.sessions.mark_unsaved(&cur);
+    if let Some(cur) = state.current_email() {
+        let r = crate::accounts::save_current_hinted(&state.session, &state.sessions, &cur, &keychain_hint(&app)).await;
+        keychain_done(&app);
+        if let Err(e) = r {
+            log_err("switch_account: save session", &e);
+            state.sessions.mark_unsaved(&cur);
+        }
     }
     // Не вышло выйти — всё равно ведём на вход: новый вход заменит сессию.
     if let Err(e) = state.sign_out().await {
@@ -730,10 +746,11 @@ pub fn list_accounts(state: State<'_, AppState>) -> Vec<crate::accounts::Account
 /// `restored: false` и адрес для поля входа. Смена аккаунта убирает ждущие задания.
 /// `skip_save`: «Перейти без сохранения» — прежний вход не сохранять (он станет «нужен вход»).
 #[tauri::command]
-pub async fn use_account(state: State<'_, AppState>, email: String, skip_save: Option<bool>) -> Result<UseAccountDto, UiError> {
+pub async fn use_account(app: AppHandle, state: State<'_, AppState>, email: String, skip_save: Option<bool>) -> Result<UseAccountDto, UiError> {
     state.may_switch(&email).map_err(|e| ui("use_account", e))?;
     let before = state.current_email();
-    let out = crate::accounts::switch_to_with(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false)).await;
+    let out = crate::accounts::switch_to_with(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false), &keychain_hint(&app)).await;
+    keychain_done(&app);
     let error = out.error.clone().map(|e| ui("use_account", e));
     // Не вошли, но вход ipatool как был (`kept`) — программа остаётся в прежнем аккаунте.
     let now = if out.restored {
@@ -754,11 +771,40 @@ pub async fn use_account(state: State<'_, AppState>, email: String, skip_save: O
         let _ = tauri::async_runtime::spawn_blocking(move || lib.migrate()).await;
     }
     state.set_account(now.clone());
+    if out.unsettled {
+        reconcile_account(&app);
+    }
     let mut dto = use_account_dto(out, &email);
     dto.account = now;
     dto.dropped = dropped;
     dto.error = error;
     Ok(dto)
+}
+
+/// Запись входа ещё доделывается в фоне (окно macOS): когда допишется, `auth info` (он ждёт
+/// своей очереди) скажет, в каком входе ipatool, — программа берёт его и шлёт `account`.
+/// До этого программа «без входа»: честнее, чем показывать вход, которого может не быть.
+fn reconcile_account<R: Runtime>(app: &AppHandle<R>) {
+    let h = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let st = h.state::<AppState>();
+        let acc = match st.session.info().await {
+            Ok(a) => a.filter(|a| !st.sessions.is_forgotten(&a.email)),
+            Err(e) => {
+                log_err("reconcile account", &e);
+                return;
+            }
+        };
+        if st.current_email().is_some() {
+            return; // человек уже вошёл заново — его вход главнее
+        }
+        crate::log::write("reconcile account", if acc.is_some() { "ipatool signed in after the keychain step" } else { "ipatool not signed in" });
+        if let Some(a) = &acc {
+            st.sessions.remember(&a.email);
+        }
+        st.set_account(acc.clone());
+        let _ = h.emit("account", acc);
+    });
 }
 
 /// «Забыть»: удалить сохранённую сессию и адрес из списка. Копии остаются. Нынешний вход —

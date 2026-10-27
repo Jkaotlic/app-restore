@@ -104,10 +104,10 @@ describe("showCopiesLink", () => {
 describe("afterUseAccount", () => {
   const acc = { email: "me@example.com", name: "Me" };
   it("restored → iPhone; not restored → login; save failed → stay", () => {
-    expect(afterUseAccount({ restored: true, account: acc, prefill: null, dropped: [], error: null })).toBe("phone");
-    expect(afterUseAccount({ restored: false, account: null, prefill: "o@example.com", dropped: [], error: null })).toBe("login");
+    expect(afterUseAccount({ restored: true, account: acc, prefill: null, dropped: [], can_skip_save: false, error: null })).toBe("phone");
+    expect(afterUseAccount({ restored: false, account: null, prefill: "o@example.com", dropped: [], can_skip_save: false, error: null })).toBe("login");
     const err = { code: "save_session_failed", text: "Не получилось сохранить вход текущего Apple ID", retryable: false };
-    expect(afterUseAccount({ restored: false, account: acc, prefill: null, dropped: [], error: err })).toBe("stay");
+    expect(afterUseAccount({ restored: false, account: acc, prefill: null, dropped: [], can_skip_save: false, error: err })).toBe("stay");
   });
 });
 
