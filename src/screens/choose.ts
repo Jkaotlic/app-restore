@@ -154,7 +154,7 @@ register("choose", () => {
       "button",
       {
         class: "tile",
-        attrs: { type: "button", "aria-pressed": String(enabled && selected.has(r.track_id)), title: `${r.name} — ${line.text}${line.up ?? ""}` },
+        attrs: { type: "button", "aria-pressed": String(enabled && selected.has(r.track_id)), title: `${r.name} — ${line.text}${line.up ?? ""}${line.note ? ` · ${line.note}` : ""}` },
         on: {
           click: safe(async () => {
             if (line.tone === "retry") return recheck(r.track_id);
@@ -165,7 +165,7 @@ register("choose", () => {
         },
       },
       appIcon(r),
-      h("span", { class: "tt" }, h("span", { class: "nm", text: r.name }), ver),
+      h("span", { class: "tt" }, h("span", { class: "nm", text: r.name }), ver, line.note ? h("span", { class: "ver note", text: line.note }) : null),
       h("span", { class: "tbox", attrs: { "aria-hidden": "true" } }),
     );
     tile.dataset.id = String(r.track_id);

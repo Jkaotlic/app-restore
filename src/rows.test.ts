@@ -269,6 +269,11 @@ describe("tileLine and canSelect", () => {
     expect(tileLine(cat(1, "VK для iPad", { ipad_only: true }), yes, true, true)).toEqual({ text: "только для iPad", tone: "warn" });
     expect(tileLine(row(60, "О", { source: "phone", other_account: true, installed_version: "1" }), undefined, false, true)).toEqual({ text: "Куплено на другом Apple ID", tone: "warn" });
   });
+  it("an unknown Apple ID copy says so even when its version is known (Rust fills available_version from the copy)", () => {
+    const u = row(5, "com.example.u", { source: "saved", unknown_account: true, has_saved_copy: true, available_version: "3.2" });
+    expect(tileLine(u, undefined, false, true)).toMatchObject({ text: "доступно 3.2", note: "Неизвестный Apple ID" });
+    expect(tileLine({ ...u, installed_version: "3.1" }, undefined, false, true)).toMatchObject({ note: "Неизвестный Apple ID" });
+  });
   it("fallbacks without versions", () => {
     expect(tileLine(row(12, "c", { source: "saved", has_saved_copy: true }), undefined, false, true)).toEqual({ text: "копия на компьютере", tone: "plain" });
     expect(tileLine(row(10, "c", { removed_from_ru: true }), yes, false, true)).toEqual({ text: "нет в российском App Store", tone: "muted" });

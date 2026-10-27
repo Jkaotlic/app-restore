@@ -185,9 +185,11 @@ export function recheckIds(map: OwnedMap, id: number): number[] {
 
 export type TileTone = "plain" | "muted" | "warn" | "checking" | "retry";
 
+export type TileLine = { text: string; tone: TileTone; up?: string; note?: string };
+
 /** Вторая строка плитки. `up` — новая версия, её выделяем: «на iPhone 21.3 → 22.1». `retry` — плитка
- * по нажатию повторяет проверку прав. */
-export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean, withPhone: boolean): { text: string; tone: TileTone; up?: string } {
+ * по нажатию повторяет проверку прав. `note` — третья строка рядом с версией («Неизвестный Apple ID»). */
+export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean, withPhone: boolean): TileLine {
   if (r.ipad_only && toIphone) return { text: "только для iPad", tone: "warn" };
   if (r.other_account) return { text: "Куплено на другом Apple ID", tone: "warn" };
   if ((r.source === "removed" || r.source === "phone") && !r.has_saved_copy) {
@@ -195,12 +197,14 @@ export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean
     if (s.kind === "no") return { text: "Нет на вашем Apple ID", tone: "muted" };
     if (s.kind === "error") return { text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" };
   }
+  const note = r.unknown_account ? "Неизвестный Apple ID" : undefined;
+  const withNote = (l: TileLine): TileLine => (note ? { ...l, note } : l);
   if (withPhone && r.installed_version !== null) {
     const have = r.installed_version || "есть";
-    if (hasNewer(r)) return { text: `на iPhone ${have} → `, up: r.available_version!, tone: "plain" };
-    return { text: `на iPhone ${have}`, tone: "plain" };
+    if (hasNewer(r)) return withNote({ text: `на iPhone ${have} → `, up: r.available_version!, tone: "plain" });
+    return withNote({ text: `на iPhone ${have}`, tone: "plain" });
   }
-  if (r.available_version) return { text: `доступно ${r.available_version}`, tone: "plain" };
+  if (r.available_version) return withNote({ text: `доступно ${r.available_version}`, tone: "plain" });
   if (r.unknown_account) return { text: "Неизвестный Apple ID", tone: "muted" };
   if (r.has_saved_copy) return { text: "копия на компьютере", tone: "plain" };
   if (r.source === "purchase" && r.removed_from_ru) return { text: "нет в российском App Store", tone: "muted" };
