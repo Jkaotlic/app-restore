@@ -93,6 +93,8 @@ register("choose", () => {
   /** Поиск «В App Store»: идёт, не ответил или тихо. Номер запроса — ответ на прежний не берём. */
   let storeStatus: "idle" | "loading" | "error" = "idle";
   let storeReq = 0;
+  /** Запрос, на который App Store уже ответил: пустая группа — «ничего не нашлось», а не сбой. */
+  let storeAnswered: string | null = null;
   let storeTimer: ReturnType<typeof setTimeout> | undefined;
   /** Подключённые телефоны (udid через запятую): выбор источника перерисовывается, только когда они меняются. */
   let phonesKey = state.phones.map((p) => p.udid).join(",");
@@ -326,6 +328,7 @@ register("choose", () => {
       const found = await call<RowDto[]>("search_store", { term });
       if (req !== storeReq) return;
       rows = replaceStoreRows(rows, found, selected, term);
+      storeAnswered = term;
       for (const r of rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
       storeStatus = "idle";
       // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки
@@ -467,6 +470,7 @@ register("choose", () => {
       if (g.key === "store") {
         if (storeStatus === "loading") extra.push(h("p", { class: "loading" }, "Ищем в App Store…", h("span", { class: "spin", attrs: { "aria-hidden": "true" } })));
         else if (storeStatus === "error") extra.push(h("p", { class: "note", text: "App Store не ответил" }));
+        else if (!g.rows.length && storeAnswered !== null && storeAnswered === storeTerm(query)) extra.push(h("p", { class: "empty", text: "В App Store ничего не нашлось" }));
       }
       if (g.key === "phone" && !purchasesLoading) {
         const choices = sourceChoices(state.phones, sourceUdid);

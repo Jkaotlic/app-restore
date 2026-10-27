@@ -282,7 +282,8 @@ register("phone", () => {
   });
   const skipBtn = h("button", {
     class: "btn ghost",
-    text: "Продолжить без iPhone",
+    // без телефона «Вернуть» неактивна: на «Выборе» доступно только «Только скачать»
+    text: "Без iPhone — только скачать",
     on: {
       click: () => {
         state.withPhone = false;

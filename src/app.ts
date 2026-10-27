@@ -119,8 +119,8 @@ export function safe<E extends Event>(fn: (e: E) => Promise<unknown>): (e: E) =>
 }
 
 /** Кнопка «Открыть папку с копиями» и место для ошибки под ней. */
-export function openLibraryButton(cls = "link"): HTMLElement {
-  return openFolderButton("open_library", "Открыть папку с копиями", cls);
+export function openLibraryButton(cls = "link", label = "Открыть папку с копиями"): HTMLElement {
+  return openFolderButton("open_library", label, cls);
 }
 
 /** «Открыть журнал»: папка журнала для поддержки. Есть всегда, и без входа. */

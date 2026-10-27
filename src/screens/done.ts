@@ -1,4 +1,4 @@
-import { call, go, openLibraryButton, register, safe, state, targetPhone, type Job } from "../app";
+import { go, openLibraryButton, register, safe, state, targetPhone, type Job } from "../app";
 import { h } from "../dom";
 import { askAppleIdOnDone, doneText, isFinished } from "../labels";
 import { appleIdQuestion, jobRow, phoneStatus, retryJob } from "./phone";
@@ -54,20 +54,10 @@ register("done", () => {
           }),
           j.downloadOnly,
         );
-        if (j.downloadOnly && j.state.kind === "saved") row.querySelector(".right")?.append(openFolder());
+        if (j.downloadOnly && j.state.kind === "saved") row.querySelector(".right")?.append(openLibraryButton("btn ghost small", "Открыть папку"));
         return row;
       }),
     );
-  }
-
-  /** «Открыть папку» у строки «Сохранено»: «Мои приложения» в Finder / Проводнике (как `open_library`). */
-  function openFolder(): HTMLElement {
-    return h("button", {
-      class: "btn ghost small",
-      text: "Открыть папку",
-      attrs: { type: "button" },
-      on: { click: safe(async () => void (await call("open_library").catch(() => undefined))) },
-    });
   }
 
   /** Телефон перерисовывается только по событию `phones`, а не на каждый шаг задания. */
