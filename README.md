@@ -41,7 +41,7 @@
 
 ## Сборка из исходников
 
-Понадобятся Rust 1.85+, Node 20+ и Xcode Command Line Tools (на macOS).
+Понадобятся Rust 1.88+, Node 20+ и Xcode Command Line Tools (на macOS).
 
 ```bash
 npm ci
