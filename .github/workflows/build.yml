@@ -1,0 +1,116 @@
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+
+      - name: Dependencies
+        run: npm ci
+
+      - name: ipatool (pinned, sha256-checked)
+        run: scripts/fetch-ipatool.sh
+
+      - name: Tests
+        run: |
+          npm test
+          (cd src-tauri && cargo test)
+          python3 -m unittest scripts/test_catalog_check.py
+
+      - name: Build universal dmg
+        run: npm run tauri build -- --target universal-apple-darwin --bundles dmg
+
+      - name: Check and rename dmg
+        id: dmg
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          SRC="$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg | head -n1)"
+          # GitHub strips Cyrillic from asset names, so publish under an ASCII name
+          OUT="$RUNNER_TEMP/Vernut-prilozheniya_${VERSION}_macOS_universal.dmg"
+          cp "$SRC" "$OUT"
+          MNT="$(mktemp -d)"
+          hdiutil attach -nobrowse -readonly -mountpoint "$MNT" "$OUT" >/dev/null
+          APP="$(ls -d "$MNT"/*.app | head -n1)"
+          lipo -archs "$APP/Contents/MacOS/ipatool"
+          lipo -archs "$APP/Contents/MacOS/ipatool" | grep -q arm64
+          lipo -archs "$APP/Contents/MacOS/ipatool" | grep -q x86_64
+          hdiutil detach "$MNT" >/dev/null
+          shasum -a 256 "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-dmg
+          path: ${{ steps.dmg.outputs.path }}
+
+      - name: Draft release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 \
+            || gh release create "$TAG" --draft --prerelease --title "$TAG" --notes "Сборка $TAG. Описание добавляется перед публикацией."
+          gh release upload "$TAG" "${{ steps.dmg.outputs.path }}" --clobber
+
+  # Windows build is a compile/bundle check only until majd/ipatool#637 is fixed; never released
+  windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri
+
+      - name: Dependencies
+        run: npm ci
+
+      - name: ipatool (pinned, sha256-checked)
+        shell: pwsh
+        run: scripts/fetch-ipatool.ps1
+
+      - name: Tests
+        run: |
+          npm test
+          cd src-tauri
+          cargo test
+
+      - name: Build msi
+        run: npm run tauri build -- --bundles msi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-msi-check
+          path: src-tauri/target/release/bundle/msi/*.msi
