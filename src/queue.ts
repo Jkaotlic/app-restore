@@ -67,6 +67,14 @@ export function overallText(done: number, total: number, eta: number | null, pau
   return eta === null ? base : `${base} · осталось ≈ ${eta} мин`;
 }
 
+/** «Пауза» ↔ «Продолжить»: новое значение — только после ответа Rust; ошибка пробрасывается,
+ * флаг у вызывающего остаётся прежним. */
+export async function togglePause(paused: boolean, invoke: (cmd: string) => Promise<unknown>): Promise<boolean> {
+  const next = !paused;
+  await invoke(next ? "pause_queue" : "resume_queue");
+  return next;
+}
+
 /** «1 приложение», «3 приложения», «5 приложений». */
 export function appsCount(n: number): string {
   const d = n % 10;

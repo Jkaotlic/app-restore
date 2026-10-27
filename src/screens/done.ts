@@ -1,7 +1,7 @@
 import { call, go, openLibraryButton, register, safe, state, targetPhone, type Job } from "../app";
 import { h } from "../dom";
 import { askAppleIdOnDone, doneText, isFinished } from "../labels";
-import { etaMinutes, overallText, remainingBytes, speedMeter } from "../queue";
+import { etaMinutes, overallText, remainingBytes, speedMeter, togglePause } from "../queue";
 import { appleIdQuestion, jobRow, phoneStatus, retryJob } from "./phone";
 
 register("done", () => {
@@ -30,10 +30,14 @@ register("done", () => {
     attrs: { type: "button" },
     on: {
       click: safe(async () => {
-        const next = !state.paused;
-        state.paused = next;
-        render();
-        await call(next ? "pause_queue" : "resume_queue");
+        pauseBtn.disabled = true;
+        try {
+          // флаг — только после ответа Rust: не вышло — кнопка показывает правду
+          state.paused = await togglePause(state.paused, (cmd) => call(cmd));
+        } finally {
+          pauseBtn.disabled = false;
+          render();
+        }
       }),
     },
   });

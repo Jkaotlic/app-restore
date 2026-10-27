@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Job } from "./app";
-import { appsCount, etaMinutes, overallText, pendingText, remainingBytes, resumedJob, SpeedMeter } from "./queue";
+import { appsCount, togglePause, etaMinutes, overallText, pendingText, remainingBytes, resumedJob, SpeedMeter } from "./queue";
 import type { JobDto, RowDto } from "./types";
 
 const MB = 1024 * 1024;
@@ -74,6 +74,18 @@ describe("ETA", () => {
     expect(overallText(3, 12, null, false)).toBe("3 из 12");
     expect(overallText(3, 12, 4, true)).toBe("3 из 12 · на паузе");
     expect(overallText(12, 12, null, false)).toBe("12 из 12");
+  });
+});
+
+describe("togglePause", () => {
+  it("flips only after the backend agreed", async () => {
+    const cmds: string[] = [];
+    expect(await togglePause(false, async (c) => void cmds.push(c))).toBe(true);
+    expect(await togglePause(true, async (c) => void cmds.push(c))).toBe(false);
+    expect(cmds).toEqual(["pause_queue", "resume_queue"]);
+  });
+  it("keeps the old value when the call fails", async () => {
+    await expect(togglePause(false, () => Promise.reject(new Error("x")))).rejects.toThrow("x");
   });
 });
 
