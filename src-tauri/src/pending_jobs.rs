@@ -182,13 +182,21 @@ impl PendingStore {
     }
 
     /// Записать живые задания (`live`) вместе с отложенными, если список изменился.
+    #[cfg(test)]
     pub fn sync(&self, live: &[PendingJob]) {
+        self.sync_with(|| Some(live.to_vec()));
+    }
+
+    /// `sync` со снимком очереди, который `snapshot` снимает уже под замком файла: два
+    /// одновременных вызова пишут в том порядке, в каком снимали, — старый снимок не ляжет поверх
+    /// нового. `None` — писать нечего (нет входа). `snapshot` не должен трогать этот `PendingStore`.
+    pub fn sync_with(&self, snapshot: impl FnOnce() -> Option<Vec<PendingJob>>) {
         let mut inner = self.inner.lock().unwrap();
-        let all = merge(&inner.unclaimed, live);
+        let Some(live) = snapshot() else { return };
+        let all = merge(&inner.unclaimed, &live);
         if all == inner.written {
             return;
         }
-        // под замком: два одновременных `sync` не перепишут файл в обратном порядке
         if let Some(p) = &self.path {
             let r = serde_json::to_vec(&FileData { jobs: all.clone() }).map_err(|e| e.to_string()).and_then(|b| crate::accounts::write_atomic(p, &b));
             if let Err(e) = r {
@@ -319,6 +327,28 @@ mod tests {
         let s = PendingStore::open(path);
         assert!(s.offered("other@example.com", &HashSet::new()).is_empty());
         assert_eq!(ids(&s.offered("me@example.com", &HashSet::new())), [2], "отложенное me не тронуто");
+    }
+
+    /// Снимок очереди берётся под замком файла: старый снимок, снятый раньше, не запишется
+    /// поверх нового (иначе законченное задание снова всплыло бы после перезапуска).
+    #[test]
+    fn older_snapshot_never_overwrites_a_newer_one() {
+        let t = tempfile::tempdir().unwrap();
+        let path = t.path().join("p.json");
+        let s = std::sync::Arc::new(PendingStore::open(path.clone()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s2 = s.clone();
+        let a = std::thread::spawn(move || {
+            s2.sync_with(|| {
+                tx.send(()).unwrap(); // снимок «старый» снят
+                std::thread::sleep(std::time::Duration::from_millis(150));
+                Some(vec![job(1, "me@example.com")])
+            })
+        });
+        rx.recv().unwrap();
+        s.sync_with(|| Some(vec![])); // задание 1 кончилось — снимок новее
+        a.join().unwrap();
+        assert!(PendingStore::open(path).offered("me@example.com", &HashSet::new()).is_empty());
     }
 
     /// Пока список тот же, файл не переписывается (прогресс скачивания идёт дважды в секунду).

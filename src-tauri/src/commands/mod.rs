@@ -258,9 +258,8 @@ impl AppState {
     /// Файл незавершённых заданий — по нынешней очереди (пишется, только если список изменился).
     /// Без входа файл не трогаем: задания не к кому отнести.
     fn sync_pending(&self) {
-        if let Some(live) = self.live_pending() {
-            self.pending.sync(&live);
-        }
+        // снимок — под замком файла (`sync_with`): одновременные события не путают порядок записи
+        self.pending.sync_with(|| self.live_pending());
     }
 
     /// trackId заданий, которые сейчас есть в очереди программы (любом состоянии).
@@ -1566,7 +1565,7 @@ pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result
     state.sync_pending();
     if state.current_email().is_none() {
         // вышли из него: `sync_pending` без входа файл не пишет
-        state.pending.sync(&[]);
+        state.pending.sync_with(|| Some(vec![]));
     }
     // не забыли (очередь к ipatool, связка ключей) — сказать, а не делать вид, что вышло;
     // выход и убранные задания при этом уже случились — их интерфейс получает тоже
