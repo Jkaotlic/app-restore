@@ -159,7 +159,7 @@ pub struct AppState {
     account_epoch: AtomicU64,
     /// Новый `load_purchases` (и выход) отменяет итог предыдущего.
     purchases_gen: AtomicU64,
-    /// Незавершённые задания между запусками (`pending-jobs.json`): «Не закончили прошлый раз».
+    /// Незавершённые задания между запусками (`pending-jobs.json`): «В прошлый раз не закончили».
     pending: PendingStore,
 }
 
@@ -1255,7 +1255,7 @@ pub async fn start(
     Ok(state.start_jobs(&app, items, same_apple_id, download_only.unwrap_or(false), versions).await)
 }
 
-/// Незавершённое задание прошлого запуска для баннера «Не закончили прошлый раз».
+/// Незавершённое задание прошлого запуска для баннера «В прошлый раз не закончили».
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct PendingJobDto {
     pub track_id: i64,

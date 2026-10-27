@@ -85,7 +85,7 @@ describe("unfinished from last time", () => {
     expect(appsCount(11)).toBe("11 приложений");
     expect(appsCount(21)).toBe("21 приложение");
     expect(appsCount(112)).toBe("112 приложений");
-    expect(pendingText(2)).toBe("Не закончили прошлый раз: 2 приложения");
+    expect(pendingText(2)).toBe("В прошлый раз не закончили: 2 приложения");
   });
   it("resumed job is queued with a plain icon row", () => {
     const j = resumedJob({ track_id: 7, name: "Банк", download_only: true });
