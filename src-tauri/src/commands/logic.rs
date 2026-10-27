@@ -800,10 +800,12 @@ pub struct JobEvent {
 
 /// Задания, которые скачаны и ждут телефона. Под тем же замком помечаются `Queued`, чтобы
 /// второй вызов (следующая смена телефона) не поставил их ещё раз. Задания «Только скачать»
-/// (`download_only`) остаются `Saved`: их на телефон не ставим.
-pub fn take_waiting(jobs: &mut HashMap<i64, JobState>, download_only: &HashSet<i64>) -> Vec<(i64, PathBuf)> {
+/// (`download_only`) остаются `Saved`: их на телефон не ставим. Задания со своим телефоном
+/// (`pinned`, «Продолжить» прошлый раз) ставятся только на него: другая цель их не берёт.
+pub fn take_waiting(jobs: &mut HashMap<i64, JobState>, download_only: &HashSet<i64>, pinned: &HashMap<i64, String>, target: Option<&str>) -> Vec<(i64, PathBuf)> {
     let mut out = vec![];
-    for (id, s) in jobs.iter_mut().filter(|(id, _)| !download_only.contains(id)) {
+    let fits = |id: &i64| pinned.get(id).is_none_or(|u| Some(u.as_str()) == target);
+    for (id, s) in jobs.iter_mut().filter(|(id, _)| !download_only.contains(id) && fits(id)) {
         if let JobState::Saved { path } = s {
             out.push((*id, std::mem::take(path)));
             *s = JobState::Queued;
@@ -1939,11 +1941,11 @@ mod tests {
             (4, JobState::Saved { path: "/x/4.ipa".into() }),
         ]
         .into();
-        let mut w = take_waiting(&mut jobs, &HashSet::new());
+        let mut w = take_waiting(&mut jobs, &HashSet::new(), &HashMap::new(), Some("U1"));
         w.sort();
         assert_eq!(w, vec![(1, PathBuf::from("/x/1.ipa")), (4, PathBuf::from("/x/4.ipa"))]);
         assert_eq!((&jobs[&1], &jobs[&4]), (&JobState::Queued, &JobState::Queued));
-        assert!(take_waiting(&mut jobs, &HashSet::new()).is_empty(), "второй вызов ничего не ставит");
+        assert!(take_waiting(&mut jobs, &HashSet::new(), &HashMap::new(), Some("U1")).is_empty(), "второй вызов ничего не ставит");
         assert!(matches!(jobs[&3], JobState::Failed { .. }));
     }
 
@@ -1951,9 +1953,20 @@ mod tests {
     fn take_waiting_skips_download_only() {
         let mut jobs: HashMap<i64, JobState> =
             [(1, JobState::Saved { path: "/x/1.ipa".into() }), (2, JobState::Saved { path: "/x/2.ipa".into() })].into();
-        assert_eq!(take_waiting(&mut jobs, &[2].into()), vec![(1, PathBuf::from("/x/1.ipa"))]);
+        assert_eq!(take_waiting(&mut jobs, &[2].into(), &HashMap::new(), Some("U1")), vec![(1, PathBuf::from("/x/1.ipa"))]);
         // «Только скачать»: остаётся «Сохранено», телефон его не ставит
         assert_eq!(jobs[&2], JobState::Saved { path: "/x/2.ipa".into() });
+    }
+
+    /// Продолженное задание со своим телефоном: на другой телефон не ставится, на свой — да.
+    #[test]
+    fn take_waiting_keeps_pinned_jobs_for_their_own_phone() {
+        let mut jobs: HashMap<i64, JobState> =
+            [(1, JobState::Saved { path: "/x/1.ipa".into() }), (2, JobState::Saved { path: "/x/2.ipa".into() })].into();
+        let pinned = HashMap::from([(2, "MINE".to_string())]);
+        assert_eq!(take_waiting(&mut jobs, &HashSet::new(), &pinned, Some("OTHER")), vec![(1, PathBuf::from("/x/1.ipa"))]);
+        assert_eq!(jobs[&2], JobState::Saved { path: "/x/2.ipa".into() }, "ждёт свой телефон");
+        assert_eq!(take_waiting(&mut jobs, &HashSet::new(), &pinned, Some("MINE")), vec![(2, PathBuf::from("/x/2.ipa"))]);
     }
 
     #[test]

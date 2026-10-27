@@ -246,7 +246,6 @@ impl AppState {
         let only = self.download_only.lock().unwrap().clone();
         let versions = self.chosen_versions.lock().unwrap().clone();
         let names = self.names.lock().unwrap().clone();
-        let udid = self.phones.lock().unwrap().target.clone();
         let meta = self.job_meta.lock().unwrap().clone();
         let jobs = self.jobs.lock().unwrap();
         Some(crate::pending_jobs::live(&crate::pending_jobs::Live {
@@ -254,7 +253,6 @@ impl AppState {
             names: &names,
             download_only: &only,
             versions: &versions,
-            udid: udid.as_deref(),
             account: &account,
             meta: &meta,
         }))
@@ -274,7 +272,16 @@ impl AppState {
 
     /// «Вернуть» (и «Продолжить» незавершённые): копии из «Мои приложения» ставятся без
     /// скачивания, остальное — в очередь. Описание параметров — у команды `start`.
-    async fn start_jobs<R: Runtime>(&self, app: &AppHandle<R>, items: Vec<(i64, String)>, same_apple_id: bool, only: bool, versions: HashMap<i64, String>) -> RunDto {
+    /// `pins` — свой телефон задания («Продолжить» прошлый раз): ставится только на него.
+    async fn start_jobs<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        items: Vec<(i64, String)>,
+        same_apple_id: bool,
+        only: bool,
+        versions: HashMap<i64, String>,
+        pins: &HashMap<i64, String>,
+    ) -> RunDto {
         {
             let mut chosen = self.chosen_versions.lock().unwrap();
             for (id, _) in &items {
@@ -292,9 +299,13 @@ impl AppState {
         }
         {
             let sizes = self.sizes.lock().unwrap().clone();
+            // телефон задания — цель очереди сейчас (у продолженного — его прежний)
+            let target = self.phones.lock().unwrap().target.clone();
             let mut meta = self.job_meta.lock().unwrap();
             for (id, _) in &items {
-                meta.insert(*id, crate::pending_jobs::Meta { seq: self.pending.next_seq(), size_bytes: sizes.get(id).copied() });
+                let pin = pins.get(id).cloned();
+                let udid = if only { None } else { pin.clone().or_else(|| target.clone()) };
+                meta.insert(*id, crate::pending_jobs::Meta { seq: self.pending.next_seq(), size_bytes: sizes.get(id).copied(), udid, pinned: pin.is_some() && !only });
             }
         }
         let run = RunDto { same_apple_id, email };
@@ -326,9 +337,44 @@ impl AppState {
             }
         }
         self.mark_downloads(download.iter().map(|(id, _)| *id).filter(|id| *id > 0));
-        self.queue.enqueue_versions(self.with_versions(download.into_iter().map(|(id, _)| id)), only);
+        self.enqueue_downloads(download.into_iter().map(|(id, _)| id));
         self.sync_pending();
         run
+    }
+
+    /// Свои телефоны продолженных заданий (`Meta::pinned`): другой телефон их не берёт.
+    fn pinned(&self) -> HashMap<i64, String> {
+        self.job_meta.lock().unwrap().iter().filter(|(_, m)| m.pinned).filter_map(|(id, m)| m.udid.clone().map(|u| (*id, u))).collect()
+    }
+
+    /// Куда поставить скачанное задание `id` (`pending_jobs::place`).
+    fn place_for(&self, id: i64) -> crate::queue::Place {
+        let connected: Vec<String> = self.phones.lock().unwrap().last.iter().map(|p| p.udid.clone()).collect();
+        let only = self.download_only.lock().unwrap().contains(&id);
+        let meta = self.job_meta.lock().unwrap().get(&id).cloned().unwrap_or_default();
+        crate::pending_jobs::place(&meta, only, &connected)
+    }
+
+    /// Скачать задания `ids` с их версиями и поставить каждое по своему `place_for`.
+    fn enqueue_downloads(&self, ids: impl IntoIterator<Item = i64>) {
+        let apps = self.with_versions(ids).into_iter().map(|(id, v)| (id, v, self.place_for(id))).collect();
+        self.queue.enqueue_placed(apps);
+    }
+
+    /// Поставить готовую копию задания `id`: продолженное — только на свой телефон (его нет —
+    /// ждёт в `Saved`), остальное — на цель очереди.
+    fn install_saved_job<R: Runtime>(&self, app: &AppHandle<R>, id: i64, path: PathBuf) {
+        match self.place_for(id) {
+            crate::queue::Place::Phone(udid) => {
+                self.record(app, id, JobState::Queued);
+                self.queue.install_on(id, path, udid);
+            }
+            crate::queue::Place::Hold if self.pinned().contains_key(&id) => self.record(app, id, JobState::Saved { path }),
+            _ => {
+                self.record(app, id, JobState::Queued);
+                self.queue.install_saved(id, path);
+            }
+        }
     }
 
     /// Снимок всего, из чего строятся строки «Выбора»; `f` получает его как `RowCtx`.
@@ -590,7 +636,9 @@ impl AppState {
 
     /// Ставит готовую ipa: сразу, если телефон выбран, иначе ждёт его в `Saved` (`apply_target`).
     fn install_copy<R: Runtime>(&self, app: &AppHandle<R>, track_id: i64, path: PathBuf) {
-        if self.phones.lock().unwrap().target.is_some() {
+        if self.pinned().contains_key(&track_id) {
+            self.install_saved_job(app, track_id, path);
+        } else if self.phones.lock().unwrap().target.is_some() {
             self.record(app, track_id, JobState::Queued);
             self.queue.install_saved(track_id, path);
         } else {
@@ -655,9 +703,11 @@ impl AppState {
         if changed && target.is_some() {
             // Выборка и пометка `Queued` под одним замком: параллельный вызов не поставит дважды.
             let only = self.download_only.lock().unwrap().clone();
-            let waiting = take_waiting(&mut self.jobs.lock().unwrap(), &only);
+            let pinned = self.pinned();
+            let waiting = take_waiting(&mut self.jobs.lock().unwrap(), &only, &pinned, target.as_deref());
             for (id, path) in waiting {
                 self.emit_job(app, id, &JobState::Queued);
+                // продолженное взято только для своего телефона — он и есть цель
                 self.queue.install_saved(id, path);
             }
         }
@@ -1269,7 +1319,7 @@ pub async fn start(
     versions: Option<Vec<(i64, String)>>,
 ) -> Result<RunDto, ()> {
     let versions: HashMap<i64, String> = versions.unwrap_or_default().into_iter().filter(|(_, v)| !v.trim().is_empty()).collect();
-    Ok(state.start_jobs(&app, items, same_apple_id, download_only.unwrap_or(false), versions).await)
+    Ok(state.start_jobs(&app, items, same_apple_id, download_only.unwrap_or(false), versions, &HashMap::new()).await)
 }
 
 /// Незавершённое задание прошлого запуска для баннера «В прошлый раз не закончили».
@@ -1318,13 +1368,12 @@ pub async fn resume_pending(app: AppHandle, state: State<'_, AppState>, same_app
         }
     }
     crate::log::write("pending jobs", &format!("resume {}", jobs.len()));
-    let connected: Vec<String> = state.phones.lock().unwrap().last.iter().map(|p| p.udid.clone()).collect();
-    if let Some(udid) = crate::pending_jobs::resume_target(&jobs, &connected) {
-        state.choose(&app, udid);
-    }
+    // свой телефон у каждого задания: подключён — ставим туда, нет — «Сохранено» до его появления;
+    // на другой телефон — никогда
+    let pins: HashMap<i64, String> = jobs.iter().filter(|j| !j.download_only).filter_map(|j| j.udid.clone().map(|u| (j.track_id, u))).collect();
     let mut run = None;
     for (only, items, versions) in crate::pending_jobs::batches(&jobs) {
-        run = Some(state.start_jobs(&app, items, same_apple_id.unwrap_or(true), only, versions.into_iter().collect()).await);
+        run = Some(state.start_jobs(&app, items, same_apple_id.unwrap_or(true), only, versions.into_iter().collect(), &pins).await);
     }
     state.sync_pending();
     let sizes = state.sizes.lock().unwrap().clone();
@@ -1368,17 +1417,19 @@ pub fn retry(app: AppHandle, state: State<'_, AppState>, track_id: i64) {
     };
     match action {
         RetryAction::Install(path) => {
-            state.record(&app, track_id, JobState::Queued);
             match copy {
-                Some((_, udid)) => state.queue.install_on(track_id, path, udid),
-                None => state.queue.install_saved(track_id, path),
+                Some((_, udid)) => {
+                    state.record(&app, track_id, JobState::Queued);
+                    state.queue.install_on(track_id, path, udid);
+                }
+                // продолженное задание — только на свой телефон
+                None => state.install_saved_job(&app, track_id, path),
             }
         }
         RetryAction::Download => {
             state.from_saved.lock().unwrap().remove(&track_id);
             state.mark_downloads([track_id]);
-            let only = state.download_only.lock().unwrap().contains(&track_id);
-            state.queue.enqueue_versions(state.with_versions([track_id]), only);
+            state.enqueue_downloads([track_id]);
         }
         RetryAction::Nothing => {}
     }

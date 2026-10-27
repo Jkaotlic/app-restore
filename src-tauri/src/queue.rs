@@ -55,10 +55,21 @@ impl SpaceProbe for FsSpace {
     }
 }
 
+/// Куда ставить скачанное.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Place {
+    /// На цель очереди (`set_target`); её нет — остановиться на `Saved`.
+    Target,
+    /// Только на этот телефон («Продолжить» прошлый раз): цель очереди не в счёт.
+    Phone(String),
+    /// Не ставить: «Только скачать» или телефона задания сейчас нет — остановиться на `Saved`.
+    Hold,
+}
+
 enum Job {
-    /// `bool`: «Только скачать» — остановиться на `Saved`, даже если телефон задан. Версия —
-    /// выбранная человеком (external version id), `None` — последняя.
-    Download(i64, bool, Option<String>),
+    /// Скачать и поставить по `Place`. Версия — выбранная человеком (external version id),
+    /// `None` — последняя.
+    Download(i64, Place, Option<String>),
     /// Телефон задан явно («Все копии») — он главнее цели очереди и её не меняет.
     Install(i64, PathBuf, Option<String>),
 }
@@ -224,11 +235,16 @@ struct Worker {
 async fn process(job: Job, w: Worker, pause: watch::Receiver<bool>, emit: Arc<dyn Fn(JobState) + Send + Sync>) -> Option<Job> {
     // explicit: установку попросили прямо (`install_saved`) — без телефона это ошибка.
     let (saved, explicit) = match job {
-        Job::Download(id, only, version) => match run_job(id, version.as_deref(), &w, pause, emit.as_ref()).await {
-            Ok(None) => return Some(Job::Download(id, only, version)),
+        Job::Download(id, place, version) => match run_job(id, version.as_deref(), &w, pause, emit.as_ref()).await {
+            Ok(None) => return Some(Job::Download(id, place, version)),
             Ok(Some(path)) => {
                 emit(JobState::Saved { path: path.clone() });
-                ((!only).then_some((path, None)), false)
+                match place {
+                    Place::Target => (Some((path, None)), false),
+                    // свой телефон — как явная установка: его нет — ошибка с копией, не чужой телефон
+                    Place::Phone(udid) => (Some((path, Some(udid))), true),
+                    Place::Hold => (None, false),
+                }
             }
             Err(error) => {
                 emit(JobState::Failed { error, saved: None });
@@ -400,15 +416,22 @@ impl Queue {
 
     /// Скачать каждое (trackId, версия): версия — выбранная человеком («Другая версия…»), `None`
     /// — последняя. `only` — «Только скачать».
+    #[cfg(test)]
     pub fn enqueue_versions(&self, apps: Vec<(i64, Option<String>)>, only: bool) {
-        for (id, version) in apps {
+        let place = if only { Place::Hold } else { Place::Target };
+        self.enqueue_placed(apps.into_iter().map(|(id, v)| (id, v, place.clone())).collect());
+    }
+
+    /// Скачать каждое (trackId, версия) и поставить по своему `Place`.
+    pub fn enqueue_placed(&self, apps: Vec<(i64, Option<String>, Place)>) {
+        for (id, version, place) in apps {
             if id <= 0 {
                 let error = AppError::Unknown { detail: "invalid track id".into() };
                 let _ = self.events.send((id, JobState::Failed { error, saved: None }));
                 continue;
             }
             let _ = self.events.send((id, JobState::Queued));
-            self.send(Job::Download(id, only, version));
+            self.send(Job::Download(id, place, version));
         }
     }
 
@@ -1048,6 +1071,24 @@ mod tests {
         let ev = collect(&mut rx, 1).await;
         assert!(of(&ev, 111).is_empty(), "{ev:?}");
         assert_eq!(*r.inner.calls.lock().unwrap(), [111, 222]);
+    }
+
+    /// Задание со своим телефоном («Продолжить» прошлый раз): ставится только туда — не на цель
+    /// очереди; телефона нет — остаётся «Сохранено».
+    #[tokio::test]
+    async fn placed_jobs_install_only_on_their_own_phone() {
+        let (q, _t, _, hub) = setup_hub(ok_runner(), 10 * GB, Behavior::Ok);
+        q.set_target(Some("UDID-OTHER".into()));
+        let mut rx = q.subscribe();
+        q.enqueue_placed(vec![(111, None, Place::Phone("UDID-MINE".into())), (222, None, Place::Hold)]);
+        let ev = collect_installs(&mut rx, 1).await;
+        assert_eq!(of(&ev, 111).last().unwrap(), &&JobState::Installed);
+        let ev2 = collect(&mut rx, 1).await;
+        assert!(matches!(of(&ev2, 222).last().unwrap(), JobState::Saved { .. }) || matches!(of(&ev, 222).last(), Some(JobState::Saved { .. })));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let calls = hub.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1, "222 на чужой телефон не ставится");
+        assert_eq!(calls[0].0, "UDID-MINE");
     }
 
     #[test]

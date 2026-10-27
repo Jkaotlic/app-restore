@@ -7,7 +7,7 @@
 //! пока в него не войдут и не нажмут «Продолжить» или «Забыть». Пишется атомарно, только когда
 //! список изменился (прогресс скачивания файл не трогает).
 use crate::accounts::same_id;
-use crate::queue::JobState;
+use crate::queue::{JobState, Place};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -40,6 +40,21 @@ pub struct Meta {
     /// Номер постановки (`PendingStore::next_seq`).
     pub seq: u64,
     pub size_bytes: Option<u64>,
+    /// Телефон задания при постановке (цель очереди тогда); у «Только скачать» — нет.
+    pub udid: Option<String>,
+    /// Ставить только на `udid` («Продолжить» прошлый раз): другой телефон его не возьмёт.
+    pub pinned: bool,
+}
+
+/// Куда ставить скачанное. Продолженное задание — только на свой телефон; его сейчас нет —
+/// остановиться на «Сохранено» (поставится, когда он станет целью). Обычное — на цель очереди.
+pub fn place(m: &Meta, download_only: bool, connected: &[String]) -> Place {
+    match (&m.udid, m.pinned) {
+        _ if download_only => Place::Hold,
+        (Some(u), true) if connected.contains(u) => Place::Phone(u.clone()),
+        (_, true) => Place::Hold,
+        _ => Place::Target,
+    }
 }
 
 /// Размер для «Продолжить»: записанный при постановке, иначе из нынешнего кэша Lookup.
@@ -85,10 +100,8 @@ pub struct Live<'a> {
     pub names: &'a HashMap<i64, String>,
     pub download_only: &'a HashSet<i64>,
     pub versions: &'a HashMap<i64, String>,
-    /// Цель установки сейчас.
-    pub udid: Option<&'a str>,
     pub account: &'a str,
-    /// Что запомнено при постановке: номер, размер.
+    /// Что запомнено при постановке: номер, размер, телефон.
     pub meta: &'a HashMap<i64, Meta>,
 }
 
@@ -104,7 +117,7 @@ pub fn live(l: &Live) -> Vec<PendingJob> {
             name: l.names.get(id).cloned().unwrap_or_default(),
             download_only: l.download_only.contains(id),
             version: l.versions.get(id).cloned(),
-            udid: l.udid.map(str::to_string),
+            udid: l.meta.get(id).and_then(|m| m.udid.clone()),
             account: l.account.to_string(),
             seq: l.meta.get(id).map_or(0, |m| m.seq),
             size_bytes: l.meta.get(id).and_then(|m| m.size_bytes),
@@ -136,10 +149,6 @@ pub fn batches(jobs: &[PendingJob]) -> Vec<Batch> {
     out
 }
 
-/// Телефон, на который ставили, если он сейчас подключён: первый из заданий с установкой.
-pub fn resume_target(jobs: &[PendingJob], connected: &[String]) -> Option<String> {
-    jobs.iter().filter(|j| !j.download_only).filter_map(|j| j.udid.as_ref()).find(|u| connected.contains(u)).cloned()
-}
 
 /// Разбор файла. Битый — пустой список; записи без Apple ID или с неверным trackId выпадают.
 fn parse(text: &str) -> Vec<PendingJob> {
@@ -269,14 +278,19 @@ mod tests {
         let names = HashMap::from([(1, "Банк".to_string()), (3, "Такси".to_string()), (4, "Карты".to_string())]);
         let only = HashSet::from([4]);
         let versions = HashMap::from([(3, "812".to_string())]);
-        let meta = HashMap::from([(1, Meta { seq: 8, size_bytes: Some(300) }), (3, Meta { seq: 4, size_bytes: None })]);
-        let got = live(&Live { jobs: &jobs, names: &names, download_only: &only, versions: &versions, udid: Some("U1"), account: "me@example.com", meta: &meta });
+        let meta = HashMap::from([
+            (1, Meta { seq: 8, size_bytes: Some(300), udid: Some("U1".into()), pinned: false }),
+            (3, Meta { seq: 4, size_bytes: None, udid: Some("U3".into()), pinned: true }),
+        ]);
+        let got = live(&Live { jobs: &jobs, names: &names, download_only: &only, versions: &versions, account: "me@example.com", meta: &meta });
         assert_eq!(ids(&got), [3, 1], "итоги, «Сохранено» у «Только скачать» и копии — не в счёт; порядок постановки");
         let got: Vec<PendingJob> = got.into_iter().rev().collect();
         assert_eq!(got[0].name, "Банк");
         assert_eq!(got[1].version.as_deref(), Some("812"));
         assert_eq!((got[0].size_bytes, got[1].size_bytes), (Some(300), None));
-        assert!(got.iter().all(|j| j.udid.as_deref() == Some("U1") && j.account == "me@example.com"));
+        // телефон — свой у каждого задания, с постановки, а не нынешняя цель
+        assert_eq!((got[0].udid.as_deref(), got[1].udid.as_deref()), (Some("U1"), Some("U3")));
+        assert!(got.iter().all(|j| j.account == "me@example.com"));
     }
 
     fn with_seq(mut j: PendingJob, seq: u64) -> PendingJob {
@@ -329,16 +343,18 @@ mod tests {
         assert_eq!(parse(old)[0].size_bytes, None);
     }
 
+    /// Куда ставить: продолженное — только на свой телефон, его нет — «Сохранено» (не на чужой).
     #[test]
-    fn resume_target_only_if_connected() {
-        let mut only = job(1, "me@example.com");
-        only.download_only = true;
-        only.udid = Some("U9".into());
-        let mut b = job(2, "me@example.com");
-        b.udid = Some("U2".into());
-        let jobs = [only, b];
-        assert_eq!(resume_target(&jobs, &["U9".into(), "U2".into()]), Some("U2".into()));
-        assert_eq!(resume_target(&jobs, &["U9".into()]), None, "телефона нет — ставить некуда, выберет человек");
+    fn place_never_picks_another_phone_for_a_pinned_job() {
+        let connected = ["U2".to_string()];
+        let pinned = |u: &str| Meta { udid: Some(u.into()), pinned: true, ..Meta::default() };
+        assert_eq!(place(&pinned("U2"), false, &connected), Place::Phone("U2".into()));
+        assert_eq!(place(&pinned("U9"), false, &connected), Place::Hold, "телефона задания нет — ждёт его");
+        // обычное задание — на цель очереди, как раньше
+        let normal = Meta { udid: Some("U9".into()), ..Meta::default() };
+        assert_eq!(place(&normal, false, &connected), Place::Target);
+        assert_eq!(place(&pinned("U2"), true, &connected), Place::Hold, "«Только скачать» не ставит");
+        assert_eq!(place(&Meta::default(), true, &connected), Place::Hold);
     }
 
     #[test]
