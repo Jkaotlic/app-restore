@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HISTORY_HINT, historyProgressText, historyResultText, mergeHistoryRows } from "./history";
+import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, mergeHistoryRows } from "./history";
 import { autoChecks, canSelect, idsToCheck, mergePurchases, pendingChecks, tileLine, visibleGroups, initialOwned } from "./rows";
 import type { RowDto } from "./types";
 
@@ -69,7 +69,7 @@ describe("history group", () => {
 
 describe("history texts", () => {
   it("progress uses Russian plurals", () => {
-    expect(historyProgressText(0)).toBe("Войдите своим Apple ID в открывшемся окне…");
+    expect(historyProgressText(0)).toBe("Окно Apple открыто — войдите своим Apple ID…");
     expect(historyProgressText(1)).toBe("Найдено 1 приложение…");
     expect(historyProgressText(3)).toBe("Найдено 3 приложения…");
     expect(historyProgressText(11)).toBe("Найдено 11 приложений…");
@@ -78,9 +78,19 @@ describe("history texts", () => {
   });
 
   it("result says how many are new", () => {
-    expect(historyResultText(10, 0)).toBe("В истории 10 приложений — все уже есть в списке");
-    expect(historyResultText(10, 2)).toBe("В истории 10 приложений, новых 2 — они ниже, в группе «Из истории покупок»");
-    expect(historyResultText(0, 0)).toBe("В истории покупок приложений для iPhone не нашлось");
+    expect(historyResultText(10, 0)).toBe("Готово: в истории 10 приложений — все уже есть в списке");
+    // группа стоит выше блока «Не нашли приложение?»: место не называем, к ней ведёт «Показать»
+    expect(historyResultText(10, 2)).toBe("Готово: в истории 10 приложений, новых 2 — в группе «Из истории покупок»");
+    expect(historyResultText(1222, 433)).toBe("Готово: в истории 1222 приложения, новых 433 — в группе «Из истории покупок»");
+    expect(historyResultText(0, 0)).toBe("Готово: в истории покупок приложений для iPhone не нашлось");
+  });
+
+  it("three steps before the Apple window opens, in order", () => {
+    expect(HISTORY_STEPS).toEqual([
+      "Войдите своим Apple ID на странице Apple",
+      "Пролистайте список покупок вниз до самого конца — так Apple подгружает все приложения",
+      "Окно закроется само, найденное появится здесь",
+    ]);
   });
 
   it("hint", () => {

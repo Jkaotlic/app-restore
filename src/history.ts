@@ -12,16 +12,23 @@ function apps(n: number): string {
   return "приложений";
 }
 
+/** Что будет, до открытия окна Apple: это последовательность, поэтому с номерами. */
+export const HISTORY_STEPS = [
+  "Войдите своим Apple ID на странице Apple",
+  "Пролистайте список покупок вниз до самого конца — так Apple подгружает все приложения",
+  "Окно закроется само, найденное появится здесь",
+];
+
 /** Пока окно открыто: до первой пачки ждём входа. */
 export function historyProgressText(found: number): string {
-  return found ? `Найдено ${found} ${apps(found)}…` : "Войдите своим Apple ID в открывшемся окне…";
+  return found ? `Найдено ${found} ${apps(found)}…` : "Окно Apple открыто — войдите своим Apple ID…";
 }
 
 /** Итог без ошибки: всего в истории и сколько из них новых для «Выбора». */
 export function historyResultText(found: number, fresh: number): string {
-  if (!found) return "В истории покупок приложений для iPhone не нашлось";
-  if (!fresh) return `В истории ${found} ${apps(found)} — все уже есть в списке`;
-  return `В истории ${found} ${apps(found)}, новых ${fresh} — они ниже, в группе «Из истории покупок»`;
+  if (!found) return "Готово: в истории покупок приложений для iPhone не нашлось";
+  if (!fresh) return `Готово: в истории ${found} ${apps(found)} — все уже есть в списке`;
+  return `Готово: в истории ${found} ${apps(found)}, новых ${fresh} — в группе «Из истории покупок»`;
 }
 
 /** Новые строки истории в конец; то, что уже на экране, второй раз не добавляется. */

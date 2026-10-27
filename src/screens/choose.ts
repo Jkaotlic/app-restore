@@ -2,7 +2,7 @@ import { asUiError, call, go, refreshSidebar, register, safe, state, targetIsIph
 import { h } from "../dom";
 import { resumeBanner } from "./resume";
 import { batchText, dropMessages, mergePending, runBatch } from "../drop";
-import { HELP_STEPS, type HelpAction } from "../help";
+import { HELP_STEPS, HISTORY_NOTE, LINK_NOTE, type HelpAction } from "../help";
 import { purchasesProgressText, errorText } from "../labels";
 import {
   addLinkRow,
@@ -51,7 +51,7 @@ import {
 } from "../rows";
 import type { DropDto, FoundVersionDto, HistoryOutcome, HistoryProgress, InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, SweepDto, UiError, VersionDto, VersionsDto } from "../types";
 import { canPickVersion, findOffered, foundMessage, recheckFrom, splitStart, startVersions, tooOldNote, versionLabel, waitText } from "../versions";
-import { HISTORY_HINT, historyProgressText, historyResultText, mergeHistoryRows } from "../history";
+import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, mergeHistoryRows } from "../history";
 
 export function appIcon(r: RowDto): HTMLElement {
   const { letter, color } = iconFor(r);
@@ -164,6 +164,9 @@ register("choose", () => {
     all[i].scrollIntoView({ block: "nearest", inline: "nearest" });
   });
 
+  chips.addEventListener("scroll", () => chipsFade(), { passive: true });
+  if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => chipsFade()).observe(chips);
+
   const search = h("input", {
     class: "input",
     attrs: {
@@ -184,6 +187,7 @@ register("choose", () => {
   });
 
   const countEl = h("div", { class: "count", attrs: { "aria-live": "polite" } });
+  const sizeEl = h("small", { class: "selsize" });
   const clearBtn = h("button", { class: "link", text: "Снять всё", attrs: { type: "button" }, on: { click: () => clearAll() } });
   const startBtn = h("button", { class: "btn go", attrs: { type: "button" }, on: { click: safe(() => start(false)) } });
   const onlyBtn = h("button", {
@@ -202,108 +206,168 @@ register("choose", () => {
   linkMsg.hidden = true;
   const linkForm = h(
     "form",
-    { class: "linkform", attrs: { novalidate: true }, on: { submit: safe(addLink) } },
-    h("p", { class: "note", text: "Нет в списке? Добавьте по ссылке App Store" }),
+    { class: "fm-row", attrs: { novalidate: true, "aria-label": "Добавить по ссылке App Store" }, on: { submit: safe(addLink) } },
+    h("div", { class: "fm-text" }, h("b", { text: "Есть ссылка App Store?" }), h("span", { class: "note", text: LINK_NOTE })),
     h("div", { class: "addlink" }, linkInput, linkBtn),
     linkMsg,
   );
 
-  // «Проверить весь каталог»: кнопка и «проверено N из M» над плитками каталога, один элемент на экран
+  // «Проверить весь каталог»: кнопка и «проверено N из M» в заголовке каталога, один элемент на экран
   const sweepBtn = h("button", { class: "link", text: "Проверить весь каталог", attrs: { type: "button" }, on: { click: safe(checkCatalog) } });
   const sweepStatus = h("span", { class: "note", attrs: { role: "status" } });
   const sweepBox = h("div", { class: "sweepbox" }, sweepBtn, sweepStatus);
 
-  // «Не нашли приложение?» под поиском: шаги для того, чего нет в списке
   const dropMsg = h("p", { class: "note drop-msg", attrs: { role: "status", "aria-live": "polite" } });
   dropMsg.hidden = true;
-  const helpPanel = h(
-    "div",
-    { class: "helppanel", attrs: { id: "help-panel" } },
-    h(
-      "ol",
-      {},
-      ...HELP_STEPS.map((st) =>
-        h(
-          "li",
-          {},
-          h("b", { text: st.title }),
-          h("span", { text: ` ${st.text}` }),
-          st.action ? h("button", { class: "link", text: st.action.label, attrs: { type: "button" }, on: { click: safe(() => helpGo(st.action!)) } }) : null,
-        ),
+  // «Ещё способы» в блоке «Не нашли приложение?»: варианты, а не шаги — без номеров
+  const tips = h(
+    "ul",
+    { class: "tips", attrs: { id: "find-tips" } },
+    ...HELP_STEPS.map((st) =>
+      h(
+        "li",
+        {},
+        h("b", { text: st.title }),
+        h("span", { text: ` ${st.text}` }),
+        st.action ? h("button", { class: "link", text: st.action.label, attrs: { type: "button" }, on: { click: safe(() => helpGo(st.action!)) } }) : null,
       ),
     ),
   );
-  helpPanel.hidden = true;
-  const helpLink = h("button", {
-    class: "link help-link",
-    text: "Не нашли приложение?",
-    attrs: { type: "button", "aria-expanded": "false", "aria-controls": "help-panel" },
+  tips.hidden = true;
+  const tipsBtn = h("button", {
+    class: "link tips-toggle",
+    text: "Ещё способы найти",
+    attrs: { type: "button", "aria-expanded": "false", "aria-controls": "find-tips" },
     on: {
       click: () => {
-        helpPanel.hidden = !helpPanel.hidden;
-        helpLink.setAttribute("aria-expanded", String(!helpPanel.hidden));
+        tips.hidden = !tips.hidden;
+        tipsBtn.setAttribute("aria-expanded", String(!tips.hidden));
+        if (!tips.hidden) tipsBtn.scrollIntoView({ block: "start", behavior: "smooth" });
       },
     },
   });
 
   async function helpGo(a: HelpAction) {
-    if (a.kind === "history") return openHistory();
     if (a.kind === "accounts") return go("accounts");
     if (a.kind === "phone") return go("phone");
-    if (a.kind === "link") {
-      linkInput.scrollIntoView({ block: "nearest" });
-      return linkInput.focus();
-    }
     if (!purchasesLoading) await loadPurchases();
   }
 
-  // «Найти всё, что вы скачивали»: окно Apple, вход — сам человек; сюда приходят только номера и названия
+  // «Найти всё, что вы скачивали»: окно Apple, вход — сам человек; сюда приходят только номера и названия.
+  // Сначала три шага (что будет), потом окно; пока оно открыто — «Найдено N…», после — итог.
+  type HistoryPhase = "idle" | "explain" | "open";
+  let historyPhase: HistoryPhase = "idle";
   const historyBtn = h("button", {
     class: "btn ghost small",
     text: "Найти всё, что вы скачивали",
-    attrs: { type: "button", title: "Откроет страницу Apple «Сообщить о проблеме»: войдите своим Apple ID, и программа соберёт приложения из истории покупок. Пароль программа не видит и не хранит" },
-    on: { click: safe(openHistory) },
+    attrs: { type: "button", "aria-controls": "history-steps" },
+    on: { click: () => setHistoryPhase("explain") },
   });
-  const historyMsg = h("p", { class: "note", attrs: { role: "status", "aria-live": "polite" } });
-  historyMsg.hidden = true;
-  const historyBox = h(
+  const historyOpenBtn = h("button", { class: "btn small", text: "Открыть страницу Apple", attrs: { type: "button" }, on: { click: safe(openHistory) } });
+  const historyCancel = h("button", { class: "link", text: "Отмена", attrs: { type: "button" }, on: { click: () => setHistoryPhase("idle", true) } });
+  const historyActions = h("div", { class: "hx-actions" }, historyOpenBtn, historyCancel);
+  const historySteps = h(
     "div",
-    { class: "linkform" },
-    h("p", { class: "note", text: "Нет в покупках? Скрытые и пропавшие из списка приложения есть в истории покупок Apple" }),
-    h("div", { class: "addlink" }, historyBtn),
+    { class: "hx", attrs: { id: "history-steps" } },
+    h("ol", { class: "hx-steps" }, ...HISTORY_STEPS.map((t) => h("li", { text: t }))),
+    h("p", { class: "note hx-safe", text: "Пароль вводится на странице Apple — программа его не видит и не хранит." }),
+    historyActions,
+  );
+  historySteps.hidden = true;
+  const historyMsg = h("p", { class: "note hx-msg", attrs: { role: "status", "aria-live": "polite" } });
+  historyMsg.hidden = true;
+  const historyRow = h(
+    "div",
+    { class: "fm-row" },
+    h("div", { class: "fm-text" }, h("b", { text: "История покупок Apple" }), h("span", { class: "note", text: HISTORY_NOTE })),
+    h("div", { class: "fm-act" }, historyBtn),
+    historySteps,
     historyMsg,
   );
+  const findHead = h("h3", { text: "Не нашли приложение?", attrs: { tabindex: "-1" } });
+  const findMore = h("section", { class: "findmore", attrs: { "aria-label": "Не нашли приложение?" } }, findHead, historyRow, linkForm, h("div", { class: "fm-row fm-tips" }, tipsBtn, tips));
+  const findLink = h("button", {
+    class: "link find-link",
+    text: "Не нашли приложение?",
+    attrs: { type: "button", title: "К блоку под списком: история покупок Apple, ссылка App Store и другие способы" },
+    on: {
+      click: () => {
+        findMore.scrollIntoView({ block: "start", behavior: "smooth" });
+        findHead.focus({ preventScroll: true });
+      },
+    },
+  });
 
-  function historyStatus(text: string, error = false) {
-    historyMsg.textContent = text;
-    historyMsg.className = error ? "error" : "note";
+  function setHistoryPhase(phase: HistoryPhase, focus = false) {
+    historyPhase = phase;
+    historySteps.hidden = phase === "idle";
+    historyBtn.hidden = phase !== "idle";
+    historyCancel.hidden = phase !== "explain";
+    historyOpenBtn.textContent = phase === "open" ? "Показать окно Apple" : "Открыть страницу Apple";
+    // пока окно открыто, «Найдено N…» — рядом с кнопкой окна, иначе — строкой под историей
+    if (phase === "open") historyActions.append(historyMsg);
+    else historyRow.append(historyMsg);
+    if (phase === "explain") {
+      historyMsg.hidden = true;
+      historySteps.scrollIntoView({ block: "nearest" });
+      historyOpenBtn.focus();
+    }
+    if (phase === "idle" && focus) historyBtn.focus();
+  }
+
+  /** Строка под историей: `busy` — со значком ожидания, `show` — кнопка «Показать» к группе. */
+  function historyStatus(text: string, opts: { error?: boolean; busy?: boolean; show?: boolean } = {}) {
+    historyMsg.className = opts.error ? "error hx-msg" : "note hx-msg";
+    historyMsg.replaceChildren(h("span", { text }));
+    if (opts.busy) historyMsg.append(h("span", { class: "spin", attrs: { "aria-hidden": "true" } }));
+    if (opts.show)
+      historyMsg.append(
+        h("button", {
+          class: "link",
+          text: "Показать",
+          attrs: { type: "button" },
+          on: {
+            click: () => {
+              const sec = list.querySelector<HTMLElement>('section[data-group="history"]');
+              sec?.scrollIntoView({ block: "start", behavior: "smooth" });
+              sec?.querySelector<HTMLElement>(".tile")?.focus({ preventScroll: true });
+            },
+          },
+        }),
+      );
     historyMsg.hidden = false;
   }
 
   async function openHistory() {
-    historyBtn.disabled = true;
-    historyStatus(historyProgressText(0));
+    const again = historyPhase === "open";
+    setHistoryPhase("open");
+    if (!again) historyStatus(historyProgressText(0), { busy: true });
     try {
+      // окно уже открыто — Rust только покажет его
       await call("open_history");
     } catch (e) {
-      historyBtn.disabled = false;
-      historyStatus(errorText(asUiError(e)), true);
+      setHistoryPhase("idle");
+      historyStatus(errorText(asUiError(e)), { error: true });
     }
   }
 
   function onHistoryProgress(p: HistoryProgress) {
-    historyStatus(historyProgressText(p.found));
+    if (historyPhase !== "open") setHistoryPhase("open");
+    historyStatus(historyProgressText(p.found), { busy: true });
   }
 
   function onHistory(o: HistoryOutcome) {
-    historyBtn.disabled = false;
+    setHistoryPhase("idle");
+    historyBtn.textContent = "Найти ещё раз";
     rows = mergeHistoryRows(rows, o.rows);
     for (const r of o.rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
-    historyStatus(o.error ?? historyResultText(o.found, o.rows.length), o.error !== null);
+    const hasGroup = rows.some((r) => r.source === "history");
+    historyStatus(o.error ?? historyResultText(o.found, o.rows.length), { error: o.error !== null, show: hasGroup && o.rows.length > 0 });
     if (loaded) {
       renderChips();
       renderList();
     }
+    historyMsg.scrollIntoView({ block: "nearest" });
     // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки
     if (o.rows.length) void call("check_owned", { trackIds: pendingChecks(rows, owned) }).catch(() => undefined);
   }
@@ -311,7 +375,7 @@ register("choose", () => {
   const switchId = h("button", {
     class: "link",
     text: "Войти в другой Apple ID",
-    attrs: { type: "button" },
+    attrs: { type: "button", title: "Список Apple ID: сохранённый вход подставится без пароля" },
     on: {
       // список Apple ID: сохранённый вход подставится без пароля; при смене аккаунта галочки сбросятся
       click: () => go("accounts"),
@@ -573,9 +637,16 @@ register("choose", () => {
       }),
     );
     if (focused) chips.querySelector<HTMLElement>(`[data-chip="${focused}"]`)?.focus();
+    chipsFade();
   }
 
-  function groupSection(key: GroupKey, title: string, items: RowDto[], extra: HTMLElement[], after: HTMLElement[] = []): HTMLElement {
+  /** Чипы не влезли: правый край тает — видно, что ряд листается вбок. */
+  function chipsFade() {
+    chips.classList.toggle("more", chips.scrollLeft + chips.clientWidth < chips.scrollWidth - 1);
+  }
+
+  /** Группа: заголовок (`head` — кнопки рядом с «Выбрать все в группе»), `extra` — под заголовком. */
+  function groupSection(key: GroupKey, title: string, items: RowDto[], extra: HTMLElement[], head: HTMLElement[] = []): HTMLElement {
     const btn = h("button", { class: "link", attrs: { type: "button" } });
     btn.addEventListener("click", () => {
       const pick = groupPick(items, selectable, selected);
@@ -591,14 +662,15 @@ register("choose", () => {
       grid.append(withVersionLink(r, cell));
       if (panels.has(r.track_id)) grid.append(panelEl(r));
     }
-    return h(
+    const sec = h(
       "section",
       { class: "gsec", attrs: { "aria-label": title } },
-      h("div", { class: "ghead" }, h("h3", {}, title, h("small", { text: String(items.length) })), btn),
+      h("div", { class: "ghead" }, h("h3", {}, title, h("small", { text: String(items.length) })), h("div", { class: "gacts" }, ...head, btn)),
       ...extra,
       items.length ? grid : null,
-      ...after,
     );
+    sec.dataset.group = key;
+    return sec;
   }
 
   function banners(): HTMLElement[] {
@@ -817,10 +889,11 @@ register("choose", () => {
     const parts: HTMLElement[] = banners();
     for (const g of groups) {
       const extra: HTMLElement[] = [];
-      if (g.key === "catalog" && !g.rows.length && plain) extra.push(h("p", { class: "empty", text: "Пока пусто. Добавьте приложение по ссылке ниже." }));
+      if (g.key === "catalog" && !g.rows.length && plain) extra.push(h("p", { class: "empty", text: "Пока пусто. Добавьте приложение по ссылке — блок «Не нашли приложение?» ниже." }));
+      const head: HTMLElement[] = [];
       if (g.key === "catalog" && g.rows.length && state.account) {
         renderSweep();
-        extra.push(sweepBox);
+        head.push(sweepBox);
       }
       if (g.key === "buy" && plain) {
         const purchases = rows.filter((r) => r.source === "purchase" || r.source === "saved");
@@ -830,27 +903,27 @@ register("choose", () => {
           extra.push(h("p", { class: "empty", text: "На этом Apple ID нет покупок для iPhone. Проверьте, тот ли это Apple ID." }));
         }
       }
-      const after: HTMLElement[] = [];
+      // подсказка группы — под заголовком, до плиток: сначала что это, потом список
       if (g.key === "store") {
         if (storeStatus === "loading") extra.push(h("p", { class: "loading" }, "Ищем в App Store…", h("span", { class: "spin", attrs: { "aria-hidden": "true" } })));
         else if (storeStatus === "error") extra.push(h("p", { class: "note", text: "App Store не ответил" }));
         else if (!g.rows.length && storeAnswered !== null && storeAnswered === storeTerm(query)) extra.push(h("p", { class: "empty", text: "В App Store ничего не нашлось" }));
-        if (g.rows.length) after.push(h("p", { class: "note group-hint", text: HIDDEN_PURCHASES_HINT }));
+        if (g.rows.length) extra.push(h("p", { class: "note group-hint", text: HIDDEN_PURCHASES_HINT }));
       }
       if (g.key === "phone" && !purchasesLoading) {
         const choices = sourceChoices(state.phones, sourceUdid);
         if (choices && (plain || g.rows.length)) extra.push(sourcePicker(choices));
         if (choices && plain && !g.rows.length) extra.push(h("p", { class: "empty", text: "На этом телефоне нет приложений, которых нет в каталоге и в российском App Store." }));
-        if (g.rows.length) after.push(h("p", { class: "note group-hint", text: SOURCE_HINT }));
+        if (g.rows.length) extra.push(h("p", { class: "note group-hint", text: SOURCE_HINT }));
       }
-      if (g.key === "history" && g.rows.length) after.push(h("p", { class: "note group-hint", text: HISTORY_HINT }));
-      if (g.rows.length || extra.length) parts.push(groupSection(g.key, g.title, g.rows, extra, after));
+      if (g.key === "history" && g.rows.length) extra.push(h("p", { class: "note group-hint", text: HISTORY_HINT }));
+      if (g.rows.length || extra.length) parts.push(groupSection(g.key, g.title, g.rows, extra, head));
     }
     if (groups.every((g) => !g.rows.length) && !plain) {
       parts.push(h("p", { class: "empty", text: query.trim() ? emptySearchText(query) : "В этом фильтре пусто." }));
       if (purchasesLoading) parts.push(progressEl());
     }
-    parts.push(historyBox, linkForm);
+    parts.push(findMore);
     list.replaceChildren(...parts);
     if (focusedId) tiles.get(Number(focusedId))?.focus();
     syncSelection();
@@ -887,7 +960,9 @@ register("choose", () => {
     const items = chosen();
     const { count, size } = selectionSummary(items);
     const label = selectionLabel(count, hiddenCount(items, chip, query, withPhone));
-    countEl.replaceChildren(label, ...(count && size ? [h("small", { text: size })] : []));
+    countEl.textContent = label;
+    sizeEl.textContent = count && size ? size : "";
+    sizeEl.hidden = !sizeEl.textContent;
     clearBtn.hidden = count === 0;
     const bar = barState(count, !!targetPhone());
     startBtn.disabled = bar.go.disabled;
@@ -1179,12 +1254,10 @@ register("choose", () => {
     h(
       "div",
       { class: "choose-top" },
-      heading,
+      h("div", { class: "choose-head" }, heading, switchId),
       resumeBanner(),
       h("label", { class: "searchbox" }, searchIcon(), search),
-      h("p", { class: "hint", text: "Ищет в каталоге, ваших покупках, на телефоне и в App Store, в том числе по прежним названиям." }),
-      helpLink,
-      helpPanel,
+      h("div", { class: "hintrow" }, h("p", { class: "hint", text: "Ищет везде, включая App Store, и по прежним названиям" }), findLink),
       dropMsg,
     ),
     chips,
@@ -1193,11 +1266,9 @@ register("choose", () => {
     h(
       "div",
       { class: "selbar" },
-      countEl,
-      clearBtn,
+      h("div", { class: "selinfo" }, countEl, h("div", { class: "selsub" }, sizeEl, clearBtn)),
       h("div", { class: "sp" }),
       h("button", { class: "link", text: "Назад", attrs: { type: "button" }, on: { click: () => go("phone") } }),
-      switchId,
       onlyBtn,
       startBtn,
     ),
