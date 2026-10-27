@@ -15,6 +15,7 @@
 //! «С этого iPhone» строится по телефону-источнику — любому подключённому (`set_source_phone`),
 //! цель установки та же. «Сообщить в каталог» (`report_to_catalog`): issue на GitHub, адрес
 //! строит и проверяет Rust.
+pub mod history;
 pub mod logic;
 
 use crate::accounts::{Sessions, account_list, same_id};

@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "history",
+  "description": "Окно «История покупок Apple»: странице reportaproblem.apple.com доступна только передача найденных приложений",
+  "local": false,
+  "windows": ["history"],
+  "remote": {
+    "urls": ["https://reportaproblem.apple.com/*"]
+  },
+  "permissions": ["history:allow-items"]
+}
