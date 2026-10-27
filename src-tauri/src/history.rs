@@ -2,8 +2,10 @@
 //! страница окна `history`. Страница чужая, поэтому каждое поле — недоверенные данные: номер —
 //! только цифры (6–12), имя — без управляющих символов и не длиннее 200, всего не больше 5000
 //! записей, берутся только приложения iPhone (`IOSApp`). Токены и cookie сайта сюда не приходят.
+use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use serde::Deserialize;
 use std::collections::HashSet;
+use std::fmt;
 use std::time::Duration;
 
 pub const MAX_ITEMS: usize = 5000;
@@ -15,15 +17,88 @@ pub const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// Пачки шли и перестали — Apple не отвечает.
 pub const STALL_TIMEOUT: Duration = Duration::from_secs(2 * 60);
 
+/// Пачка от страницы — не больше стольких записей (скрипт режет так же); больше — отказ при разборе.
+pub const MAX_BATCH: usize = 500;
+/// Поле записи (номер, имя, тип) длиннее — отказ при разборе, до копирования.
+pub const MAX_FIELD_BYTES: usize = 1024;
+
 /// Запись от страницы: `{adamId, name, type, date}`; `date` не нужна и не читается.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PageItem {
-    #[serde(rename = "adamId")]
+    #[serde(rename = "adamId", deserialize_with = "short")]
     pub adam_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "short_opt")]
     pub name: Option<String>,
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type", default, deserialize_with = "short_opt")]
     pub kind: Option<String>,
+}
+
+/// Строка не длиннее `MAX_FIELD_BYTES`: длина проверяется до копирования.
+struct Short(String);
+
+impl<'de> Deserialize<'de> for Short {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl Visitor<'_> for V {
+            type Value = Short;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "a string of at most {MAX_FIELD_BYTES} bytes")
+            }
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Short, E> {
+                if v.len() > MAX_FIELD_BYTES {
+                    return Err(E::invalid_length(v.len(), &self));
+                }
+                Ok(Short(v.to_owned()))
+            }
+        }
+        d.deserialize_str(V)
+    }
+}
+
+fn short<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Short::deserialize(d).map(|s| s.0)
+}
+
+fn short_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(Option::<Short>::deserialize(d)?.map(|s| s.0))
+}
+
+/// Пачка `items` команды `plugin:history|items`: больше `MAX_BATCH` записей — отказ на `MAX_BATCH + 1`-й.
+#[derive(Debug)]
+pub struct PageBatch(pub Vec<PageItem>);
+
+impl<'de> Deserialize<'de> for PageBatch {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> Visitor<'de> for V {
+            type Value = PageBatch;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                write!(f, "a list of at most {MAX_BATCH} items")
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<PageBatch, A::Error> {
+                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(MAX_BATCH));
+                while let Some(it) = seq.next_element::<PageItem>()? {
+                    if out.len() == MAX_BATCH {
+                        return Err(de::Error::invalid_length(MAX_BATCH + 1, &self));
+                    }
+                    out.push(it);
+                }
+                Ok(PageBatch(out))
+            }
+        }
+        d.deserialize_seq(V)
+    }
+}
+
+/// Куда может ходить окно истории и что может открыть: только https на apple.com и его поддоменах.
+pub fn allowed_url(url: &tauri::Url) -> bool {
+    url.scheme() == "https" && url.host_str().is_some_and(|h| h == "apple.com" || h.ends_with(".apple.com"))
+}
+
+/// Переходы окна (WebKit спрашивает и про рамки страницы): `allowed_url` и пустые рамки
+/// `about:blank`/`about:srcdoc` — у них нет своего сайта, страница Apple создаёт их сама.
+pub fn allowed_navigation(url: &tauri::Url) -> bool {
+    allowed_url(url) || (url.scheme() == "about" && matches!(url.path(), "blank" | "srcdoc"))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +159,11 @@ impl Collected {
 
     pub fn full(&self) -> bool {
         self.items.len() >= MAX_ITEMS
+    }
+
+    /// Пачек пришло больше `MAX_BATCHES`: дальше не слушаем, заход надо закончить.
+    pub fn over_limit(&self) -> bool {
+        self.batches > MAX_BATCHES
     }
 }
 
@@ -220,6 +300,59 @@ mod tests {
             c.add(vec![]);
         }
         assert_eq!(c.add(vec![item("1234567", "A", "IOSApp")]), 0);
+    }
+
+    #[test]
+    fn over_limit_after_max_batches() {
+        let mut c = Collected::default();
+        for _ in 0..MAX_BATCHES {
+            c.add(vec![]);
+        }
+        assert!(!c.over_limit());
+        c.add(vec![]);
+        assert!(c.over_limit());
+    }
+
+    #[test]
+    fn only_https_apple_hosts_are_allowed() {
+        let ok = |s: &str| allowed_url(&s.parse().unwrap());
+        assert!(ok("https://reportaproblem.apple.com/"));
+        assert!(ok("https://idmsa.apple.com/appleauth/auth/signin"));
+        assert!(ok("https://apple.com/"));
+        assert!(!ok("http://reportaproblem.apple.com/"));
+        assert!(!ok("https://apple.com.evil.example/"));
+        assert!(!ok("https://evilapple.com/"));
+        assert!(!ok("https://example.com/?u=apple.com"));
+        assert!(!ok("javascript:alert(1)"));
+        assert!(!ok("about:blank"));
+        let nav = |s: &str| allowed_navigation(&s.parse().unwrap());
+        assert!(nav("https://idmsa.apple.com/x"));
+        assert!(nav("about:blank"));
+        assert!(nav("about:srcdoc"));
+        assert!(!nav("about:config"));
+        assert!(!nav("https://example.com/"));
+        assert!(!nav("data:text/html,hi"));
+    }
+
+    #[test]
+    fn batch_over_500_is_rejected_while_parsing() {
+        let one = r#"{"adamId":"6000000001","name":"A","type":"IOSApp","date":null}"#;
+        let list = |n: usize| format!("[{}]", vec![one; n].join(","));
+        let b: PageBatch = serde_json::from_str(&list(MAX_BATCH)).unwrap();
+        assert_eq!(b.0.len(), MAX_BATCH);
+        assert!(serde_json::from_str::<PageBatch>(&list(MAX_BATCH + 1)).is_err());
+    }
+
+    #[test]
+    fn long_fields_are_rejected_while_parsing() {
+        let name = "я".repeat(MAX_FIELD_BYTES / 2 + 1);
+        let bad = format!(r#"[{{"adamId":"6000000001","name":"{name}","type":"IOSApp"}}]"#);
+        assert!(serde_json::from_str::<PageBatch>(&bad).is_err());
+        let id = "1".repeat(MAX_FIELD_BYTES + 1);
+        let bad = format!(r#"[{{"adamId":"{id}","name":"A","type":"IOSApp"}}]"#);
+        assert!(serde_json::from_str::<PageBatch>(&bad).is_err());
+        let ok = format!(r#"[{{"adamId":"6000000001","name":"{}","type":"IOSApp"}}]"#, "a".repeat(MAX_FIELD_BYTES));
+        assert_eq!(serde_json::from_str::<PageBatch>(&ok).unwrap().0[0].name.as_deref().map(str::len), Some(MAX_FIELD_BYTES));
     }
 
     #[test]

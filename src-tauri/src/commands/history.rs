@@ -5,18 +5,24 @@
 //! покидают: Rust их не читает, не пишет в журнал и в файлы. Хранилище окна — не сохраняемое
 //! (`incognito`: nonPersistent на macOS), закрыли окно — сессии сайта нет.
 //!
-//! События: `history_progress` {found}, `history` {rows, found, error}.
+//! События (только главному окну): `history_progress` {found}, `history` {rows, found, error}.
+//! Окно ходит и открывает новые окна только на https *.apple.com.
 use super::AppState;
 use super::logic::{RowCtx, RowDto, UiError};
-use crate::history::{Collected, Found, PageItem, Problem, fresh, timed_out};
+use crate::history::{Collected, Found, PageBatch, Problem, allowed_navigation, allowed_url, fresh, timed_out};
 use serde::Serialize;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Webview};
 
 pub const LABEL: &str = "history";
 const URL: &str = "https://reportaproblem.apple.com/";
 const SCRIPT: &str = include_str!("../../../src/history-page.js");
+/// События истории — только сюда, не в окно Apple.
+const MAIN: &str = "main";
+/// Сколько видна плашка «Готово, найдено N» перед закрытием окна.
+const DONE_PAUSE: Duration = Duration::from_millis(1500);
 
 struct Run {
     round: u64,
@@ -97,6 +103,15 @@ pub async fn open_history(app: AppHandle) -> Result<(), UiError> {
             .inner_size(960.0, 720.0)
             .incognito(true)
             .initialization_script(SCRIPT)
+            // ссылки Apple наружу и редиректы: окно — не браузер, чужие сайты не открываются
+            .on_navigation(|url| {
+                let ok = allowed_navigation(url);
+                if !ok {
+                    crate::log::write("history", "переход вне apple.com отклонён");
+                }
+                ok
+            })
+            .on_new_window(|url, _| if allowed_url(&url) { NewWindowResponse::Allow } else { NewWindowResponse::Deny })
             .build()
             .map_err(|e| format!("{e}"))
     });
@@ -141,21 +156,22 @@ pub async fn open_history(app: AppHandle) -> Result<(), UiError> {
 /// Пачка от страницы окна `history` (remote-capability только для reportaproblem.apple.com).
 /// `error` — код страницы (`api_changed`, `http`); любой другой — как `api_changed`.
 #[tauri::command]
-pub async fn items(app: AppHandle, webview: Webview, items: Vec<PageItem>, done: bool, error: Option<String>) -> Result<(), ()> {
+pub async fn items(app: AppHandle, webview: Webview, items: PageBatch, done: bool, error: Option<String>) -> Result<(), ()> {
     if webview.label() != LABEL {
         return Err(());
     }
     let hr = app.state::<HistoryRun>();
-    let (round, found, full) = {
+    let (round, found, full, over) = {
         let mut run = hr.run.lock().unwrap();
         let Some(r) = run.as_mut() else { return Ok(()) };
-        r.collected.add(items);
+        r.collected.add(items.0);
         r.last_batch = Some(Instant::now());
-        (r.round, r.collected.items.len(), r.collected.full())
+        (r.round, r.collected.items.len(), r.collected.full(), r.collected.over_limit())
     };
-    let _ = app.emit("history_progress", Progress { found });
+    let _ = app.emit_to(MAIN, "history_progress", Progress { found });
     let problem = error.as_deref().map(Problem::from_page);
-    if done || full || problem.is_some() {
+    // пачек сверх MAX_BATCHES не читаем — и окно не держим открытым пустыми вызовами
+    if done || full || over || problem.is_some() {
         finish(&app, round, problem).await;
     }
     Ok(())
@@ -172,6 +188,10 @@ async fn finish(app: &AppHandle, round: u64, problem: Option<Problem>) {
         run.take().unwrap()
     };
     if let Some(w) = app.get_webview_window(LABEL) {
+        // человек сам закрыл окно — ждать нечего; иначе дать прочесть «Готово, найдено N»
+        if problem != Some(Problem::Closed) {
+            tokio::time::sleep(DONE_PAUSE).await;
+        }
         let _ = w.close();
     }
     let found = run.collected.items.len();
@@ -181,5 +201,5 @@ async fn finish(app: &AppHandle, round: u64, problem: Option<Problem>) {
     // в журнал — только счётчики и вид ошибки, без названий и номеров
     crate::log::write("history", &format!("найдено {found}, новых {}, итог {problem:?}", new.len()));
     let rows = st.with_ctx(|ctx| new.iter().map(|f| history_row(f, ctx)).collect()).await;
-    let _ = app.emit("history", Outcome { rows, found, error: problem.map(|p| p.text(found)) });
+    let _ = app.emit_to(MAIN, "history", Outcome { rows, found, error: problem.map(|p| p.text(found)) });
 }
