@@ -105,6 +105,9 @@ pub struct RowDto {
     pub other_account: bool,
     /// Маска покупателя (`ma***@example.com`) у строки `other_account`; полного адреса нигде нет.
     pub purchaser_masked: Option<String>,
+    /// Минимальная iOS того, что поставим (последняя версия, `minimumOsVersion` из Lookup);
+    /// `null` — неизвестно (в том числе у записей каталога, которые ставятся из копии).
+    pub min_ios: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -126,6 +129,7 @@ pub fn row_dto(r: AppRow, target_iphone: bool) -> RowDto {
         category: r.category,
         other_account: false,
         purchaser_masked: None,
+        min_ios: None,
         ipad_only: r.ipad_only,
         installed_version: r.installed_version,
         available_version: r.available_version,
@@ -178,15 +182,85 @@ pub struct RowCtx<'a> {
     pub source: Option<&'a [InstalledApp]>,
     /// udid этого источника: им помечаются строки группы (`RowsDto.source_udid`, `SourceRowsDto`).
     pub source_udid: Option<&'a str>,
+    /// Минимальная iOS последней версии из Lookup (`minimumOsVersion`) по trackId.
+    pub min_os: &'a HashMap<i64, String>,
 }
 
 /// Размер для строки: у записей каталога главнее копия (её и поставим), у прочих — Lookup.
+/// Минимальная iOS из Lookup — о последней версии: строке каталога с копией (поставим копию) не идёт.
 fn with_sizes(mut rows: Vec<RowDto>, ctx: &RowCtx) -> Vec<RowDto> {
     for r in &mut rows {
         let store = ctx.sizes.get(&r.track_id).copied();
         r.size_bytes = if r.source == "removed" { r.size_bytes.or(store) } else { store.or(r.size_bytes) };
+        if !(r.source == "removed" && r.has_saved_copy) {
+            r.min_ios = r.min_ios.take().or_else(|| ctx.min_os.get(&r.track_id).cloned());
+        }
     }
     rows
+}
+
+/// Сколько версий спрашивать у Apple за один раз («Другая версия…», «Ещё»).
+pub const VERSIONS_PAGE: usize = 10;
+
+/// Версии для списка: от новой к старой, после `before` (его external id; `None` — с самой новой),
+/// не больше `n`. `ids` — от старой к новой, как отдаёт `list-versions`. Второе — есть ли ещё старше.
+/// Неизвестный `before` — пусто.
+pub fn versions_page(ids: &[String], before: Option<&str>, n: usize) -> (Vec<String>, bool) {
+    let end = match before {
+        None => ids.len(),
+        Some(b) => match ids.iter().position(|x| x == b) {
+            Some(i) => i,
+            None => return (vec![], false),
+        },
+    };
+    let start = end.saturating_sub(n);
+    (ids[start..end].iter().rev().cloned().collect(), start > 0)
+}
+
+/// Ошибка списка версий для человека: 429 — «Apple просит подождать», а не «серверы не отвечают».
+pub fn versions_error(e: AppError) -> UiError {
+    let mut u = UiError::from(e.clone());
+    if e == (AppError::AppleUnavailable { status: Some(429) }) {
+        u.text = "Apple просит подождать: слишком много запросов о версиях. Попробуйте через несколько минут.".into();
+    }
+    u
+}
+
+/// Версия в списке «Другая версия…». `display` — `null`, если Apple не успел ответить.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VersionDto {
+    pub id: String,
+    pub display: Option<String>,
+    /// Дата выхода «ГГГГ-ММ-ДД».
+    pub released: Option<String>,
+}
+
+pub fn version_dto(id: &str, meta: Option<&crate::ios_compat::VersionMeta>) -> VersionDto {
+    VersionDto {
+        id: id.to_string(),
+        display: meta.map(|m| m.display.clone()).filter(|d| !d.trim().is_empty()),
+        released: meta.and_then(|m| m.released.as_deref()).map(|d| d.get(..10).unwrap_or(d).to_string()),
+    }
+}
+
+/// Итог `app_versions`: страница версий от новой к старой. `more` — есть старше («Ещё»).
+/// `error` — Apple перестал отвечать посреди страницы: показано, что успели.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VersionsDto {
+    pub versions: Vec<VersionDto>,
+    pub more: bool,
+    pub error: Option<UiError>,
+}
+
+/// Итог `find_version`: самая новая версия, вышедшая до следующей iOS после телефона.
+/// `version` — `null`, если не нашли (`error` — почему, если из-за Apple). `next_ios` — номер
+/// той iOS. `none_older` — все версии вышли позже: подходящей, скорее всего, нет.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FoundVersionDto {
+    pub version: Option<VersionDto>,
+    pub next_ios: Option<u64>,
+    pub none_older: bool,
+    pub error: Option<UiError>,
 }
 
 /// Список, который показывается сразу: каталог плюс строки сохранённых копий (с trackId),
@@ -356,6 +430,7 @@ fn phone_row(track_id: i64, a: &InstalledApp, ctx: &RowCtx) -> RowDto {
         size_bytes: None,
         other_account,
         purchaser_masked,
+        min_ios: None,
     }
 }
 
@@ -403,6 +478,7 @@ pub fn link_row(track_id: i64, ctx: &RowCtx, looked_up: Option<(String, String)>
         size_bytes: ctx.sizes.get(&track_id).copied(),
         other_account: false,
         purchaser_masked: None,
+        min_ios: ctx.min_os.get(&track_id).cloned(),
     }
 }
 
@@ -462,6 +538,7 @@ pub fn store_rows(found: Vec<crate::lookup::StoreApp>, taken: &HashSet<i64>, ctx
                 size_bytes: ctx.sizes.get(&a.track_id).copied().or(a.size),
                 other_account: false,
                 purchaser_masked: None,
+                min_ios: a.min_os.or_else(|| ctx.min_os.get(&a.track_id).cloned()),
                 bundle_id: a.bundle_id,
             }
         })
@@ -595,15 +672,21 @@ pub type StartPlan = (Vec<(i64, String)>, Vec<(i64, PathBuf)>);
 /// всегда (свежая версия); копия для них — запасной путь, см. `fallback_copy`.
 /// Копия неизвестного Apple ID (`unknown`) ставится как есть, если строка была только ею: не
 /// каталог и своей копии нет — скачать её текущим входом всё равно нельзя.
+/// `chosen` — выбрана другая версия («Другая версия…»): скачивается она, копия не в счёт.
 pub fn plan_start(
     items: Vec<(i64, String)>,
     catalog_ids: &HashSet<i64>,
     saved: &[SavedIpa],
     unknown: &[SavedIpa],
+    chosen: &HashSet<i64>,
 ) -> StartPlan {
     let mut download = vec![];
     let mut install = vec![];
     for (id, name) in items {
+        if chosen.contains(&id) {
+            download.push((id, name));
+            continue;
+        }
         let own = crate::catalog::find_saved(saved, id, "");
         let in_catalog = catalog_ids.contains(&id);
         match own {
@@ -754,11 +837,6 @@ pub fn after_poll(prev: &[PhoneInfo], failures: u32, res: Result<Vec<PhoneInfo>,
             }
         }
     }
-}
-
-/// Имя для повторной постановки; если его нет — «Приложение {id}».
-pub fn job_name(names: &HashMap<i64, String>, track_id: i64) -> String {
-    names.get(&track_id).filter(|n| !n.trim().is_empty()).cloned().unwrap_or_else(|| format!("Приложение {track_id}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -1249,6 +1327,7 @@ mod tests {
                 size_bytes: None,
                 other_account: false,
                 purchaser_masked: None,
+                min_ios: None,
             }
         );
         assert_eq!(
@@ -1273,6 +1352,7 @@ mod tests {
         /// Телефон-источник «С этого iPhone»; `None` — тот же, что цель (`installed`).
         source: Option<Vec<InstalledApp>>,
         source_udid: Option<String>,
+        min_os: HashMap<i64, String>,
     }
     impl Ctx {
         fn new(catalog: Vec<RemovedApp>) -> Self {
@@ -1288,6 +1368,7 @@ mod tests {
                 account: None,
                 source: None,
                 source_udid: None,
+                min_os: HashMap::new(),
             }
         }
         fn get(&self) -> RowCtx<'_> {
@@ -1303,6 +1384,7 @@ mod tests {
                 account: self.account.as_deref(),
                 source: self.source.as_deref().or(self.installed.as_deref()),
                 source_udid: self.source_udid.as_deref(),
+                min_os: &self.min_os,
             }
         }
     }
@@ -1424,7 +1506,7 @@ mod tests {
     #[test]
     fn phone_row_downloads_by_track_id_like_catalog() {
         // не каталог, своей копии нет — скачивание по trackId
-        let (download, install) = plan_start(vec![(60, "Онлайн".into())], &HashSet::new(), &[], &[]);
+        let (download, install) = plan_start(vec![(60, "Онлайн".into())], &HashSet::new(), &[], &[], &HashSet::new());
         assert_eq!((download, install), (vec![(60, "Онлайн".to_string())], vec![]));
     }
 
@@ -1581,7 +1663,7 @@ mod tests {
         let lib = [saved(2, "/x/2_old.ipa"), saved(2, "/x/2_new.ipa"), saved(5, "/x/5.ipa"), SavedIpa { track_id: None, ..saved(3, "/x/b_1.ipa") }];
         let catalog: HashSet<i64> = [2, 3].into();
         let items = vec![(1, "A".into()), (2, "B".into()), (3, "C".into()), (5, "D".into())];
-        let (down, inst) = plan_start(items, &catalog, &lib, &[]);
+        let (down, inst) = plan_start(items, &catalog, &lib, &[], &HashSet::new());
         // 5 — покупка с копией: всё равно скачивается свежая версия
         assert_eq!(down, vec![(1, "A".to_string()), (3, "C".to_string()), (5, "D".to_string())]);
         assert_eq!(inst.iter().map(|x| x.0).collect::<Vec<_>>(), [2]);
@@ -1593,11 +1675,58 @@ mod tests {
         let lib = [saved(9, "/x/me/9.ipa")];
         let catalog: HashSet<i64> = [2].into();
         let items = vec![(8, "U".into()), (2, "C".into()), (9, "M".into())];
-        let (down, inst) = plan_start(items, &catalog, &lib, &unknown);
+        let (down, inst) = plan_start(items, &catalog, &lib, &unknown, &HashSet::new());
         // 8 — только копия неизвестного Apple ID: скачать её нашим входом нельзя, ставим как есть.
         // 2 — запись каталога, 9 — есть своя копия: как раньше.
         assert_eq!(down, vec![(2, "C".to_string()), (9, "M".to_string())]);
         assert_eq!(inst, vec![(8, PathBuf::from("/x/8_u.ipa"))]);
+    }
+
+    /// Выбрана другая версия: скачивается она, даже если копия лежит (копия — другой версии).
+    #[test]
+    fn start_downloads_chosen_version_even_with_a_copy() {
+        let lib = [saved(2, "/x/2.ipa")];
+        let unknown = [saved(8, "/x/8_u.ipa")];
+        let items = vec![(2, "C".into()), (8, "U".into())];
+        let (down, inst) = plan_start(items, &[2].into(), &lib, &unknown, &[2, 8].into());
+        assert_eq!(down, vec![(2, "C".to_string()), (8, "U".to_string())]);
+        assert!(inst.is_empty());
+    }
+
+    #[test]
+    fn rows_carry_minimum_ios_of_what_will_be_installed() {
+        let mut c = Ctx::new(vec![removed(900, "Сбер"), removed(901, "ВТБ")]);
+        c.saved = vec![saved(900, "/x/900_b_1.ipa")];
+        c.min_os = [(1, "16.0".to_string()), (900, "15.0".to_string()), (901, "14.0".to_string())].into();
+        let d = purchase_rows(&c.get(), vec![app(1, "com.example.a", "A"), app(2, "com.example.b", "B")], Some(&[1, 2].into()));
+        let got: Vec<_> = d.rows.iter().map(|r| (r.track_id, r.min_ios.clone())).collect();
+        // 900 ставится из копии: минимальная iOS последней версии к ней не относится
+        assert_eq!(got, [(900, None), (901, Some("14.0".into())), (1, Some("16.0".into())), (2, None)]);
+        let found = vec![crate::lookup::StoreApp { min_os: Some("17.2".into()), ..store_app(14, "Новое") }];
+        assert_eq!(store_rows(found, &HashSet::new(), &c.get())[0].min_ios.as_deref(), Some("17.2"));
+        c.owned = [(1, true)].into();
+        assert_eq!(link_row(1, &c.get(), None).min_ios.as_deref(), Some("16.0"));
+        assert_eq!(serde_json::to_value(&d.rows[3]).unwrap()["min_ios"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn versions_page_newest_first() {
+        let ids: Vec<String> = (0..12).map(|i| format!("v{i}")).collect();
+        let (page, more) = versions_page(&ids, None, 10);
+        assert_eq!(page, (2..12).rev().map(|i| format!("v{i}")).collect::<Vec<_>>());
+        assert!(more);
+        let (page, more) = versions_page(&ids, Some("v2"), 10);
+        assert_eq!(page, ["v1", "v0"]);
+        assert!(!more);
+        assert_eq!(versions_page(&ids, Some("нет"), 10), (vec![], false));
+        assert_eq!(versions_page(&[], None, 10), (vec![], false));
+    }
+
+    #[test]
+    fn versions_error_explains_429() {
+        let e = versions_error(AppError::AppleUnavailable { status: Some(429) });
+        assert_eq!((e.code.as_str(), e.text.as_str()), ("apple_unavailable", "Apple просит подождать: слишком много запросов о версиях. Попробуйте через несколько минут."));
+        assert_eq!(versions_error(AppError::NotPurchased).text, AppError::NotPurchased.user_text());
     }
 
     /// Покупки не загрузились: строки копий называются по имени из ipa, не по bundle id.
@@ -1814,13 +1943,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn job_name_falls_back_to_id() {
-        let names: HashMap<i64, String> = [(1, "Сбер".to_string()), (2, String::new())].into();
-        assert_eq!(job_name(&names, 1), "Сбер");
-        assert_eq!(job_name(&names, 2), "Приложение 2");
-        assert_eq!(job_name(&names, 3), "Приложение 3");
-    }
 
     #[test]
     fn phone_dtos_mark_target() {

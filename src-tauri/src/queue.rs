@@ -319,15 +319,18 @@ impl Queue {
     }
 
     /// `(track_id, name)`: имя нужно экрану, очереди достаточно trackId. Ключ событий: `track_id`.
+    #[cfg(test)]
     pub fn enqueue(&self, apps: Vec<(i64, String)>) {
         self.enqueue_with(apps, false);
     }
 
     /// «Только скачать»: как `enqueue`, но скачанное остаётся в `Saved` и на телефон не ставится.
+    #[cfg(test)]
     pub fn enqueue_download_only(&self, apps: Vec<(i64, String)>) {
         self.enqueue_with(apps, true);
     }
 
+    #[cfg(test)]
     fn enqueue_with(&self, apps: Vec<(i64, String)>, only: bool) {
         self.enqueue_versions(apps.into_iter().map(|(id, _)| (id, None)).collect(), only);
     }

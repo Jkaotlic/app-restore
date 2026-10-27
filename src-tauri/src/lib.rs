@@ -69,6 +69,8 @@ pub fn run() {
             commands::links_in_text,
             commands::search_store,
             commands::start,
+            commands::app_versions,
+            commands::find_version,
             commands::run_info,
             commands::list_phones,
             commands::choose_phone,

@@ -114,6 +114,16 @@ pub struct AppState {
     latest: Mutex<HashMap<i64, String>>,
     /// Размеры из Lookup (`fileSizeBytes`) по trackId: для «≈ размер» на «Выборе».
     sizes: Mutex<HashMap<i64, u64>>,
+    /// Минимальная iOS последней версии из Lookup/Search (`minimumOsVersion`) по trackId.
+    min_os: Mutex<HashMap<i64, String>>,
+    /// Версии приложения (`list-versions`, от старой к новой) по trackId: «Другая версия…».
+    version_ids: Mutex<HashMap<i64, Vec<String>>>,
+    /// Метаданные версий (trackId, external id): Apple о них дважды не спрашиваем.
+    version_meta: Mutex<HashMap<(i64, String), crate::ios_compat::VersionMeta>>,
+    /// Список версий и поиск подходящей — по одному: запросы к Apple не удваиваются.
+    versions_turn: tokio::sync::Mutex<()>,
+    /// Выбранная человеком версия задания (external id): её скачивает и «Повторить».
+    chosen_versions: Mutex<HashMap<i64, String>>,
     /// Что стоит на телефоне (udid, список) из `installed_apps`; `None` — без телефона.
     installed: Mutex<Option<(String, Vec<InstalledApp>)>>,
     /// Что стоит на каждом прочитанном телефоне (udid → список): источник группы «С этого iPhone»
@@ -195,6 +205,11 @@ impl AppState {
             store_ids: Mutex::new(vec![]),
             latest: Mutex::new(HashMap::new()),
             sizes: Mutex::new(HashMap::new()),
+            min_os: Mutex::new(HashMap::new()),
+            version_ids: Mutex::new(HashMap::new()),
+            version_meta: Mutex::new(HashMap::new()),
+            versions_turn: tokio::sync::Mutex::new(()),
+            chosen_versions: Mutex::new(HashMap::new()),
             installed: Mutex::new(None),
             phone_lists: Mutex::new(HashMap::new()),
             source: Mutex::new(SourcePick::default()),
@@ -221,6 +236,7 @@ impl AppState {
         let owned = self.owned.lock().unwrap().clone();
         let latest = self.latest.lock().unwrap().clone();
         let sizes = self.sizes.lock().unwrap().clone();
+        let min_os = self.min_os.lock().unwrap().clone();
         let account = self.current_email();
         let installed = self.installed.lock().unwrap().clone().map(|(_, apps)| apps);
         // источник и его список — из одного снимка: им же помечаются строки группы
@@ -232,7 +248,7 @@ impl AppState {
             let p = self.phones.lock().unwrap();
             p.target.as_deref().is_some_and(|t| p.last.iter().any(|d| d.udid == t && d.device_class == "iPhone"))
         };
-        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, target_iphone, sizes: &sizes, account: account.as_deref(), source: source.as_deref(), source_udid: source_udid.as_deref() })
+        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, target_iphone, sizes: &sizes, account: account.as_deref(), source: source.as_deref(), source_udid: source_udid.as_deref(), min_os: &min_os })
     }
 
     /// Что стоит на телефоне, с запоминанием. Во время установки телефон не трогаем — прошлый список.
@@ -288,6 +304,8 @@ impl AppState {
         self.purchases_gen.fetch_add(1, Ordering::SeqCst);
         self.owned.lock().unwrap().clear();
         self.latest.lock().unwrap().clear();
+        // права на версии — у прежнего аккаунта; метаданные версий от аккаунта не зависят
+        self.version_ids.lock().unwrap().clear();
         *self.phone_taken.lock().unwrap() = None;
         *self.sweep.lock().unwrap() = None;
     }
@@ -328,7 +346,9 @@ impl AppState {
         };
         let (mut names, mut fs, mut dl) = (self.names.lock().unwrap(), self.from_saved.lock().unwrap(), self.downloads.lock().unwrap());
         let mut only = self.download_only.lock().unwrap();
+        let mut chosen = self.chosen_versions.lock().unwrap();
         for id in &gone {
+            chosen.remove(id);
             names.remove(id);
             fs.remove(id);
             dl.remove(id);
@@ -436,8 +456,10 @@ impl AppState {
         let only = self.download_only.lock().unwrap().contains(&track_id);
         if let JobState::Failed { error, saved: None } = &state {
             log_err(&format!("job {track_id}"), error);
-            // «Только скачать» старую копию на телефон не ставит: пусть будет видна ошибка
-            if let Some((path, version)) = fallback_copy(error, track_id, &self.library.list()).filter(|_| !only) {
+            // «Только скачать» старую копию на телефон не ставит: пусть будет видна ошибка;
+            // выбранная версия — тоже: копия может быть той самой, которая не запускается
+            let chosen = self.chosen_versions.lock().unwrap().contains_key(&track_id);
+            if let Some((path, version)) = fallback_copy(error, track_id, &self.library.list()).filter(|_| !only && !chosen) {
                 crate::log::write(&format!("job {track_id}"), &format!("скачать не вышло, ставим сохранённую копию {version}"));
                 self.from_saved.lock().unwrap().insert(track_id, version);
                 self.install_copy(app, track_id, path);
@@ -458,6 +480,36 @@ impl AppState {
         } else {
             self.record(app, track_id, JobState::Saved { path });
         }
+    }
+
+    /// Список версий приложения (кэш на сеанс Apple ID).
+    async fn version_ids(&self, track_id: i64) -> Result<Vec<String>, AppError> {
+        if let Some(ids) = self.version_ids.lock().unwrap().get(&track_id).cloned() {
+            return Ok(ids);
+        }
+        let epoch = self.account_epoch.load(Ordering::SeqCst);
+        let ids = self.session.versions(track_id).await?;
+        if self.account_epoch.load(Ordering::SeqCst) == epoch {
+            self.version_ids.lock().unwrap().insert(track_id, ids.clone());
+        }
+        Ok(ids)
+    }
+
+    /// Метаданные версии: из кэша, иначе один запрос к Apple (без повторов, `version_meta`).
+    async fn version_meta(&self, track_id: i64, id: String) -> Result<crate::ios_compat::VersionMeta, AppError> {
+        let key = (track_id, id);
+        if let Some(m) = self.version_meta.lock().unwrap().get(&key).cloned() {
+            return Ok(m);
+        }
+        let m = self.session.version_meta(track_id, &key.1).await?;
+        self.version_meta.lock().unwrap().insert(key, m.clone());
+        Ok(m)
+    }
+
+    /// Задания `ids` с версиями: выбранная человеком (`chosen_versions`) или последняя.
+    fn with_versions(&self, ids: impl IntoIterator<Item = i64>) -> Vec<(i64, Option<String>)> {
+        let chosen = self.chosen_versions.lock().unwrap();
+        ids.into_iter().map(|id| (id, chosen.get(&id).cloned())).collect()
     }
 
     /// Новая цель установки. Когда телефон появился, ставятся задания, ждущие в `Saved`.
@@ -528,6 +580,8 @@ async fn poll_phones<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<PhoneDto>, Ui
         (p.last.clone(), p.chosen.clone(), error)
     };
     let target = resolve_target(&phones, chosen.as_deref());
+    // iOS телефонов — очереди: копия, которой нужна iOS новее, не ставится
+    st.queue.set_phone_versions(phones.iter().map(|p| (p.udid.clone(), p.ios_version.clone())).collect());
     st.apply_target(app, target.clone());
     let dtos = phone_dtos(&phones, target.as_deref());
     let error = error.map(|e| ui("phones", e));
@@ -785,6 +839,7 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
                 let present = match st.lookup.present_in(&ids, "ru").await {
                     Ok(p) => {
                         st.sizes.lock().unwrap().extend(p.sizes.iter().map(|(k, v)| (*k, *v)));
+                        st.min_os.lock().unwrap().extend(p.min_os.iter().map(|(k, v)| (*k, v.clone())));
                         Some(p)
                     }
                     Err(e) => {
@@ -859,6 +914,7 @@ pub async fn set_source_phone(state: State<'_, AppState>, udid: String) -> Resul
     let apps = state.installed_any(&udid).await.map_err(|e| ui("set_source_phone", e))?;
     let present = state.lookup.present_in(&phone_candidates(&apps, &taken), "ru").await.map_err(|e| ui("set_source_phone", e))?;
     state.sizes.lock().unwrap().extend(present.sizes.iter().map(|(k, v)| (*k, *v)));
+    state.min_os.lock().unwrap().extend(present.min_os.iter().map(|(k, v)| (*k, v.clone())));
     {
         let mut s = state.source.lock().unwrap();
         (s.chosen, s.current) = (Some(udid.clone()), Some(udid));
@@ -1044,6 +1100,7 @@ pub async fn search_store(state: State<'_, AppState>, term: String) -> Result<Ve
     let found = crate::lookup::search(state.fetch.as_ref(), &term).await.map_err(|e| ui("search_store", e))?;
     let found = relevant(found, &term);
     state.sizes.lock().unwrap().extend(found.iter().filter_map(|a| Some((a.track_id, a.size?))));
+    state.min_os.lock().unwrap().extend(found.iter().filter_map(|a| Some((a.track_id, a.min_os.clone()?))));
     let screen = state.phone_taken.lock().unwrap().clone();
     let rows = state.with_ctx(|ctx| store_rows(found, &store_taken(ctx, screen.as_ref()), ctx)).await;
     *state.store_ids.lock().unwrap() = rows.iter().map(|r| r.track_id).collect();
@@ -1069,7 +1126,8 @@ pub async fn add_by_link(state: State<'_, AppState>, link: String) -> Result<Row
 
 /// Ставит выбранное в очередь. Копии из «Мои приложения» ставятся без скачивания.
 /// `download_only` («Только скачать»): скачать в «Мои приложения» и не ставить, даже если телефон
-/// подключён; готовые копии сразу «Сохранено».
+/// подключён; готовые копии сразу «Сохранено». `versions` — (trackId, external version id)
+/// выбранных «Другая версия…»: скачиваются они, без `--purchase`, как и всё остальное.
 #[tauri::command]
 pub async fn start(
     app: AppHandle,
@@ -1077,8 +1135,20 @@ pub async fn start(
     items: Vec<(i64, String)>,
     same_apple_id: bool,
     download_only: Option<bool>,
+    versions: Option<Vec<(i64, String)>>,
 ) -> Result<RunDto, ()> {
     let only = download_only.unwrap_or(false);
+    let versions: HashMap<i64, String> = versions.unwrap_or_default().into_iter().filter(|(_, v)| !v.trim().is_empty()).collect();
+    {
+        let mut chosen = state.chosen_versions.lock().unwrap();
+        for (id, _) in &items {
+            match versions.get(id) {
+                Some(v) => chosen.insert(*id, v.clone()),
+                None => chosen.remove(id),
+            };
+        }
+    }
+    let chosen_ids: HashSet<i64> = versions.keys().copied().collect();
     let email = state.account.lock().unwrap().as_ref().map(|a| a.email.clone());
     let run = RunDto { same_apple_id, email };
     *state.run.lock().unwrap() = Some(run.clone());
@@ -1100,7 +1170,7 @@ pub async fn start(
             }
         }
     }
-    let (download, install) = plan_start(items, &catalog_ids, &state.library.list(), &state.library.list_unknown());
+    let (download, install) = plan_start(items, &catalog_ids, &state.library.list(), &state.library.list_unknown(), &chosen_ids);
     for (id, path) in install {
         if only {
             state.record(&app, id, JobState::Saved { path });
@@ -1109,11 +1179,7 @@ pub async fn start(
         }
     }
     state.mark_downloads(download.iter().map(|(id, _)| *id).filter(|id| *id > 0));
-    if only {
-        state.queue.enqueue_download_only(download);
-    } else {
-        state.queue.enqueue(download);
-    }
+    state.queue.enqueue_versions(state.with_versions(download.into_iter().map(|(id, _)| id)), only);
     Ok(run)
 }
 
@@ -1151,17 +1217,72 @@ pub fn retry(app: AppHandle, state: State<'_, AppState>, track_id: i64) {
             }
         }
         RetryAction::Download => {
-            let name = job_name(&state.names.lock().unwrap(), track_id);
             state.from_saved.lock().unwrap().remove(&track_id);
             state.mark_downloads([track_id]);
-            if state.download_only.lock().unwrap().contains(&track_id) {
-                state.queue.enqueue_download_only(vec![(track_id, name)]);
-            } else {
-                state.queue.enqueue(vec![(track_id, name)]);
-            }
+            let only = state.download_only.lock().unwrap().contains(&track_id);
+            state.queue.enqueue_versions(state.with_versions([track_id]), only);
         }
         RetryAction::Nothing => {}
     }
+}
+
+/// «Другая версия…»: страница версий приложения от новой к старой (`before` — external id
+/// последней показанной, `None` — с самой новой). Метаданные — по одной версии, из кэша или
+/// у Apple, не больше `VERSIONS_PAGE` за раз; Apple отказал (429) — останавливаемся и говорим.
+#[tauri::command]
+pub async fn app_versions(state: State<'_, AppState>, track_id: i64, before: Option<String>) -> Result<VersionsDto, UiError> {
+    let _turn = state.versions_turn.lock().await;
+    let ids = state.version_ids(track_id).await.map_err(|e| ui("app_versions", e))?;
+    let (page, more) = versions_page(&ids, before.as_deref(), VERSIONS_PAGE);
+    let mut versions = Vec::with_capacity(page.len());
+    let mut error = None;
+    for id in page {
+        let meta = if error.is_none() {
+            match state.version_meta(track_id, id.clone()).await {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    log_err(&format!("versions {track_id}"), &e);
+                    error = Some(versions_error(e));
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        versions.push(version_dto(&id, meta.as_ref()));
+    }
+    Ok(VersionsDto { versions, more, error })
+}
+
+/// «Найти подходящую»: самая новая версия, вышедшая до следующей крупной iOS после iOS
+/// телефона-цели (такая не может требовать iOS новее). Поиск делением пополам, не больше
+/// `VERSIONS_PAGE` запросов метаданных; 429 — стоп и объяснение. Перед установкой копию всё равно
+/// проверит `MinimumOSVersion` из её Info.plist.
+#[tauri::command]
+pub async fn find_version(state: State<'_, AppState>, track_id: i64) -> Result<FoundVersionDto, UiError> {
+    let ios = {
+        let p = state.phones.lock().unwrap();
+        p.target.as_deref().and_then(|t| p.last.iter().find(|d| d.udid == t)).map(|d| d.ios_version.clone())
+    };
+    let ios = ios.ok_or_else(|| ui("find_version", AppError::DeviceNotFound { drivers_missing: false }))?;
+    let Some((next, cutoff)) = crate::ios_compat::next_ios_release(&ios) else {
+        return Ok(FoundVersionDto { version: None, next_ios: None, none_older: false, error: None });
+    };
+    let _turn = state.versions_turn.lock().await;
+    let ids = state.version_ids(track_id).await.map_err(|e| ui("find_version", e))?;
+    let st = &*state;
+    let found = crate::ios_compat::newest_before(&ids, cutoff, VERSIONS_PAGE, |id| st.version_meta(track_id, id)).await;
+    let mut dto = FoundVersionDto { version: None, next_ios: Some(next), none_older: false, error: None };
+    match found {
+        Ok(crate::ios_compat::Found::Version(i, m)) => dto.version = Some(version_dto(&ids[i], Some(&m))),
+        Ok(crate::ios_compat::Found::None) => dto.none_older = true,
+        Ok(crate::ios_compat::Found::Unknown) => {}
+        Err(e) => {
+            log_err(&format!("find version {track_id}"), &e);
+            dto.error = Some(versions_error(e));
+        }
+    }
+    Ok(dto)
 }
 
 /// «Открыть папку с копиями»: «Мои приложения» в Finder / Проводнике. Папка создаётся, если её нет.
