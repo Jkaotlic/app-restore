@@ -29,6 +29,22 @@ pub struct PendingJob {
     /// Номер постановки (`PendingStore::next_seq`): после перезапуска — тот же порядок очереди.
     #[serde(default)]
     pub seq: u64,
+    /// Примерный размер (Lookup) на момент постановки: «осталось ≈ N мин» после «Продолжить».
+    #[serde(default)]
+    pub size_bytes: Option<u64>,
+}
+
+/// Что программа помнит о задании с постановки (`start`).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Meta {
+    /// Номер постановки (`PendingStore::next_seq`).
+    pub seq: u64,
+    pub size_bytes: Option<u64>,
+}
+
+/// Размер для «Продолжить»: записанный при постановке, иначе из нынешнего кэша Lookup.
+pub fn size_of(j: &PendingJob, sizes: &HashMap<i64, u64>) -> Option<u64> {
+    j.size_bytes.or_else(|| sizes.get(&j.track_id).copied())
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -72,8 +88,8 @@ pub struct Live<'a> {
     /// Цель установки сейчас.
     pub udid: Option<&'a str>,
     pub account: &'a str,
-    /// Номера постановки заданий (`PendingStore::next_seq`).
-    pub seqs: &'a HashMap<i64, u64>,
+    /// Что запомнено при постановке: номер, размер.
+    pub meta: &'a HashMap<i64, Meta>,
 }
 
 /// Незавершённые задания Apple ID по trackId. Установки из «Все копии» (отрицательный ключ)
@@ -90,7 +106,8 @@ pub fn live(l: &Live) -> Vec<PendingJob> {
             version: l.versions.get(id).cloned(),
             udid: l.udid.map(str::to_string),
             account: l.account.to_string(),
-            seq: l.seqs.get(id).copied().unwrap_or_default(),
+            seq: l.meta.get(id).map_or(0, |m| m.seq),
+            size_bytes: l.meta.get(id).and_then(|m| m.size_bytes),
         })
         .collect();
     out.sort_by_key(|j| (j.seq, j.track_id));
@@ -232,7 +249,7 @@ mod tests {
     use crate::errors::AppError;
 
     fn job(id: i64, account: &str) -> PendingJob {
-        PendingJob { track_id: id, name: format!("App {id}"), download_only: false, version: None, udid: Some("UDID-1".into()), account: account.into(), seq: id as u64 }
+        PendingJob { track_id: id, name: format!("App {id}"), download_only: false, version: None, udid: Some("UDID-1".into()), account: account.into(), seq: id as u64, size_bytes: None }
     }
 
     fn ids(list: &[PendingJob]) -> Vec<i64> {
@@ -252,12 +269,13 @@ mod tests {
         let names = HashMap::from([(1, "Банк".to_string()), (3, "Такси".to_string()), (4, "Карты".to_string())]);
         let only = HashSet::from([4]);
         let versions = HashMap::from([(3, "812".to_string())]);
-        let seqs = HashMap::from([(1, 8u64), (3, 4u64)]);
-        let got = live(&Live { jobs: &jobs, names: &names, download_only: &only, versions: &versions, udid: Some("U1"), account: "me@example.com", seqs: &seqs });
+        let meta = HashMap::from([(1, Meta { seq: 8, size_bytes: Some(300) }), (3, Meta { seq: 4, size_bytes: None })]);
+        let got = live(&Live { jobs: &jobs, names: &names, download_only: &only, versions: &versions, udid: Some("U1"), account: "me@example.com", meta: &meta });
         assert_eq!(ids(&got), [3, 1], "итоги, «Сохранено» у «Только скачать» и копии — не в счёт; порядок постановки");
         let got: Vec<PendingJob> = got.into_iter().rev().collect();
         assert_eq!(got[0].name, "Банк");
         assert_eq!(got[1].version.as_deref(), Some("812"));
+        assert_eq!((got[0].size_bytes, got[1].size_bytes), (Some(300), None));
         assert!(got.iter().all(|j| j.udid.as_deref() == Some("U1") && j.account == "me@example.com"));
     }
 
@@ -295,6 +313,20 @@ mod tests {
         let s = PendingStore::open(path);
         assert_eq!(ids(&s.offered("me@example.com", &HashSet::new())), [30, 5]);
         assert!(s.next_seq() > 2, "новые номера — после записанных");
+    }
+
+    #[test]
+    fn size_from_enqueue_or_lookup_cache() {
+        let mut a = job(1, "me@example.com");
+        a.size_bytes = Some(10);
+        let b = job(2, "me@example.com");
+        let sizes = HashMap::from([(1, 99), (2, 20)]);
+        assert_eq!(size_of(&a, &sizes), Some(10));
+        assert_eq!(size_of(&b, &sizes), Some(20));
+        assert_eq!(size_of(&b, &HashMap::new()), None);
+        // старый файл без размера читается
+        let old = r#"{"jobs":[{"track_id":5,"name":"A","download_only":false,"version":null,"udid":null,"account":"me@example.com"}]}"#;
+        assert_eq!(parse(old)[0].size_bytes, None);
     }
 
     #[test]

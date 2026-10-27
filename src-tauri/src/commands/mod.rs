@@ -161,8 +161,8 @@ pub struct AppState {
     purchases_gen: AtomicU64,
     /// Незавершённые задания между запусками (`pending-jobs.json`): «В прошлый раз не закончили».
     pending: PendingStore,
-    /// Номер постановки задания (`PendingStore::next_seq`): порядок очереди в файле.
-    job_seq: Mutex<HashMap<i64, u64>>,
+    /// Что запомнено о задании при постановке (номер, размер): для `pending-jobs.json`.
+    job_meta: Mutex<HashMap<i64, crate::pending_jobs::Meta>>,
 }
 
 impl AppState {
@@ -236,7 +236,7 @@ impl AppState {
             account_epoch: AtomicU64::new(0),
             purchases_gen: AtomicU64::new(0),
             pending: PendingStore::open(data_dir.join("pending-jobs.json")),
-            job_seq: Mutex::new(HashMap::new()),
+            job_meta: Mutex::new(HashMap::new()),
         }
     }
 
@@ -247,7 +247,7 @@ impl AppState {
         let versions = self.chosen_versions.lock().unwrap().clone();
         let names = self.names.lock().unwrap().clone();
         let udid = self.phones.lock().unwrap().target.clone();
-        let seqs = self.job_seq.lock().unwrap().clone();
+        let meta = self.job_meta.lock().unwrap().clone();
         let jobs = self.jobs.lock().unwrap();
         Some(crate::pending_jobs::live(&crate::pending_jobs::Live {
             jobs: &jobs,
@@ -256,7 +256,7 @@ impl AppState {
             versions: &versions,
             udid: udid.as_deref(),
             account: &account,
-            seqs: &seqs,
+            meta: &meta,
         }))
     }
 
@@ -291,9 +291,10 @@ impl AppState {
             self.pending.unclaim(e, &items.iter().map(|(id, _)| *id).collect());
         }
         {
-            let mut seqs = self.job_seq.lock().unwrap();
+            let sizes = self.sizes.lock().unwrap().clone();
+            let mut meta = self.job_meta.lock().unwrap();
             for (id, _) in &items {
-                seqs.insert(*id, self.pending.next_seq());
+                meta.insert(*id, crate::pending_jobs::Meta { seq: self.pending.next_seq(), size_bytes: sizes.get(id).copied() });
             }
         }
         let run = RunDto { same_apple_id, email };
@@ -459,9 +460,9 @@ impl AppState {
         }
         drop((names, fs, dl, only, chosen));
         {
-            let mut seqs = self.job_seq.lock().unwrap();
+            let mut meta = self.job_meta.lock().unwrap();
             for id in &gone {
-                seqs.remove(id);
+                meta.remove(id);
             }
         }
         *self.run.lock().unwrap() = None;
@@ -1277,10 +1278,12 @@ pub struct PendingJobDto {
     pub track_id: i64,
     pub name: String,
     pub download_only: bool,
+    /// Примерный размер: «осталось ≈ N мин» на «Готово»; `null` — неизвестно.
+    pub size_bytes: Option<u64>,
 }
 
-fn pending_dto(j: &PendingJob) -> PendingJobDto {
-    PendingJobDto { track_id: j.track_id, name: j.name.clone(), download_only: j.download_only }
+fn pending_dto(j: &PendingJob, sizes: &HashMap<i64, u64>) -> PendingJobDto {
+    PendingJobDto { track_id: j.track_id, name: j.name.clone(), download_only: j.download_only, size_bytes: crate::pending_jobs::size_of(j, sizes) }
 }
 
 /// Итог «Продолжить»: что поставлено в очередь и данные запуска для «Готово».
@@ -1295,7 +1298,8 @@ pub struct ResumeDto {
 #[tauri::command]
 pub fn pending_jobs(state: State<'_, AppState>) -> Vec<PendingJobDto> {
     let Some(email) = state.current_email() else { return vec![] };
-    state.pending.offered(&email, &state.live_ids()).iter().map(pending_dto).collect()
+    let sizes = state.sizes.lock().unwrap().clone();
+    state.pending.offered(&email, &state.live_ids()).iter().map(|j| pending_dto(j, &sizes)).collect()
 }
 
 /// «Продолжить» незавершённые: как «Вернуть» с теми же режимом, версией и телефоном (если он
@@ -1304,6 +1308,15 @@ pub fn pending_jobs(state: State<'_, AppState>) -> Vec<PendingJobDto> {
 pub async fn resume_pending(app: AppHandle, state: State<'_, AppState>, same_apple_id: Option<bool>) -> Result<ResumeDto, ()> {
     let Some(email) = state.current_email() else { return Ok(ResumeDto { jobs: vec![], run: None }) };
     let jobs = state.pending.claim(&email, &state.live_ids());
+    // размер, записанный при постановке, — и в кэш Lookup: его возьмёт `start_jobs` для файла
+    {
+        let mut sizes = state.sizes.lock().unwrap();
+        for j in &jobs {
+            if let Some(b) = j.size_bytes {
+                sizes.entry(j.track_id).or_insert(b);
+            }
+        }
+    }
     crate::log::write("pending jobs", &format!("resume {}", jobs.len()));
     let connected: Vec<String> = state.phones.lock().unwrap().last.iter().map(|p| p.udid.clone()).collect();
     if let Some(udid) = crate::pending_jobs::resume_target(&jobs, &connected) {
@@ -1314,7 +1327,8 @@ pub async fn resume_pending(app: AppHandle, state: State<'_, AppState>, same_app
         run = Some(state.start_jobs(&app, items, same_apple_id.unwrap_or(true), only, versions.into_iter().collect()).await);
     }
     state.sync_pending();
-    Ok(ResumeDto { jobs: jobs.iter().map(pending_dto).collect(), run })
+    let sizes = state.sizes.lock().unwrap().clone();
+    Ok(ResumeDto { jobs: jobs.iter().map(|j| pending_dto(j, &sizes)).collect(), run })
 }
 
 /// «Забыть» незавершённые задания нынешнего Apple ID: из файла и из баннера.

@@ -108,7 +108,7 @@ export function resumedJob(p: PendingJobDto): Job {
     unknown_account: false,
     aliases: [],
     category: null,
-    size_bytes: null,
+    size_bytes: p.size_bytes,
     other_account: false,
     purchaser_masked: null,
     min_ios: null,

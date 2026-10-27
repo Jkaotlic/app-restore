@@ -142,6 +142,8 @@ export interface PendingJobDto {
   track_id: number;
   name: string;
   download_only: boolean;
+  /** Примерный размер для «осталось ≈ N мин»; null — неизвестно. */
+  size_bytes: number | null;
 }
 
 /** Итог «Продолжить» (`resume_pending`). */

@@ -100,12 +100,14 @@ describe("unfinished from last time", () => {
     expect(pendingText(2)).toBe("В прошлый раз не закончили: 2 приложения");
   });
   it("resumed job is queued with a plain icon row", () => {
-    const j = resumedJob({ track_id: 7, name: "Банк", download_only: true });
+    const j = resumedJob({ track_id: 7, name: "Банк", download_only: true, size_bytes: null });
     expect(j.track_id).toBe(7);
     expect(j.state).toEqual({ kind: "queued" });
     expect(j.downloadOnly).toBe(true);
     expect(j.row.name).toBe("Банк");
     expect(j.row.letter).toBeNull();
     expect(j.row.size_bytes).toBeNull();
+    // размер известен — оценка времени для продолженных тоже есть
+    expect(resumedJob({ track_id: 8, name: "Такси", download_only: false, size_bytes: 300 }).row.size_bytes).toBe(300);
   });
 });
