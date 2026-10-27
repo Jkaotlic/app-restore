@@ -13,3 +13,4 @@ dist-ssr
 *.local
 .DS_Store
 src-tauri/gen/schemas/
+scripts/login-and-list.sh
