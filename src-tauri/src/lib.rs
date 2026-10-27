@@ -50,6 +50,7 @@ pub fn run() {
             commands::clear_installed,
             commands::check_owned,
             commands::add_by_link,
+            commands::search_store,
             commands::start,
             commands::run_info,
             commands::list_phones,

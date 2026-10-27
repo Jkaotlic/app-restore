@@ -76,7 +76,7 @@ pub struct RowDto {
     /// `null` — ещё не проверено (`check_owned` пришлёт событие `owned`).
     pub owned: Option<bool>,
     /// `"removed"` (каталог), `"purchase"`, `"link"` (добавлено по ссылке), `"saved"` (только копия:
-    /// покупки не загрузились).
+    /// покупки не загрузились), `"phone"` («С этого iPhone»), `"store"` («В App Store», поиск).
     pub source: &'static str,
     pub letter: Option<String>,
     pub color: Option<String>,
@@ -402,6 +402,56 @@ pub fn link_row(track_id: i64, ctx: &RowCtx, looked_up: Option<(String, String)>
         other_account: false,
         purchaser_masked: None,
     }
+}
+
+/// Что уже есть на «Выборе» и в группу «В App Store» не идёт: каталог, копии, строки после
+/// загрузки покупок (`phone_taken`; `None` — ещё не загружены) и приложения телефона-источника.
+pub fn store_taken(ctx: &RowCtx, screen: Option<&HashSet<i64>>) -> HashSet<i64> {
+    let mut out: HashSet<i64> = ctx.catalog.iter().map(|r| r.track_id).collect();
+    out.extend(ctx.saved.iter().filter_map(|s| s.track_id));
+    out.extend(ctx.source.unwrap_or_default().iter().filter_map(|a| a.item_id));
+    out.extend(screen.into_iter().flatten().copied());
+    out
+}
+
+/// Группа «В App Store»: найденное Search API, кроме того, что уже есть (`taken`). Права — из
+/// `check_owned` (`null` — ещё не проверены); сама строка не отмечается.
+pub fn store_rows(found: Vec<crate::lookup::StoreApp>, taken: &HashSet<i64>, ctx: &RowCtx) -> Vec<RowDto> {
+    let mut seen = HashSet::new();
+    found
+        .into_iter()
+        .filter(|a| !taken.contains(&a.track_id) && seen.insert(a.track_id))
+        .map(|a| {
+            let available_version = ctx.latest.get(&a.track_id).cloned().or_else(|| (!a.version.is_empty()).then(|| a.version.clone()));
+            let installed_version = ctx
+                .installed
+                .and_then(|l| crate::catalog::find_installed(l, a.track_id, &a.bundle_id))
+                .map(|x| x.version.clone());
+            RowDto {
+                track_id: a.track_id,
+                has_saved_copy: false,
+                name: a.name,
+                version: a.version,
+                removed_from_ru: false,
+                owned: ctx.owned.get(&a.track_id).copied(),
+                source: "store",
+                letter: None,
+                color: None,
+                install_state: crate::catalog::install_state(installed_version.as_deref(), available_version.as_deref()),
+                installed_version,
+                available_version,
+                checked: false,
+                ipad_only: a.ipad_only,
+                unknown_account: false,
+                aliases: vec![],
+                category: None,
+                size_bytes: ctx.sizes.get(&a.track_id).copied().or(a.size),
+                other_account: false,
+                purchaser_masked: None,
+                bundle_id: a.bundle_id,
+            }
+        })
+        .collect()
 }
 
 /// Ответ `latest_version` -> (права, версия). Нет прав — не ошибка.
@@ -847,19 +897,6 @@ pub fn resolve_source(chosen: Option<&str>, phones: &[String], default: Option<S
 /// Начало адреса «Сообщить в каталог». Открывается только адрес, который начинается ровно с него.
 pub const REPORT_PREFIX: &str = "https://github.com/Jkaotlic/app-restore/issues/new?";
 
-/// Значение параметра адреса: всё, кроме `A-Z a-z 0-9 - _ . ~`, — `%XX` по байтам UTF-8.
-fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() * 3);
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
-
 /// Текст с телефона для issue: без управляющих символов, пробелы сжаты, не длиннее `max` символов.
 fn issue_text(s: &str, max: usize) -> String {
     let clean: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
@@ -880,7 +917,7 @@ pub fn report_url(track_id: i64, name: &str, version: &str, bundle_id: &str) -> 
          - Bundle ID: {bundle_id}\n\
          - Ссылка: https://apps.apple.com/ru/app/id{track_id}\n"
     );
-    format!("{REPORT_PREFIX}title={}&body={}", url_encode(&title), url_encode(&body))
+    format!("{REPORT_PREFIX}title={}&body={}", crate::lookup::url_encode(&title), crate::lookup::url_encode(&body))
 }
 
 /// Можно ли открыть `url` для «Сообщить в каталог»: ровно наш префикс, дальше только алфавит
@@ -1975,5 +2012,40 @@ mod tests {
         let mut none = None;
         refresh_target(&mut none, "NEW", &apps);
         assert_eq!(none, None);
+    }
+
+    fn store_app(id: i64, name: &str) -> crate::lookup::StoreApp {
+        crate::lookup::StoreApp { track_id: id, name: name.into(), bundle_id: format!("com.example.s{id}"), version: "2.0".into(), size: Some(1000), ipad_only: false }
+    }
+
+    #[test]
+    fn store_taken_is_catalog_copies_screen_rows_and_source_phone() {
+        let mut c = Ctx::new(vec![removed(900, "Сбер")]);
+        c.saved = vec![saved(5, "/x/5.ipa")];
+        c.source = Some(vec![inst("com.example.p", "1", Some(7)), inst("com.example.noid", "1", None)]);
+        let got = store_taken(&c.get(), Some(&[1, 2].into()));
+        assert_eq!(got, [900, 5, 7, 1, 2].into());
+        // покупки ещё не загружены: что есть
+        assert_eq!(store_taken(&c.get(), None), [900, 5, 7].into());
+    }
+
+    #[test]
+    fn store_rows_skip_taken_and_duplicates_and_carry_owned_and_versions() {
+        let mut c = Ctx::new(vec![]);
+        c.owned = [(11, true), (12, false)].into();
+        c.latest = [(11, "2.1".to_string())].into();
+        c.target_iphone = true;
+        c.installed = Some(vec![inst("com.example.s11", "1.9", Some(11))]);
+        let found = vec![store_app(10, "Взято"), store_app(11, "Есть"), store_app(12, "Нет"), store_app(11, "Повтор"), store_app(13, "Новое")];
+        let rows = store_rows(found, &[10].into(), &c.get());
+        let got: Vec<_> = rows.iter().map(|r| (r.track_id, r.name.as_str(), r.source, r.owned, r.checked)).collect();
+        assert_eq!(got, [(11, "Есть", "store", Some(true), false), (12, "Нет", "store", Some(false), false), (13, "Новое", "store", None, false)]);
+        let r = &rows[0];
+        assert_eq!((r.installed_version.as_deref(), r.available_version.as_deref(), r.install_state), (Some("1.9"), Some("2.1"), InstallState::UpdateAvailable));
+        assert_eq!((r.size_bytes, r.removed_from_ru, r.bundle_id.as_str()), (Some(1000), false, "com.example.s11"));
+        // версия из магазина, пока своей проверки не было
+        assert_eq!(rows[2].available_version.as_deref(), Some("2.0"));
+        let pad = store_rows(vec![crate::lookup::StoreApp { ipad_only: true, ..store_app(14, "iPad") }], &HashSet::new(), &c.get());
+        assert!(pad[0].ipad_only);
     }
 }

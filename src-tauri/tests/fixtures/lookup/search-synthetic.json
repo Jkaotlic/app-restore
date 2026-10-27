@@ -1,0 +1,10 @@
+{
+ "resultCount": 5,
+ "results": [
+  {"kind": "software", "trackId": 1000000001, "trackName": "Пример Банк", "bundleId": "com.example.bank", "version": "3.2.1", "fileSizeBytes": "104857600", "supportedDevices": ["iPhone15-iPhone15", "iPadAir5-iPadAir5"], "sellerName": "Example LLC"},
+  {"kind": "software", "trackId": 1000000002, "trackName": "  Пример Почта  ", "bundleId": "com.example.mail", "version": "1.0", "fileSizeBytes": 52428800, "supportedDevices": ["iPhone14-iPhone14"]},
+  {"kind": "software", "trackId": 1000000003, "trackName": "Пример для iPad", "bundleId": "com.example.pad", "version": "2.0", "supportedDevices": ["iPadPro-iPadPro", "iPadAir5-iPadAir5"]},
+  {"kind": "software", "trackName": "Без номера", "bundleId": "com.example.noid", "version": "1.0"},
+  {"kind": "software", "trackId": 1000000005, "trackName": "", "bundleId": "com.example.noname", "version": "1.0"}
+ ]
+}

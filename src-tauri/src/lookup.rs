@@ -121,6 +121,78 @@ pub async fn app_name(fetch: &dyn Fetch, track_id: i64) -> Option<(String, Strin
     parse_name(&body, track_id)
 }
 
+const SEARCH_URL: &str = "https://itunes.apple.com/search";
+/// Сколько результатов Search API просим за раз.
+pub const SEARCH_LIMIT: usize = 25;
+/// Короче — запроса нет: группы «В App Store» тоже.
+pub const SEARCH_MIN: usize = 3;
+
+/// Приложение из ответа Search API: столько, сколько нужно плитке и скачиванию по trackId.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoreApp {
+    pub track_id: i64,
+    pub name: String,
+    pub bundle_id: String,
+    pub version: String,
+    pub size: Option<u64>,
+    /// В `supportedDevices` нет ни одного iPhone.
+    pub ipad_only: bool,
+}
+
+/// Значение параметра адреса: всё, кроме `A-Z a-z 0-9 - _ . ~`, — `%XX` по байтам UTF-8.
+pub fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+fn search_url(base: &str, term: &str) -> String {
+    format!("{base}?term={}&country=ru&entity=software&limit={SEARCH_LIMIT}", url_encode(term))
+}
+
+/// Разбор ответа Search API. Записи без trackId или без имени пропускаются.
+fn parse_search(body: &str) -> Result<Vec<StoreApp>, AppError> {
+    let v: Value = serde_json::from_str(body)
+        .map_err(|e| AppError::Unknown { detail: format!("search: неверный JSON: {e}") })?;
+    let results = v
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AppError::Unknown { detail: "search: нет поля results".into() })?;
+    let text = |r: &Value, k: &str| r.get(k).and_then(Value::as_str).unwrap_or_default().trim().to_string();
+    Ok(results
+        .iter()
+        .filter_map(|r| {
+            let track_id = r.get("trackId").and_then(Value::as_i64)?;
+            let name = text(r, "trackName");
+            if name.is_empty() {
+                return None;
+            }
+            let size = r.get("fileSizeBytes").and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()));
+            let ipad_only = r
+                .get("supportedDevices")
+                .and_then(Value::as_array)
+                .is_some_and(|d| !d.is_empty() && !d.iter().any(|x| x.as_str().is_some_and(|s| s.starts_with("iPhone"))));
+            Some(StoreApp { track_id, name, bundle_id: text(r, "bundleId"), version: text(r, "version"), size, ipad_only })
+        })
+        .collect())
+}
+
+/// Поиск в российском App Store (группа «В App Store»). Один запрос без повторов: человек ждёт
+/// ответа на экране, а следующий ввод всё равно пришлёт новый. Короткий запрос — пусто без сети.
+pub async fn search(fetch: &dyn Fetch, term: &str) -> Result<Vec<StoreApp>, AppError> {
+    let term = term.trim();
+    if term.chars().count() < SEARCH_MIN {
+        return Ok(vec![]);
+    }
+    parse_search(&fetch.get(&search_url(SEARCH_URL, term)).await?)
+}
+
 #[async_trait]
 impl Lookup for HttpLookup {
     async fn present_in(&self, ids: &[i64], country: &str) -> Result<Presence, AppError> {
@@ -249,5 +321,41 @@ mod tests {
         assert_eq!(l.present_in(&[1], "ru").await, Err(AppError::AppleUnavailable { status: Some(503) }));
         let (l, _) = lookup(Ok("<html>".into()));
         assert!(matches!(l.present_in(&[1], "ru").await, Err(AppError::Unknown { .. })));
+    }
+
+    #[test]
+    fn search_parses_apps_and_skips_broken() {
+        let got = parse_search(&fixture("search-synthetic.json")).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                StoreApp { track_id: 1000000001, name: "Пример Банк".into(), bundle_id: "com.example.bank".into(), version: "3.2.1".into(), size: Some(104857600), ipad_only: false },
+                StoreApp { track_id: 1000000002, name: "Пример Почта".into(), bundle_id: "com.example.mail".into(), version: "1.0".into(), size: Some(52428800), ipad_only: false },
+                StoreApp { track_id: 1000000003, name: "Пример для iPad".into(), bundle_id: "com.example.pad".into(), version: "2.0".into(), size: None, ipad_only: true },
+            ],
+            "без trackId и без имени — пропущены"
+        );
+        assert!(matches!(parse_search("<html>"), Err(AppError::Unknown { .. })));
+        assert!(matches!(parse_search("{}"), Err(AppError::Unknown { .. })));
+    }
+
+    #[test]
+    fn search_url_encodes_term() {
+        assert_eq!(
+            search_url("https://search.example.com/search", "Сбер & Ко"),
+            "https://search.example.com/search?term=%D0%A1%D0%B1%D0%B5%D1%80%20%26%20%D0%9A%D0%BE&country=ru&entity=software&limit=25"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_short_term_makes_no_request_and_errors_propagate() {
+        let f = FakeFetch { body: Ok(fixture("search-synthetic.json")), urls: Mutex::new(vec![]) };
+        assert_eq!(search(&f, "  сб ").await, Ok(vec![]));
+        assert!(f.urls.lock().unwrap().is_empty());
+        let got = search(&f, " пример ").await.unwrap();
+        assert_eq!(got.len(), 3);
+        assert_eq!(f.urls.lock().unwrap().as_slice(), [format!("{SEARCH_URL}?term=%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%80&country=ru&entity=software&limit=25")]);
+        let f = FakeFetch { body: Err(AppError::AppleUnavailable { status: None }), urls: Mutex::new(vec![]) };
+        assert_eq!(search(&f, "пример").await, Err(AppError::AppleUnavailable { status: None }));
     }
 }
