@@ -49,3 +49,12 @@
 `ignored-candidates.json`: `[{"track_id": 123, "reason": "почему это не то"}]`. Такие id скрипт
 исключает из всех разделов кандидатов, и они не вызывают issue. Файл лежит рядом с `ru-removed.json`
 и в программу не вшивается.
+
+## Импорт из открытых списков
+
+`scripts/import-candidates.py` (stdlib) берёт строки «Имя: trackId» из `kda2495/IPA_Downloader`
+(`Files/AppsList.txt`) и `pdx15/ipatool-webGUI` (`resources/Apps_ID_List.txt`), оба MIT, на закреплённых
+коммитах. Запись добавляется, только если id найден Lookup ru или US (имя совпало с брендом, именем в
+скобках или продавцом) либо есть снимок страницы в Wayback с тем же id и именем (`confidence: medium`).
+Иностранные сервисы отсеиваются. `source` — ссылка на строку списка (+ снимок Wayback). По умолчанию
+`--dry-run`; `--write` дописывает через `dumps()`; `--cache FILE` хранит ответы сети между прогонами.
