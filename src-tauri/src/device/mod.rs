@@ -149,7 +149,7 @@ pub fn account_match(phone: Option<&str>, program: &str) -> AccountMatch {
     }
 }
 
-/// `vf***@example.com`: первые два символа и домен. Без `@` — только два символа.
+/// `ow***@example.com`: первые два символа и домен. Без `@` — только два символа.
 pub fn mask_email(email: &str) -> String {
     let email = email.trim();
     let (user, domain) = match email.split_once('@') {
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn mask_email_shows_two_chars_and_domain() {
-        assert_eq!(mask_email("vfowner@example.com"), "vf***@example.com");
+        assert_eq!(mask_email("owner2@example.com"), "ow***@example.com");
         assert_eq!(mask_email(" ab@example.com "), "ab***@example.com");
         assert_eq!(mask_email("a@example.com"), "a***@example.com");
         assert_eq!(mask_email("юзер@example.com"), "юз***@example.com");

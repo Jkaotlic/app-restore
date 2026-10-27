@@ -22,10 +22,10 @@ const phone = (name: string, cls: "iPhone" | "iPad", target = true): PhoneDto =>
 });
 
 describe("groupCopies", () => {
-  const all = [c("Сбер", "me***@example.com"), c("Альфа", "me***@example.com"), c("ВК", "vf***@example.com"), c("Мусор", null)];
+  const all = [c("Сбер", "me***@example.com"), c("Альфа", "me***@example.com"), c("ВК", "ow***@example.com"), c("Мусор", null)];
   it("groups by purchaser, unknown last, names sorted", () => {
     const g = groupCopies(all, "");
-    expect(g.map((x) => x.title)).toEqual(["me***@example.com", "vf***@example.com", "Неизвестный Apple ID"]);
+    expect(g.map((x) => x.title)).toEqual(["me***@example.com", "ow***@example.com", "Неизвестный Apple ID"]);
     expect(g[0].copies.map((x) => x.name)).toEqual(["Альфа", "Сбер"]);
   });
   it("search by name or bundle id, case-insensitive; empty groups drop", () => {
@@ -38,7 +38,7 @@ describe("groupCopies", () => {
 describe("copyWarning", () => {
   const copy = c("Сбер", "me***@example.com");
   it("only when the phone's Apple ID is different", () => {
-    expect(copyWarning(copy, { kind: "different", phone_masked: "vf***@example.com" })).toBe(
+    expect(copyWarning(copy, { kind: "different", phone_masked: "ow***@example.com" })).toBe(
       "При первом запуске iPhone попросит войти в me***@example.com: нужен пароль этого Apple ID",
     );
     expect(copyWarning(copy, { kind: "same" })).toBeNull();

@@ -620,7 +620,7 @@ pub fn drop_pending(jobs: &mut HashMap<i64, JobState>, queue_dropped: &[i64]) ->
     gone
 }
 
-/// Итог `phone_account` для интерфейса. Адрес телефона только маской (`vf***@example.com`).
+/// Итог `phone_account` для интерфейса. Адрес телефона только маской (`ow***@example.com`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AccountMatchDto {
