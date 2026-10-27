@@ -18,6 +18,9 @@ register("login", () => {
   // после «Войти в Apple ID этого iPhone» — адрес телефона (в логи не попадает)
   if (state.loginPrefill) email.value = state.loginPrefill;
   else if (state.account && !state.addingAccount) email.value = state.account.email;
+  // подсказка одного захода: с «Выбора» («Войти в этот Apple ID»); «Назад» и вход её убирают
+  const loginNote = state.loginNote;
+  state.loginNote = null;
 
   const boxes = Array.from({ length: DIGITS }, (_, i) =>
     h("input", { attrs: { inputmode: "numeric", maxlength: "1", autocomplete: "one-time-code", "aria-label": `Цифра ${i + 1} из ${DIGITS}` } }),
@@ -163,6 +166,7 @@ register("login", () => {
     { class: "body", on: { submit: safe(submit) } },
     h("h2", { text: "Войдите в Apple ID" }),
     h("p", { class: "lead", text: "Тот, на котором вы раньше скачивали эти приложения." }),
+    loginNote ? h("p", { class: "note", text: loginNote, attrs: { role: "status" } }) : null,
     h("label", { class: "field" }, h("span", { text: "Apple ID" }), email),
     h("label", { class: "field" }, h("span", { text: "Пароль" }), password),
     codeBlock,

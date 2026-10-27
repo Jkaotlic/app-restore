@@ -856,3 +856,54 @@ label.app {
 .tile:not([aria-pressed]) .tbox {
   visibility: hidden;
 }
+/* «С этого iPhone»: выбор телефона-источника, кнопки под плиткой, подсказка под группой */
+.sourcebox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 2px 0 8px;
+}
+.sourcebox .source {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.sourcebox .input.small {
+  width: auto;
+  max-width: 280px;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+.sourcebox .error {
+  flex-basis: 100%;
+  margin: 0;
+}
+.tilewrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.tile-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 0 4px;
+}
+.tile-actions .link,
+.tile-actions .note {
+  font-size: 12px;
+}
+.tile-actions .link:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+.group-hint {
+  margin: 8px 0 4px;
+}
+/* «Куплено на другом Apple ID (ma***@…)»: маска адреса видна целиком */
+.tile .ver.warn {
+  white-space: normal;
+}

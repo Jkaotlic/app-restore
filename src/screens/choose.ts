@@ -18,6 +18,10 @@ import {
   mergePurchases,
   pendingChecks,
   recheckIds,
+  replacePhoneRows,
+  sourceChoices,
+  OTHER_ID_LOGIN_NOTE,
+  SOURCE_HINT,
   rovingIndex,
   hiddenCount,
   selectionLabel,
@@ -72,6 +76,12 @@ register("choose", () => {
   let installedError: UiError | null = null;
   /** Колонка «На iPhone»: телефон выбран и список с него прочитан. */
   let withPhone = false;
+  /** Телефон-источник группы «С этого iPhone» (Rust: `source_udid`); меняет `set_source_phone`. */
+  let sourceUdid: string | null = null;
+  let sourceBusy = false;
+  let sourceError: string | null = null;
+  /** Подключённые телефоны (udid через запятую): выбор источника перерисовывается, только когда они меняются. */
+  let phonesKey = state.phones.map((p) => p.udid).join(",");
   // «Только для iPad» зависит от устройства, на которое ставим, а не от «Дальше» (как и `checked` в Rust)
   const toIphone = () => targetIsIphone();
 
@@ -192,6 +202,78 @@ register("choose", () => {
     return tile;
   }
 
+  /** Плитка группы «С этого iPhone» и её кнопки под ней: внутри кнопки-плитки другие кнопки нельзя. */
+  function phoneTile(r: RowDto, tile: HTMLButtonElement): HTMLElement {
+    const msg = h("span", { class: "note", attrs: { role: "status" } });
+    const report = h("button", {
+      class: "link",
+      text: "Сообщить в каталог",
+      attrs: { type: "button", title: "Откроет на GitHub заявку с номером, названием и версией приложения" },
+      on: {
+        click: safe(async () => {
+          msg.textContent = "";
+          try {
+            await call("report_to_catalog", { trackId: r.track_id, name: r.name, version: r.version, bundleId: r.bundle_id });
+            msg.textContent = "Открыто в браузере";
+          } catch (e) {
+            msg.textContent = errorText(asUiError(e));
+          }
+        }),
+      },
+    });
+    const login = r.other_account
+      ? h("button", {
+          class: "link",
+          text: "Войти в этот Apple ID",
+          attrs: { type: "button" },
+          on: {
+            click: () => {
+              state.loginPrefill = null;
+              state.addingAccount = true;
+              state.loginNote = OTHER_ID_LOGIN_NOTE;
+              go("login");
+            },
+          },
+        })
+      : null;
+    return h("div", { class: "tilewrap" }, tile, h("div", { class: "tile-actions" }, login, report, msg));
+  }
+
+  /** «Телефон-источник» над группой: другой подключённый телефон, цель установки та же. */
+  function sourcePicker(choices: { udid: string; label: string; selected: boolean }[]): HTMLElement {
+    const select = h("select", { class: "input small", attrs: { "aria-label": "Телефон-источник" } });
+    if (!choices.some((c) => c.selected)) select.append(h("option", { text: "—", attrs: { value: "", selected: true, disabled: true } }));
+    for (const c of choices) select.append(h("option", { text: c.label, attrs: { value: c.udid, selected: c.selected } }));
+    select.disabled = sourceBusy;
+    select.addEventListener("change", safe(() => changeSource(select.value)));
+    const parts: HTMLElement[] = [h("label", { class: "source" }, h("span", { text: "Телефон-источник" }), select)];
+    if (sourceBusy) parts.push(h("span", { class: "spin", attrs: { "aria-hidden": "true" } }));
+    const box = h("div", { class: "sourcebox" }, ...parts);
+    if (sourceError) box.append(h("p", { class: "error", text: sourceError, attrs: { role: "alert" } }));
+    return box;
+  }
+
+  async function changeSource(udid: string) {
+    if (!udid || udid === sourceUdid) return;
+    sourceBusy = true;
+    sourceError = null;
+    renderList();
+    try {
+      const incoming = await call<RowDto[]>("set_source_phone", { udid });
+      sourceUdid = udid;
+      rows = replacePhoneRows(rows, incoming);
+      for (const r of incoming) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
+      // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки
+      if (idsToCheck(incoming).length) void call("check_owned", { trackIds: pendingChecks(rows, owned) }).catch(() => undefined);
+    } catch (e) {
+      sourceError = errorText(asUiError(e));
+    }
+    sourceBusy = false;
+    renderChips();
+    renderList();
+    list.querySelector<HTMLSelectElement>(".sourcebox select")?.focus();
+  }
+
   function applyA11y(tile: HTMLElement, r: RowDto, line: TileLine, enabled: boolean) {
     const a = tileA11y(r.name, line, enabled, selected.has(r.track_id));
     if (a.pressed === null) tile.removeAttribute("aria-pressed");
@@ -249,7 +331,7 @@ register("choose", () => {
     if (focused) chips.querySelector<HTMLElement>(`[data-chip="${focused}"]`)?.focus();
   }
 
-  function groupSection(key: GroupKey, title: string, items: RowDto[], extra: HTMLElement[]): HTMLElement {
+  function groupSection(key: GroupKey, title: string, items: RowDto[], extra: HTMLElement[], after: HTMLElement[] = []): HTMLElement {
     const btn = h("button", { class: "link", attrs: { type: "button" } });
     btn.addEventListener("click", () => {
       const pick = groupPick(items, selectable, selected);
@@ -261,7 +343,7 @@ register("choose", () => {
     for (const r of items) {
       const t = tileEl(r);
       tiles.set(r.track_id, t);
-      grid.append(t);
+      grid.append(r.source === "phone" ? phoneTile(r, t) : t);
     }
     return h(
       "section",
@@ -269,6 +351,7 @@ register("choose", () => {
       h("div", { class: "ghead" }, h("h3", {}, title, h("small", { text: String(items.length) })), btn),
       ...extra,
       items.length ? grid : null,
+      ...after,
     );
   }
 
@@ -314,7 +397,14 @@ register("choose", () => {
           extra.push(h("p", { class: "empty", text: "На этом Apple ID нет покупок для iPhone. Проверьте, тот ли это Apple ID." }));
         }
       }
-      if (g.rows.length || extra.length) parts.push(groupSection(g.key, g.title, g.rows, extra));
+      const after: HTMLElement[] = [];
+      if (g.key === "phone" && !purchasesLoading) {
+        const choices = sourceChoices(state.phones, sourceUdid);
+        if (choices && (plain || g.rows.length)) extra.push(sourcePicker(choices));
+        if (choices && plain && !g.rows.length) extra.push(h("p", { class: "empty", text: "На этом телефоне нет приложений, которых нет в каталоге и в российском App Store." }));
+        if (g.rows.length) after.push(h("p", { class: "note group-hint", text: SOURCE_HINT }));
+      }
+      if (g.rows.length || extra.length) parts.push(groupSection(g.key, g.title, g.rows, extra, after));
     }
     if (groups.every((g) => !g.rows.length) && !plain) {
       parts.push(h("p", { class: "empty", text: query.trim() ? emptySearchText(query) : "В этом фильтре пусто." }));
@@ -385,6 +475,8 @@ register("choose", () => {
 
   function onPurchases(d: RowsDto) {
     dto = d;
+    sourceUdid = d.source_udid;
+    sourceError = null;
     rows = mergePurchases(rows, d.rows);
     for (const r of rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
     purchasesLoading = false;
@@ -510,9 +602,18 @@ register("choose", () => {
     ),
   );
   void load().catch((e) => console.error(e));
+  /** Подключили или отключили телефон: выбор источника над группой перерисовать. */
+  function onPhones() {
+    const key = state.phones.map((p) => p.udid).join(",");
+    if (key === phonesKey) return;
+    phonesKey = key;
+    if (loaded && !purchasesLoading) renderList();
+  }
+
   return {
     el,
     onOwned,
+    onPhones,
     onPurchasesProgress,
     onPurchases,
     // Уход с «Выбора» останавливает проверку прав: пустой список отменяет идущую.

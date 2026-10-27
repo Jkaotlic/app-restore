@@ -35,6 +35,8 @@ export interface State {
   switchedAccount: boolean;
   /** «Добавить Apple ID»: поле адреса пустое, а не нынешний вход. */
   addingAccount: boolean;
+  /** Подсказка на «Входе» один раз (например, «Войти в этот Apple ID» с «Выбора»). */
+  loginNote: string | null;
   /** Откуда пришли на «Все копии»: туда ведёт «Назад». */
   beforeCopies: Screen;
   phones: PhoneDto[];
@@ -63,6 +65,7 @@ export const state: State = {
   loginPrefill: null,
   switchedAccount: false,
   addingAccount: false,
+  loginNote: null,
   beforeCopies: "accounts",
   phones: [],
   phonesError: null,
