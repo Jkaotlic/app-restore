@@ -15,5 +15,12 @@ describe("«Не нашли приложение?»", () => {
     expect(HELP_STEPS[0].text).toContain("Скрытые покупки → Показать");
     expect(HELP_STEPS[0].action?.label).toBe("Обновить покупки");
     for (const s of HELP_STEPS) expect(s.text.length).toBeGreaterThan(20);
+    // iOS 18+: Настройки → Приложения → App Store; старый путь — тоже
+    expect(HELP_STEPS[2].text).toContain("Настройки → Приложения → App Store");
+    expect(HELP_STEPS[2].text).toContain("Настройки → App Store");
+    // не обещаем, что добавим; нужен подключённый телефон
+    expect(HELP_STEPS[5].text).not.toMatch(/добавим/);
+    expect(HELP_STEPS[5].text).toContain("чтобы его добавили в каталог");
+    expect(HELP_STEPS[5].text).toContain("Подключите");
   });
 });
