@@ -257,6 +257,12 @@ export function pendingChecks(rows: RowDto[], map: OwnedMap): number[] {
     .map((r) => r.track_id);
 }
 
+/** Видимые при поиске/фильтре строки, которые ещё проверяются (порядок экрана): Rust
+ * (`owned_visible`) проверяет их первыми. */
+export function visibleChecks(groups: { rows: RowDto[] }[], map: OwnedMap): number[] {
+  return groups.flatMap((g) => g.rows).filter((r) => map.get(r.track_id)?.kind === "checking").map((r) => r.track_id);
+}
+
 /** Новый `check_owned` отменяет прежний, поэтому с повторяемой строкой отправляем и все ждущие. */
 export function recheckIds(map: OwnedMap, id: number): number[] {
   const waiting = [...map].filter(([k, s]) => k !== id && s.kind === "checking").map(([k]) => k);

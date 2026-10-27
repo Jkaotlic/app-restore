@@ -35,6 +35,7 @@ import {
   tileA11y,
   tileLine,
   visibleGroups,
+  visibleChecks,
   type Chip,
   type GroupKey,
   type OwnedMap,
@@ -96,6 +97,9 @@ register("choose", () => {
   /** Запрос, на который App Store уже ответил: пустая группа — «ничего не нашлось», а не сбой. */
   let storeAnswered: string | null = null;
   let storeTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Видимые строки, что ждут проверки прав (`owned_visible`): дебаунс 300 мс, без повторов. */
+  let visibleTimer: ReturnType<typeof setTimeout> | undefined;
+  let visibleSent = "";
   /** Подключённые телефоны (udid через запятую): выбор источника перерисовывается, только когда они меняются. */
   let phonesKey = state.phones.map((p) => p.udid).join(",");
   // «Только для iPad» зависит от устройства, на которое ставим, а не от «Дальше» (как и `checked` в Rust)
@@ -452,6 +456,7 @@ register("choose", () => {
     }
     const focusedId = (document.activeElement as HTMLElement | null)?.closest?.<HTMLElement>(".tile")?.dataset.id;
     const groups = visibleGroups(rows, chip, query, withPhone);
+    reportVisible(visibleChecks(groups, owned));
     found.textContent = foundText(rows, chip, query, withPhone);
     const plain = chip === "all" && query.trim() === "";
     const parts: HTMLElement[] = banners();
@@ -488,6 +493,17 @@ register("choose", () => {
     list.replaceChildren(...parts);
     if (focusedId) tiles.get(Number(focusedId))?.focus();
     syncSelection();
+  }
+
+  /** Rust проверяет видимые при поиске/фильтре строки первыми; прочие ждут. */
+  function reportVisible(ids: number[]) {
+    clearTimeout(visibleTimer);
+    visibleTimer = setTimeout(() => {
+      const key = ids.join(",");
+      if (key === visibleSent) return;
+      visibleSent = key;
+      void call("owned_visible", { trackIds: ids }).catch(() => undefined);
+    }, 300);
   }
 
   /** Одна плитка после события `owned`: остальной список и фокус не трогаем. */
@@ -719,6 +735,7 @@ register("choose", () => {
     onPurchases,
     // Уход с «Выбора» останавливает проверку прав: пустой список отменяет идущую.
     leave: () => {
+      clearTimeout(visibleTimer);
       if (!started) state.choice = { selected: [...selected], unchecked: [...unchecked], picked: [...picked] };
       void call("check_owned", { trackIds: [] }).catch(() => undefined);
     },

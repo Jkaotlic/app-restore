@@ -26,6 +26,7 @@ import {
   tileA11y,
   tileLine,
   visibleGroups,
+  visibleChecks,
   replacePhoneRows,
   purchasesForSource,
   sourceChoices,
@@ -294,6 +295,16 @@ describe("owned states", () => {
     let m = initialOwned([cat(1, "А"), cat(2, "Б"), cat(3, "В")]);
     m = applyOwned(m, ev(1, null, softErr));
     expect(recheckIds(m, 1)).toEqual([1, 2, 3]);
+  });
+});
+
+describe("visibleChecks", () => {
+  it("sends Rust only the shown rows still being checked, in screen order", () => {
+    const list = [cat(1, "Альфа"), cat(2, "Бета"), cat(3, "Альт", { owned: true }), row(60, "Альбом", { source: "phone", owned: null })];
+    const m = initialOwned(list);
+    expect(visibleChecks(visibleGroups(list, "all", "аль"), m)).toEqual([1, 60]);
+    expect(visibleChecks(visibleGroups(list, "all", "бета"), m)).toEqual([2]);
+    expect(visibleChecks(visibleGroups(list, "all", "бета"), applyOwned(m, ev(2, true, null)))).toEqual([]);
   });
 });
 
