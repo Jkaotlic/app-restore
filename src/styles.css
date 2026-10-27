@@ -733,14 +733,14 @@ label.app {
   cursor: pointer;
   color: var(--ink);
 }
-.tile:hover {
+.tile:hover:not([aria-disabled="true"]) {
   border-color: var(--off);
 }
 .tile[aria-pressed="true"] {
   border-color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--ink);
 }
-.tile:disabled {
+.tile[aria-disabled="true"] {
   opacity: 0.55;
   cursor: default;
 }

@@ -22,6 +22,7 @@ import {
   recheckIds,
   selectionLabel,
   selectionSummary,
+  tileA11y,
   tileLine,
   visibleGroups,
 } from "./rows";
@@ -337,6 +338,23 @@ describe("tileLine and canSelect", () => {
     expect(canSelect(row(11, "Telegram"), undefined)).toBe(true);
     expect(canSelect(row(12, "x", { source: "saved" }), undefined)).toBe(true);
     expect(canSelect(row(50, "x", { source: "link" }), undefined)).toBe(true);
+  });
+});
+
+describe("tileA11y", () => {
+  it("selectable tiles are toggles", () => {
+    expect(tileA11y("ВТБ", { text: "доступно 22.1", tone: "plain" }, true, true)).toEqual({ pressed: "true", disabled: false, label: null });
+    expect(tileA11y("ВТБ", { text: "доступно 22.1", tone: "plain" }, true, false)).toEqual({ pressed: "false", disabled: false, label: null });
+  });
+  it("blocked tiles stay focusable, say why and never show as pressed", () => {
+    expect(tileA11y("Чужое", { text: "Куплено на другом Apple ID", tone: "warn" }, false, true)).toEqual({
+      pressed: "false",
+      disabled: true,
+      label: "Чужое, не выбрать: Куплено на другом Apple ID",
+    });
+  });
+  it("a retry tile is a plain button, not a toggle", () => {
+    expect(tileA11y("Маруся", { text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" }, false, false)).toEqual({ pressed: null, disabled: false, label: null });
   });
 });
 

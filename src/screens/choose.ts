@@ -21,11 +21,13 @@ import {
   hiddenCount,
   selectionLabel,
   selectionSummary,
+  tileA11y,
   tileLine,
   visibleGroups,
   type Chip,
   type GroupKey,
   type OwnedMap,
+  type TileLine,
 } from "../rows";
 import type { InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, UiError } from "../types";
 
@@ -159,8 +161,9 @@ register("choose", () => {
       "button",
       {
         class: "tile",
-        attrs: { type: "button", "aria-pressed": String(enabled && selected.has(r.track_id)), title: `${r.name} — ${line.text}${line.up ?? ""}${line.note ? ` · ${line.note}` : ""}` },
+        attrs: { type: "button", title: `${r.name} — ${line.text}${line.up ?? ""}${line.note ? ` · ${line.note}` : ""}` },
         on: {
+          // `aria-disabled`, не `disabled`: плитка в порядке Tab и называет причину; нажатие ничего не делает
           click: safe(async () => {
             if (line.tone === "retry") return recheck(r.track_id);
             if (!selectable(r)) return;
@@ -174,9 +177,18 @@ register("choose", () => {
       h("span", { class: "tbox", attrs: { "aria-hidden": "true" } }),
     );
     tile.dataset.id = String(r.track_id);
-    // «Не удалось проверить» остаётся нажимаемой: нажатие повторяет проверку
-    tile.disabled = !enabled && line.tone !== "retry";
+    applyA11y(tile, r, line, enabled);
     return tile;
+  }
+
+  function applyA11y(tile: HTMLElement, r: RowDto, line: TileLine, enabled: boolean) {
+    const a = tileA11y(r.name, line, enabled, selected.has(r.track_id));
+    if (a.pressed === null) tile.removeAttribute("aria-pressed");
+    else tile.setAttribute("aria-pressed", a.pressed);
+    if (a.disabled) tile.setAttribute("aria-disabled", "true");
+    else tile.removeAttribute("aria-disabled");
+    if (a.label) tile.setAttribute("aria-label", a.label);
+    else tile.removeAttribute("aria-label");
   }
 
   /** Отметки, «Выбрать все в группе» и нижняя панель — без перестройки списка (фокус на месте). */
@@ -184,7 +196,7 @@ register("choose", () => {
     const byId = new Map(rows.map((r) => [r.track_id, r]));
     for (const [id, tile] of tiles) {
       const r = byId.get(id);
-      tile.setAttribute("aria-pressed", String(!!r && selectable(r) && selected.has(id)));
+      if (r) applyA11y(tile, r, tileLine(r, owned.get(id), toIphone(), withPhone), selectable(r));
     }
     for (const g of groupLinks) {
       const pick = groupPick(g.rows, selectable, selected);

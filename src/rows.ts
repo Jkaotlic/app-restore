@@ -227,6 +227,14 @@ export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean
   return { text: "в ваших покупках", tone: "muted" };
 }
 
+/** Состояние плитки для экранного диктора. Невыбираемая остаётся в порядке Tab (`aria-disabled`, а не
+ * `disabled`) и называет причину; плитка «повторить проверку» — обычная кнопка, не переключатель. */
+export function tileA11y(name: string, line: TileLine, enabled: boolean, isSelected: boolean): { pressed: "true" | "false" | null; disabled: boolean; label: string | null } {
+  if (line.tone === "retry") return { pressed: null, disabled: false, label: null };
+  if (!enabled) return { pressed: "false", disabled: true, label: `${name}, не выбрать: ${line.text}` };
+  return { pressed: String(isSelected) as "true" | "false", disabled: false, label: null };
+}
+
 /** Запись каталога можно выбрать, если покупка подтверждена или копия уже лежит на компьютере.
  * Строку «С этого iPhone» — так же, и только если она куплена не на другом Apple ID. */
 export function canSelect(r: RowDto, s: OwnedState | undefined, targetIphone = false): boolean {
