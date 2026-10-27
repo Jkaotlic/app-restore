@@ -308,10 +308,11 @@ impl AppState {
         let _ = app.emit("catalog_check", SweepDto { checked, total, running });
     }
 
-    /// Проверка всего каталога кончилась (или её остановили): больше не идёт, событие с итогом.
-    async fn end_sweep<R: Runtime>(&self, app: &AppHandle<R>, email: Option<&str>) {
+    /// Проверка всего каталога кончилась (или её остановили): больше не идёт, событие с итогом —
+    /// если она шла или её очередь доработала эта проверка (`force`).
+    async fn end_sweep<R: Runtime>(&self, app: &AppHandle<R>, email: Option<&str>, force: bool) {
         let was = self.sweep.lock().unwrap().take().is_some();
-        if was {
+        if was || force {
             self.emit_sweep(app, email, false).await;
         }
     }
@@ -912,7 +913,7 @@ pub async fn check_owned(app: AppHandle, track_ids: Vec<i64>, recheck: Option<bo
     if !recheck {
         // «стоп» (уход с «Выбора»): и проверка всего каталога тоже
         let st = app.state::<AppState>();
-        st.end_sweep(&app, st.current_email().as_deref()).await;
+        st.end_sweep(&app, st.current_email().as_deref(), false).await;
     }
     run_checks(app, track_ids, recheck).await;
     Ok(())
@@ -970,8 +971,9 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
                 Some(owned_cache::Pick::Main(i)) => queue.remove(i),
                 Some(owned_cache::Pick::Sweep(i)) => bulk.remove(i),
                 None => {
-                    if sweeping {
-                        st.end_sweep(&h, email.as_deref()).await;
+                    // новая проверка уже идёт — она и доведёт «весь каталог»
+                    if sweeping && current(&st) {
+                        st.end_sweep(&h, email.as_deref(), true).await;
                     }
                     return;
                 }
@@ -1007,8 +1009,8 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
                 }
             }
             if stop {
-                if sweeping {
-                    st.end_sweep(&h, email.as_deref()).await;
+                if sweeping && current(&st) {
+                    st.end_sweep(&h, email.as_deref(), true).await;
                 }
                 return;
             }
