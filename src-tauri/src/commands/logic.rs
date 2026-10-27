@@ -219,12 +219,49 @@ pub fn versions_page(ids: &[String], before: Option<&str>, n: usize) -> (Vec<Str
 }
 
 /// Ошибка списка версий для человека: 429 — «Apple просит подождать», а не «серверы не отвечают».
-pub fn versions_error(e: AppError) -> UiError {
+/// `wait` — сколько секунд ещё пауза (`MetaGate`).
+pub fn versions_error(e: AppError, wait: Option<u64>) -> UiError {
     let mut u = UiError::from(e.clone());
     if e == (AppError::AppleUnavailable { status: Some(429) }) {
-        u.text = "Apple просит подождать: слишком много запросов о версиях. Попробуйте через несколько минут.".into();
+        u.text = match wait {
+            Some(s) => format!("Apple просит подождать: слишком много запросов о версиях. Можно снова через {s} с."),
+            None => "Apple просит подождать: слишком много запросов о версиях. Попробуйте через несколько минут.".into(),
+        };
     }
     u
+}
+
+/// Пауза метаданных версий после 429: столько к Apple о версиях не ходим.
+pub const META_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Общая для списка и поиска пауза после 429 («Apple просит подождать»).
+#[derive(Debug, Default)]
+pub struct MetaGate {
+    until: Option<std::time::Instant>,
+}
+
+impl MetaGate {
+    /// Сколько секунд ещё ждать (вверх); `None` — можно спрашивать.
+    pub fn wait_left(&self, now: std::time::Instant) -> Option<u64> {
+        let left = self.until?.checked_duration_since(now)?;
+        (!left.is_zero()).then(|| left.as_secs() + u64::from(left.subsec_nanos() > 0))
+    }
+
+    /// Ответ Apple: 429 — пауза `META_COOLDOWN` с этого момента.
+    pub fn note(&mut self, e: &AppError, now: std::time::Instant) {
+        if *e == (AppError::AppleUnavailable { status: Some(429) }) {
+            self.until = Some(now + META_COOLDOWN);
+        }
+    }
+}
+
+/// iOS телефона-цели для «Найти подходящую»: только iPhone.
+pub fn target_ios(phones: &[PhoneInfo], target: Option<&str>) -> Result<String, AppError> {
+    let p = target.and_then(|t| phones.iter().find(|d| d.udid == t)).ok_or(AppError::DeviceNotFound { drivers_missing: false })?;
+    if p.device_class != "iPhone" {
+        return Err(AppError::DeviceRejected { reason: "Подходящую версию ищем только для iPhone".into() });
+    }
+    Ok(p.ios_version.clone())
 }
 
 /// Версия в списке «Другая версия…». `display` — `null`, если Apple не успел ответить.
@@ -234,6 +271,8 @@ pub struct VersionDto {
     pub display: Option<String>,
     /// Дата выхода «ГГГГ-ММ-ДД».
     pub released: Option<String>,
+    /// Apple о ней спросили; `false` — не успели (пауза после 429), можно спросить позже.
+    pub checked: bool,
 }
 
 pub fn version_dto(id: &str, meta: Option<&crate::ios_compat::VersionMeta>) -> VersionDto {
@@ -241,6 +280,7 @@ pub fn version_dto(id: &str, meta: Option<&crate::ios_compat::VersionMeta>) -> V
         id: id.to_string(),
         display: meta.map(|m| m.display.clone()).filter(|d| !d.trim().is_empty()),
         released: meta.and_then(|m| m.released.as_deref()).map(|d| d.get(..10).unwrap_or(d).to_string()),
+        checked: meta.is_some(),
     }
 }
 
@@ -251,6 +291,8 @@ pub struct VersionsDto {
     pub versions: Vec<VersionDto>,
     pub more: bool,
     pub error: Option<UiError>,
+    /// Пауза после 429: через сколько секунд можно снова.
+    pub wait_s: Option<u64>,
 }
 
 /// Итог `find_version`: самая новая версия, вышедшая до следующей iOS после телефона.
@@ -261,7 +303,10 @@ pub struct FoundVersionDto {
     pub version: Option<VersionDto>,
     pub next_ios: Option<u64>,
     pub none_older: bool,
+    /// Запросы кончились, подходящей среди проверенных нет.
+    pub exhausted: bool,
     pub error: Option<UiError>,
+    pub wait_s: Option<u64>,
 }
 
 /// Список, который показывается сразу: каталог плюс строки сохранённых копий (с trackId),
@@ -1133,6 +1178,7 @@ impl<F: Fn(Option<String>)> Drop for HintScope<'_, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn store_url_only_for_app_ids() {
@@ -1748,10 +1794,42 @@ mod tests {
     }
 
     #[test]
+    fn meta_gate_waits_a_minute_after_429() {
+        let t0 = std::time::Instant::now();
+        let mut g = MetaGate::default();
+        assert_eq!(g.wait_left(t0), None);
+        g.note(&AppError::NotPurchased, t0);
+        assert_eq!(g.wait_left(t0), None, "только 429");
+        g.note(&AppError::AppleUnavailable { status: Some(429) }, t0);
+        assert_eq!(g.wait_left(t0), Some(60));
+        assert_eq!(g.wait_left(t0 + Duration::from_millis(30_500)), Some(30), "секунды вверх");
+        assert_eq!(g.wait_left(t0 + Duration::from_secs(60)), None);
+        let e = versions_error(AppError::AppleUnavailable { status: Some(429) }, Some(42));
+        assert_eq!(e.text, "Apple просит подождать: слишком много запросов о версиях. Можно снова через 42 с.");
+    }
+
+    #[test]
+    fn find_version_only_for_an_iphone_target() {
+        let phone = |udid: &str, class: &str| PhoneInfo { udid: udid.into(), name: "n".into(), ios_version: "15.8".into(), device_class: class.into(), product_type: "p".into() };
+        let list = [phone("A", "iPhone"), phone("B", "iPad")];
+        assert_eq!(target_ios(&list, Some("A")), Ok("15.8".to_string()));
+        assert_eq!(target_ios(&list, Some("B")), Err(AppError::DeviceRejected { reason: "Подходящую версию ищем только для iPhone".into() }));
+        assert_eq!(target_ios(&list, None), Err(AppError::DeviceNotFound { drivers_missing: false }));
+        assert_eq!(target_ios(&list, Some("C")), Err(AppError::DeviceNotFound { drivers_missing: false }));
+    }
+
+    #[test]
+    fn unasked_version_is_marked() {
+        assert!(!version_dto("1", None).checked);
+        let m = crate::ios_compat::VersionMeta { display: "1.0".into(), released: None };
+        assert!(version_dto("1", Some(&m)).checked);
+    }
+
+    #[test]
     fn versions_error_explains_429() {
-        let e = versions_error(AppError::AppleUnavailable { status: Some(429) });
+        let e = versions_error(AppError::AppleUnavailable { status: Some(429) }, None);
         assert_eq!((e.code.as_str(), e.text.as_str()), ("apple_unavailable", "Apple просит подождать: слишком много запросов о версиях. Попробуйте через несколько минут."));
-        assert_eq!(versions_error(AppError::NotPurchased).text, AppError::NotPurchased.user_text());
+        assert_eq!(versions_error(AppError::NotPurchased, Some(5)).text, AppError::NotPurchased.user_text());
     }
 
     /// Покупки не загрузились: строки копий называются по имени из ipa, не по bundle id.

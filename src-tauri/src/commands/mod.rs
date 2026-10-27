@@ -125,6 +125,8 @@ pub struct AppState {
     versions_turn: tokio::sync::Mutex<()>,
     /// Выбранная человеком версия задания (external id): её скачивает и «Повторить».
     chosen_versions: Mutex<HashMap<i64, String>>,
+    /// Пауза метаданных версий после 429 — общая для списка и поиска.
+    meta_gate: Mutex<MetaGate>,
     /// Что стоит на телефоне (udid, список) из `installed_apps`; `None` — без телефона.
     installed: Mutex<Option<(String, Vec<InstalledApp>)>>,
     /// Что стоит на каждом прочитанном телефоне (udid → список): источник группы «С этого iPhone»
@@ -213,6 +215,7 @@ impl AppState {
             version_meta: Mutex::new(HashMap::new()),
             versions_turn: tokio::sync::Mutex::new(()),
             chosen_versions: Mutex::new(HashMap::new()),
+            meta_gate: Mutex::new(MetaGate::default()),
             installed: Mutex::new(None),
             phone_lists: Mutex::new(HashMap::new()),
             source: Mutex::new(SourcePick::default()),
@@ -393,6 +396,7 @@ impl AppState {
         self.latest.lock().unwrap().clear();
         // права на версии — у прежнего аккаунта; метаданные версий от аккаунта не зависят
         self.version_ids.lock().unwrap().clear();
+        self.chosen_versions.lock().unwrap().clear();
         *self.phone_taken.lock().unwrap() = None;
         *self.sweep.lock().unwrap() = None;
     }
@@ -596,9 +600,24 @@ impl AppState {
         if let Some(m) = self.version_meta.lock().unwrap().get(&key).cloned() {
             return Ok(m);
         }
-        let m = self.session.version_meta(track_id, &key.1).await?;
+        // после 429 — пауза (`MetaGate`): к Apple не идём, отвечаем тем же «подождите»
+        if self.meta_gate.lock().unwrap().wait_left(std::time::Instant::now()).is_some() {
+            return Err(AppError::AppleUnavailable { status: Some(429) });
+        }
+        let m = match self.session.version_meta(track_id, &key.1).await {
+            Ok(m) => m,
+            Err(e) => {
+                self.meta_gate.lock().unwrap().note(&e, std::time::Instant::now());
+                return Err(e);
+            }
+        };
         self.version_meta.lock().unwrap().insert(key, m.clone());
         Ok(m)
+    }
+
+    /// Сколько секунд ещё пауза после 429.
+    fn meta_wait(&self) -> Option<u64> {
+        self.meta_gate.lock().unwrap().wait_left(std::time::Instant::now())
     }
 
     /// Задания `ids` с версиями: выбранная человеком (`chosen_versions`) или последняя.
@@ -1369,21 +1388,24 @@ pub async fn app_versions(state: State<'_, AppState>, track_id: i64, before: Opt
     let mut versions = Vec::with_capacity(page.len());
     let mut error = None;
     for id in page {
-        let meta = if error.is_none() {
+        // после ошибки к Apple не ходим: только кэш (после 429 так делает и пауза `MetaGate`);
+        // остальные — «не проверено», их можно спросить позже
+        let meta = if error.is_some() {
+            state.version_meta.lock().unwrap().get(&(track_id, id.clone())).cloned()
+        } else {
             match state.version_meta(track_id, id.clone()).await {
                 Ok(m) => Some(m),
                 Err(e) => {
                     log_err(&format!("versions {track_id}"), &e);
-                    error = Some(versions_error(e));
+                    error = Some(e);
                     None
                 }
             }
-        } else {
-            None
         };
         versions.push(version_dto(&id, meta.as_ref()));
     }
-    Ok(VersionsDto { versions, more, error })
+    let wait_s = state.meta_wait();
+    Ok(VersionsDto { versions, more, error: error.map(|e| versions_error(e, wait_s)), wait_s })
 }
 
 /// «Найти подходящую»: самая новая версия, вышедшая до следующей крупной iOS после iOS
@@ -1394,24 +1416,26 @@ pub async fn app_versions(state: State<'_, AppState>, track_id: i64, before: Opt
 pub async fn find_version(state: State<'_, AppState>, track_id: i64) -> Result<FoundVersionDto, UiError> {
     let ios = {
         let p = state.phones.lock().unwrap();
-        p.target.as_deref().and_then(|t| p.last.iter().find(|d| d.udid == t)).map(|d| d.ios_version.clone())
+        target_ios(&p.last, p.target.as_deref())
     };
-    let ios = ios.ok_or_else(|| ui("find_version", AppError::DeviceNotFound { drivers_missing: false }))?;
+    let ios = ios.map_err(|e| ui("find_version", e))?;
     let Some((next, cutoff)) = crate::ios_compat::next_ios_release(&ios) else {
-        return Ok(FoundVersionDto { version: None, next_ios: None, none_older: false, error: None });
+        return Ok(FoundVersionDto { version: None, next_ios: None, none_older: false, exhausted: false, error: None, wait_s: None });
     };
     let _turn = state.versions_turn.lock().await;
     let ids = state.version_ids(track_id).await.map_err(|e| ui("find_version", e))?;
     let st = &*state;
     let found = crate::ios_compat::newest_before(&ids, cutoff, VERSIONS_PAGE, |id| st.version_meta(track_id, id)).await;
-    let mut dto = FoundVersionDto { version: None, next_ios: Some(next), none_older: false, error: None };
+    let mut dto = FoundVersionDto { version: None, next_ios: Some(next), none_older: false, exhausted: false, error: None, wait_s: None };
     match found {
         Ok(crate::ios_compat::Found::Version(i, m)) => dto.version = Some(version_dto(&ids[i], Some(&m))),
         Ok(crate::ios_compat::Found::None) => dto.none_older = true,
         Ok(crate::ios_compat::Found::Unknown) => {}
+        Ok(crate::ios_compat::Found::Exhausted) => dto.exhausted = true,
         Err(e) => {
             log_err(&format!("find version {track_id}"), &e);
-            dto.error = Some(versions_error(e));
+            dto.wait_s = state.meta_wait();
+            dto.error = Some(versions_error(e, dto.wait_s));
         }
     }
     Ok(dto)

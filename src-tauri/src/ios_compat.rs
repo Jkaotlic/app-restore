@@ -75,8 +75,10 @@ pub enum Found {
     Version(usize, VersionMeta),
     /// Даже самая первая версия вышла позже: подходящей наверняка нет.
     None,
-    /// Запросов не хватило или у версии нет даты: ответа нет.
+    /// У версии нет даты, а подходящей до неё не нашли: ответа нет.
     Unknown,
+    /// Запросы кончились, а подходящей среди спрошенных нет: может быть старше.
+    Exhausted,
 }
 
 /// Самая новая версия, вышедшая до `cutoff` (дата «ГГГГ-ММ-ДД»). `ids` — от старой к новой, как
@@ -93,12 +95,15 @@ where
     // искомое — в [lo, hi): всё левее lo вышло раньше cutoff, всё с hi — не раньше
     while lo < hi {
         if used == budget {
-            return Ok(best.map_or(Found::Unknown, |(i, m)| Found::Version(i, m)));
+            return Ok(best.map_or(Found::Exhausted, |(i, m)| Found::Version(i, m)));
         }
         let mid = lo + (hi - lo) / 2;
         used += 1;
         let m = meta(ids[mid].clone()).await?;
-        let Some(date) = m.released.as_deref().map(|d| d.get(..10).unwrap_or(d)) else { return Ok(Found::Unknown) };
+        let Some(date) = m.released.as_deref().map(|d| d.get(..10).unwrap_or(d)) else {
+            // без даты дальше не поделить: что уже нашли — то и ответ
+            return Ok(best.map_or(Found::Unknown, |(i, m)| Found::Version(i, m)));
+        };
         if date < cutoff {
             lo = mid + 1;
             best = Some((mid, m));
@@ -225,6 +230,27 @@ mod tests {
         .await;
         assert_eq!(r, Err(AppError::AppleUnavailable { status: Some(429) }));
         assert_eq!(*n.borrow(), 1);
+    }
+
+    #[tokio::test]
+    async fn missing_date_mid_search_keeps_best() {
+        // v0..v7 с датами, у v6 даты нет: поиск идёт через v4 (раньше), затем натыкается на v6
+        let ids: Vec<String> = (0..8).map(|i| format!("v{i}")).collect();
+        let r = newest_before(&ids, "2030-01-01", 10, |id| async move {
+            let i: usize = id[1..].parse().unwrap();
+            if i == 6 { Ok(VersionMeta { display: "6.0".into(), released: None }) } else { Ok(meta(&format!("{i}.0"), &format!("{}-01-01", 2015 + i))) }
+        })
+        .await;
+        assert_eq!(r, Ok(Found::Version(4, meta("4.0", "2019-01-01"))));
+    }
+
+    #[tokio::test]
+    async fn budget_out_without_candidate_is_exhausted() {
+        // все спрошенные — новее cutoff, а запросы кончились раньше начала списка
+        let s = Store { n: 600, asked: RefCell::default() };
+        let r = newest_before(&s.ids(), "2015-06-01", 3, |id| s.get(id)).await;
+        assert_eq!(r, Ok(Found::Exhausted));
+        assert_eq!(s.asked.borrow().len(), 3);
     }
 
     #[tokio::test]
