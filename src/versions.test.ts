@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canPickVersion, foundMessage, iosRunsOn, splitStart, startVersions, tooOldNote, versionLabel, DOWNLOAD_ONLY_NOTE } from "./versions";
+import { canPickVersion, downloadOnlyNote, findOffered, foundMessage, iosRunsOn, recheckFrom, splitStart, startVersions, tooOldNote, versionLabel, waitText } from "./versions";
 import type { RowDto } from "./types";
 
 const base: RowDto = {
@@ -58,15 +58,39 @@ describe("splitStart", () => {
     const r = splitStart([old, ok, unknown], (x) => tooOldNote(x.min_ios, "16.1") !== null);
     expect(r.install.map((x) => x.track_id)).toEqual([2, 3]);
     expect(r.downloadOnly.map((x) => x.track_id)).toEqual([1]);
-    expect(DOWNLOAD_ONLY_NOTE).toBe("Скачаем, но на этот iPhone не поставим");
+    expect(downloadOnlyNote("16.1")).toBe("Скачаем, но на этот iPhone не поставим — можно найти версию под iOS 16.1");
   });
 });
 
 describe("versions", () => {
   it("labels with date, or says it is not known yet", () => {
-    expect(versionLabel({ id: "1", display: "12.15.0", released: "2022-03-18" })).toBe("12.15.0 · 18.03.2022");
-    expect(versionLabel({ id: "1", display: "12.15.0", released: null })).toBe("12.15.0");
-    expect(versionLabel({ id: "847801982", display: null, released: null })).toBe("Версия № 847801982 (Apple не назвал)");
+    expect(versionLabel({ id: "1", display: "12.15.0", released: "2022-03-18", checked: true })).toBe("12.15.0 · 18.03.2022");
+    expect(versionLabel({ id: "1", display: "12.15.0", released: null, checked: true })).toBe("12.15.0");
+    expect(versionLabel({ id: "847801982", display: null, released: null, checked: true })).toBe("Версия № 847801982 (Apple не назвал)");
+    // не спросили (пауза после 429) — так и говорим
+    expect(versionLabel({ id: "847801982", display: null, released: null, checked: false })).toBe("Версия № 847801982 (не проверено)");
+  });
+
+  it("unasked versions are asked again from the first of them", () => {
+    const v = (id: string, checked: boolean) => ({ id, display: checked ? id : null, released: null, checked });
+    // от новой к старой: «before» — последняя проверенная перед первой непроверенной
+    expect(recheckFrom([v("9", true), v("8", false), v("7", false)])).toEqual({ before: "9" });
+    expect(recheckFrom([v("9", false), v("8", false)])).toEqual({ before: null });
+    expect(recheckFrom([v("9", true)])).toBeNull();
+  });
+
+  it("countdown text after 429", () => {
+    expect(waitText(42)).toBe("Apple просит подождать: можно снова через 42 с");
+    expect(waitText(0)).toBeNull();
+  });
+
+  it("find is offered right on an incompatible tile", () => {
+    const tb = { ...base, min_ios: "17.0" };
+    expect(findOffered(tb, { kind: "yes" }, "16.1", undefined)).toBe(true);
+    expect(findOffered(tb, { kind: "yes" }, "17.1", undefined)).toBe(false);
+    expect(findOffered(tb, { kind: "yes" }, null, undefined)).toBe(false);
+    expect(findOffered(tb, { kind: "yes" }, "16.1", { id: "1", display: "6.0" })).toBe(false);
+    expect(findOffered({ ...tb, other_account: true }, { kind: "yes" }, "16.1", undefined)).toBe(false);
   });
 
   it("start sends chosen versions of the started rows only", () => {
@@ -88,20 +112,24 @@ describe("versions", () => {
   });
 
   it("find result in words", () => {
-    const v = { id: "7", display: "12.1.0", released: "2022-01-10" };
-    expect(foundMessage({ version: v, next_ios: 16, none_older: false, error: null }, "15.8")).toBe(
+    const v = { id: "7", display: "12.1.0", released: "2022-01-10", checked: true };
+    const no = { exhausted: false, wait_s: null };
+    expect(foundMessage({ ...no, version: v, next_ios: 16, none_older: false, error: null }, "15.8")).toBe(
       "12.1.0 вышла до iOS 16 — должна запуститься на iOS 15.8. Перед установкой проверим ещё раз.",
     );
-    expect(foundMessage({ version: null, next_ios: 16, none_older: true, error: null }, "15.8")).toBe(
+    expect(foundMessage({ ...no, version: null, next_ios: 16, none_older: true, error: null }, "15.8")).toBe(
       "Все версии вышли после iOS 16: на iOS 15.8, скорее всего, не встанет ни одна.",
     );
-    expect(foundMessage({ version: null, next_ios: null, none_older: false, error: null }, "26.1")).toBe(
+    expect(foundMessage({ ...no, version: null, next_ios: null, none_older: false, error: null }, "26.1")).toBe(
       "На iPhone новейшая iOS — подойдёт последняя версия.",
     );
-    expect(foundMessage({ version: null, next_ios: 16, none_older: false, error: null }, "15.8")).toBe(
+    expect(foundMessage({ ...no, version: null, next_ios: 16, none_older: false, error: null }, "15.8")).toBe(
       "Не удалось найти: Apple не дал даты версий. Выберите версию из списка.",
     );
+    expect(foundMessage({ exhausted: true, wait_s: null, version: null, next_ios: 16, none_older: false, error: null }, "15.8")).toBe(
+      "Проверили 10 версий, подходящей не нашли — попробуйте «Ещё старше»",
+    );
     const err = { code: "apple_unavailable", text: "Apple просит подождать", retryable: true };
-    expect(foundMessage({ version: null, next_ios: 16, none_older: false, error: err }, "15.8")).toBe("Apple просит подождать");
+    expect(foundMessage({ ...no, version: null, next_ios: 16, none_older: false, error: err }, "15.8")).toBe("Apple просит подождать");
   });
 });

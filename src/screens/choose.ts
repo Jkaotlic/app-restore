@@ -50,7 +50,7 @@ import {
   type TileLine,
 } from "../rows";
 import type { DropDto, FoundVersionDto, InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, SweepDto, UiError, VersionDto, VersionsDto } from "../types";
-import { canPickVersion, foundMessage, splitStart, startVersions, tooOldNote, versionLabel } from "../versions";
+import { canPickVersion, findOffered, foundMessage, recheckFrom, splitStart, startVersions, tooOldNote, versionLabel, waitText } from "../versions";
 
 export function appIcon(r: RowDto): HTMLElement {
   const { letter, color } = iconFor(r);
@@ -130,7 +130,11 @@ register("choose", () => {
   /** «Другая версия…» под плитками: видна у выбранных строк, которые скачиваются по номеру. */
   const versionLinks = new Map<number, HTMLButtonElement>();
   /** Открытые списки версий по trackId: переживают перерисовку списка. */
-  type Panel = { loading: boolean; versions: VersionDto[]; more: boolean; error: string | null; found: string | null };
+  /** «Найти подходящую версию» под несовместимыми плитками: видна и без выбора. */
+  const findLinks = new Map<number, HTMLButtonElement>();
+  /** `waitUntil` — пауза после 429 (мс, `Date.now()`): кнопки к Apple скрыты, идёт обратный отсчёт. */
+  type Panel = { loading: boolean; versions: VersionDto[]; more: boolean; error: string | null; found: string | null; waitUntil: number | null; listed: boolean };
+  const waitTimers = new Map<number, ReturnType<typeof setInterval>>();
   const panels = new Map<number, Panel>();
   const panelEls = new Map<number, HTMLElement>();
   /** iOS телефона-цели, если ставим на iPhone: «Нужна iOS X, на iPhone Y». */
@@ -474,6 +478,10 @@ register("choose", () => {
       const r = byId.get(id);
       link.hidden = !r || !selected.has(id) || !canPickVersion(r, owned.get(id));
     }
+    for (const [id, link] of findLinks) {
+      const r = byId.get(id);
+      link.hidden = !r || !findOffered(r, owned.get(id), phoneIos(), state.versions.get(id));
+    }
     for (const g of groupLinks) {
       const pick = groupPick(g.rows, selectable, selected);
       g.btn.hidden = pick.ids.length === 0;
@@ -568,11 +576,43 @@ register("choose", () => {
     });
     link.hidden = true;
     versionLinks.set(r.track_id, link);
+    // последняя не запустится: сразу предложить ту, что запустится
+    const find = h("button", {
+      class: "link",
+      text: "Найти подходящую версию",
+      attrs: { type: "button", title: `Найти самую новую версию «${r.name}», которая запустится на этом iPhone` },
+      on: { click: safe(() => openVersions(r, true)) },
+    });
+    find.hidden = true;
+    findLinks.set(r.track_id, find);
     if (cell.classList.contains("tilewrap")) {
-      cell.querySelector(".tile-actions")?.prepend(link);
+      cell.querySelector(".tile-actions")?.prepend(find, link);
       return cell;
     }
-    return h("div", { class: "tilewrap" }, cell, h("div", { class: "tile-actions" }, link));
+    return h("div", { class: "tilewrap" }, cell, h("div", { class: "tile-actions" }, find, link));
+  }
+
+  /** Сколько секунд ещё пауза после 429; 0 — можно спрашивать. */
+  const waitLeft = (p: Panel) => (p.waitUntil === null ? 0 : Math.max(0, Math.ceil((p.waitUntil - Date.now()) / 1000)));
+
+  /** Пауза после 429 с обратным отсчётом: раз в секунду перерисовать, по окончании — кнопки назад. */
+  function startWait(id: number, seconds: number | null) {
+    const p = panels.get(id);
+    if (!p || !seconds) return;
+    p.waitUntil = Date.now() + seconds * 1000;
+    clearInterval(waitTimers.get(id));
+    waitTimers.set(
+      id,
+      setInterval(() => {
+        const cur = panels.get(id);
+        if (!cur || waitLeft(cur) === 0) {
+          clearInterval(waitTimers.get(id));
+          waitTimers.delete(id);
+          if (cur) cur.waitUntil = null;
+        }
+        refreshPanel(id);
+      }, 1000),
+    );
   }
 
   /** Список версий под плиткой: «Последняя», версии от новой к старой, «Ещё» и «Найти подходящую». */
@@ -594,12 +634,18 @@ register("choose", () => {
     const list = h("div", { class: "veropts", attrs: { role: "group", "aria-label": `Версии ${r.name}` } }, option("Последняя (по умолчанию)", null), ...p.versions.map((v) => option(versionLabel(v), v)));
     parts.push(list);
     if (p.loading) parts.push(h("p", { class: "loading" }, "Спрашиваем Apple…", h("span", { class: "spin", attrs: { "aria-hidden": "true" } })));
-    if (p.error) parts.push(h("p", { class: "error", text: p.error, attrs: { role: "alert" } }));
+    const wait = waitText(waitLeft(p));
+    if (wait) parts.push(h("p", { class: "error", text: wait, attrs: { role: "status" } }));
+    else if (p.error) parts.push(h("p", { class: "error", text: p.error, attrs: { role: "alert" } }));
     if (p.found) parts.push(h("p", { class: "note", text: p.found, attrs: { role: "status" } }));
     const actions = h("div", { class: "tile-actions" });
-    if (p.more && !p.loading) actions.append(h("button", { class: "link", text: "Ещё старше", attrs: { type: "button" }, on: { click: safe(() => loadVersions(r, p.versions[p.versions.length - 1]?.id ?? null)) } }));
+    const free = !p.loading && !wait;
+    const again = recheckFrom(p.versions);
+    if (again && free) actions.append(h("button", { class: "link", text: "Проверить остальные", attrs: { type: "button" }, on: { click: safe(() => loadVersions(r, again.before)) } }));
+    if (!p.listed && free) actions.append(h("button", { class: "link", text: "Показать все версии", attrs: { type: "button" }, on: { click: safe(() => loadVersions(r, null)) } }));
+    if (p.more && free && !again) actions.append(h("button", { class: "link", text: "Ещё старше", attrs: { type: "button" }, on: { click: safe(() => loadVersions(r, p.versions[p.versions.length - 1]?.id ?? null)) } }));
     const ios = phoneIos();
-    if (ios && !p.loading) actions.append(h("button", { class: "link", text: `Найти подходящую для iOS ${ios}`, attrs: { type: "button" }, on: { click: safe(() => findVersion(r, ios)) } }));
+    if (ios && free) actions.append(h("button", { class: "link", text: `Найти подходящую для iOS ${ios}`, attrs: { type: "button" }, on: { click: safe(() => findVersion(r, ios)) } }));
     actions.append(
       h("button", {
         class: "link",
@@ -608,6 +654,8 @@ register("choose", () => {
         on: {
           click: () => {
             panels.delete(id);
+            clearInterval(waitTimers.get(id));
+            waitTimers.delete(id);
             panelEls.get(id)?.remove();
             panelEls.delete(id);
             versionLinks.get(id)?.focus();
@@ -631,12 +679,18 @@ register("choose", () => {
     if (focused) [...el.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === focused)?.focus();
   }
 
-  async function openVersions(r: RowDto) {
-    if (panels.has(r.track_id)) return;
-    panels.set(r.track_id, { loading: true, versions: [], more: false, error: null, found: null });
+  /** Открыть список версий; `find` — сразу искать подходящую под iOS телефона. */
+  async function openVersions(r: RowDto, find = false) {
+    const ios = phoneIos();
+    if (panels.has(r.track_id)) {
+      if (find && ios) await findVersion(r, ios);
+      return;
+    }
+    panels.set(r.track_id, { loading: true, versions: [], more: false, error: null, found: null, waitUntil: null, listed: false });
     renderList();
     panelEls.get(r.track_id)?.querySelector<HTMLButtonElement>(".veropt")?.focus();
-    await loadVersions(r, null);
+    if (find && ios) await findVersion(r, ios);
+    else await loadVersions(r, null);
   }
 
   /** Страница версий у Apple (не больше 10 запросов за раз; 429 — остановка и объяснение). */
@@ -648,9 +702,13 @@ register("choose", () => {
     refreshPanel(r.track_id);
     try {
       const d = await call<VersionsDto>("app_versions", { trackId: r.track_id, before });
-      p.versions = [...p.versions, ...d.versions.filter((v) => !p.versions.some((x) => x.id === v.id))];
-      p.more = d.more;
+      p.listed = true;
+      // переспрошенные заменяют свои «не проверено», новые — в конец
+      const fresh = new Map(d.versions.map((v) => [v.id, v]));
+      p.versions = [...p.versions.map((v) => fresh.get(v.id) ?? v), ...d.versions.filter((v) => !p.versions.some((x) => x.id === v.id))];
+      if (before === null || p.versions[p.versions.length - 1]?.id === d.versions[d.versions.length - 1]?.id) p.more = d.more;
       p.error = d.error ? errorText(d.error) : null;
+      startWait(r.track_id, d.wait_s);
     } catch (e) {
       p.error = errorText(asUiError(e));
     }
@@ -668,7 +726,9 @@ register("choose", () => {
     refreshPanel(r.track_id);
     try {
       const f = await call<FoundVersionDto>("find_version", { trackId: r.track_id });
-      p.found = foundMessage(f, ios);
+      p.found = f.wait_s ? null : foundMessage(f, ios);
+      if (f.wait_s) p.error = f.error ? errorText(f.error) : null;
+      startWait(r.track_id, f.wait_s);
       if (f.version) {
         const v = f.version;
         if (!p.versions.some((x) => x.id === v.id)) p.versions = [...p.versions, v];
@@ -687,6 +747,7 @@ register("choose", () => {
   function renderList() {
     tiles.clear();
     versionLinks.clear();
+    findLinks.clear();
     panelEls.clear();
     groupLinks.length = 0;
     progressEls.length = 0;
@@ -1114,6 +1175,7 @@ register("choose", () => {
     leave: () => {
       left = true;
       clearTimeout(visibleTimer);
+      for (const t of waitTimers.values()) clearInterval(t);
       if (!started) state.choice = { selected: [...selected], unchecked: [...unchecked], picked: [...picked] };
       void call("check_owned", { trackIds: [] }).catch(() => undefined);
     },

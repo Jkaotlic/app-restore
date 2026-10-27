@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DOWNLOAD_ONLY_NOTE } from "./versions";
+import { downloadOnlyNote } from "./versions";
 import {
   addLinkRow,
   applyOwnedRow,
@@ -343,7 +343,7 @@ describe("tileLine and canSelect", () => {
   });
   it("too new for the phone iOS: says so, still selectable; chosen version wins", () => {
     const tb = row(80, "Т-Банк", { min_ios: "17.0", available_version: "7.1" });
-    expect(tileLine(tb, yes, true, true, { phoneIos: "16.1" })).toEqual({ text: "Нужна iOS 17.0, на iPhone 16.1", tone: "warn", note: DOWNLOAD_ONLY_NOTE });
+    expect(tileLine(tb, yes, true, true, { phoneIos: "16.1" })).toEqual({ text: "Нужна iOS 17.0, на iPhone 16.1", tone: "warn", note: downloadOnlyNote("16.1") });
     expect(canSelect(tb, yes, true)).toBe(true);
     // не на iPhone (iPad или без телефона) и подходящая iOS — как обычно
     expect(tileLine(tb, yes, false, true, { phoneIos: "16.1" })).toEqual({ text: "доступно 7.1", tone: "plain" });

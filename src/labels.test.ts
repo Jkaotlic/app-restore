@@ -11,6 +11,9 @@ describe("jobView", () => {
   it("Apple asks to wait, and paused", () => {
     expect(jobView({ kind: "waiting", seconds: 10 }, null)).toEqual({ text: "Apple просит подождать, повтор через 10 с", bar: "indeterminate", retry: false });
     expect(jobView({ kind: "paused" }, null)).toEqual({ text: "На паузе", bar: null, retry: false });
+    // iOS телефона старше нужной: «Повторить» дало бы ту же ошибку
+    const old = { code: "ios_too_old", text: "Нужна iOS 17.0, на iPhone 16.1", retryable: false };
+    expect(jobView({ kind: "failed", error: old, saved: true }, null)).toEqual({ text: "Нужна iOS 17.0, на iPhone 16.1", bar: null, retry: false });
     expect(isFinished({ kind: "paused" })).toBe(false);
     expect(isFinished({ kind: "waiting", seconds: 2 })).toBe(false);
   });

@@ -23,7 +23,8 @@ export function jobView(s: JobDto, fromSaved: string | null, downloadOnly = fals
     case "installed":
       return { text: fromSaved ? `Поставлена сохранённая копия ${fromSaved}` : "Установлено", bar: null, retry: false };
     case "failed":
-      return { text: errorText(s.error), bar: null, retry: true };
+      // iOS телефона старше нужной: повтор дал бы ту же ошибку
+      return { text: errorText(s.error), bar: null, retry: s.error.code !== "ios_too_old" };
     case "waiting":
       return { text: `Apple просит подождать, повтор через ${s.seconds} с`, bar: "indeterminate", retry: false };
     case "paused":

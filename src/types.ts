@@ -63,6 +63,8 @@ export interface VersionDto {
   display: string | null;
   /** «ГГГГ-ММ-ДД». */
   released: string | null;
+  /** Apple о ней спросили; false — не успели (пауза после 429). */
+  checked: boolean;
 }
 
 /** Страница версий от новой к старой; `more` — есть старше; `error` — Apple перестал отвечать. */
@@ -70,6 +72,8 @@ export interface VersionsDto {
   versions: VersionDto[];
   more: boolean;
   error: UiError | null;
+  /** Пауза после 429: через сколько секунд можно снова. */
+  wait_s: number | null;
 }
 
 /** Итог `find_version`: самая новая версия, вышедшая до следующей iOS после телефона. */
@@ -77,7 +81,10 @@ export interface FoundVersionDto {
   version: VersionDto | null;
   next_ios: number | null;
   none_older: boolean;
+  /** Запросы кончились, подходящей среди проверенных нет. */
+  exhausted: boolean;
   error: UiError | null;
+  wait_s: number | null;
 }
 
 export type InstallState = "not_installed" | "installed" | "update_available" | "unknown";

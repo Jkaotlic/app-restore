@@ -1,6 +1,6 @@
 // Строки экрана «Выбор»: группы, поиск, проверка покупок. Чистые функции, без DOM.
 import type { OwnedEvent, PhoneDto, RowDto, SweepDto, UiError } from "./types";
-import { DOWNLOAD_ONLY_NOTE, tooOldNote, type ChosenVersion } from "./versions";
+import { downloadOnlyNote, tooOldNote, type ChosenVersion } from "./versions";
 
 /** `gone` — Apple больше не отдаёт приложение (`app_gone`): окончательный ответ, как «нет». */
 export type OwnedState = { kind: "checking" } | { kind: "yes" } | { kind: "no" } | { kind: "gone" } | { kind: "error"; error: UiError };
@@ -298,7 +298,7 @@ export function tileLine(
   }
   if (opts.chosen) return { text: opts.chosen.display ? `версия ${opts.chosen.display} (выбрана)` : "выбрана другая версия", tone: "plain" };
   const tooOld = toIphone ? tooOldNote(r.min_ios, opts.phoneIos ?? null) : null;
-  if (tooOld) return { text: tooOld, tone: "warn", note: DOWNLOAD_ONLY_NOTE };
+  if (tooOld) return { text: tooOld, tone: "warn", note: downloadOnlyNote(opts.phoneIos ?? "") };
   const note = r.unknown_account ? "Неизвестный Apple ID" : r.has_saved_copy ? "Есть копия на компьютере" : undefined;
   const withNote = (l: TileLine): TileLine => (note ? { ...l, note } : l);
   if (withPhone && r.installed_version !== null) {
