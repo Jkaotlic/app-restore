@@ -4,6 +4,7 @@ mod commands;
 mod catalog;
 mod device;
 mod errors;
+mod history;
 mod ipatool;
 mod library;
 mod log;
