@@ -1,7 +1,8 @@
 //! Тонкий адаптер к USB: usbmuxd -> lockdown -> AFC (`PublicStaging`) -> installation_proxy.
-//! Логики здесь нет, всё проверяемое лежит в `device/mod.rs`. Проверено вживую (iOS 27.0.1).
+//! Логики здесь нет, всё проверяемое лежит в `device/mod.rs`. Проверено вживую (iOS 27.0.1;
+//! iOS 15.8.8 — неактивированный iPad отказывает в installation_proxy, см. `explain`).
 use super::{CONNECT_LIMIT, BROWSE_LIMIT, INSTALL_LIMIT, deadline, 
-    DeviceHub, InstalledApp, PhoneInfo, installed_from_browse, install_percent, map_install_error, merge_probes, open_local, staging_path, upload_percent,
+    DeviceHub, InstalledApp, PhoneInfo, installed_from_browse, install_percent, map_install_error, map_service_error, merge_probes, needs_activation_check, open_local, staging_path, upload_percent,
 };
 use crate::errors::AppError;
 use async_trait::async_trait;
@@ -29,6 +30,26 @@ fn raw(e: &IdeviceError) -> String {
 
 fn app_err(e: IdeviceError) -> AppError {
     map_install_error(&raw(&e))
+}
+
+/// Ошибка службы с пояснением: на "InvalidService" спрашиваем у устройства `ActivationState`
+/// (читается только внутри сессии lockdown) — неактивированный iPad отказывает именно так.
+async fn explain(provider: &dyn IdeviceProvider, e: IdeviceError) -> AppError {
+    let raw = raw(&e);
+    let state = if needs_activation_check(&raw) {
+        tokio::time::timeout(CONNECT_LIMIT, activation_state(provider)).await.ok().flatten()
+    } else {
+        None
+    };
+    crate::log::write("device", &format!("service error: {raw}; ActivationState={state:?}"));
+    map_service_error(&raw, state.as_deref())
+}
+
+async fn activation_state(provider: &dyn IdeviceProvider) -> Option<String> {
+    let mut lockdown = LockdownClient::connect(provider).await.ok()?;
+    let pairing = provider.get_pairing_file().await.ok()?;
+    lockdown.start_session(&pairing).await.ok()?;
+    Some(text(lockdown.get_value(Some("ActivationState"), None).await)).filter(|s| !s.is_empty())
 }
 
 /// usbmuxd не отвечает: на Windows нет службы «Apple Mobile Device» (Apple Devices), на Mac его
@@ -83,9 +104,15 @@ impl DeviceHub for IdeviceHub {
         let dev = deadline(CONNECT_LIMIT, "device", async { mux.get_device(udid).await.map_err(app_err) }).await?;
         let provider = dev.to_provider(UsbmuxdAddr::default(), LABEL);
         let remote = staging_path(ipa);
-        let mut afc = deadline(CONNECT_LIMIT, "afc", async { AfcClient::connect(&provider).await.map_err(app_err) }).await?;
+        let mut afc = match deadline(CONNECT_LIMIT, "afc", async { Ok(AfcClient::connect(&provider).await) }).await? {
+            Ok(afc) => afc,
+            Err(e) => return Err(explain(&provider, e).await),
+        };
         let result = deadline(INSTALL_LIMIT, "install", async {
-            push_and_install(&mut afc, &provider, file, total, &remote, &progress).await.map_err(app_err)
+            match push_and_install(&mut afc, &provider, file, total, &remote, &progress).await {
+                Ok(()) => Ok(()),
+                Err(e) => Err(explain(&provider, e).await),
+            }
         })
         .await;
         // Лучшее, что можно сделать: убрать за собой; ошибки уборки не важны.
@@ -103,7 +130,10 @@ impl IdeviceHub {
         let mut mux = connect_mux().await?;
         let dev = mux.get_device(udid).await.map_err(app_err)?;
         let provider = dev.to_provider(UsbmuxdAddr::default(), LABEL);
-        let mut proxy = InstallationProxyClient::connect(&provider).await.map_err(app_err)?;
+        let mut proxy = match InstallationProxyClient::connect(&provider).await {
+            Ok(p) => p,
+            Err(e) => return Err(explain(&provider, e).await),
+        };
         let mut opts = plist::Dictionary::new();
         opts.insert("ApplicationType".into(), plist::Value::String("User".into()));
         let attrs = BROWSE_ATTRS.iter().map(|a| plist::Value::String(a.to_string())).collect();

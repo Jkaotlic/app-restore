@@ -273,6 +273,29 @@ pub fn map_install_error(raw: &str) -> AppError {
     }
 }
 
+/// Устройство не прошло первоначальную настройку (lockdown `ActivationState` = "Unactivated"):
+/// lockdown даёт только часть служб, installation_proxy среди них нет. Проверено вживую 27.10.
+pub const NOT_ACTIVATED: &str = "Устройство не активировано: пройдите на нём первоначальную настройку до главного экрана (Wi‑Fi, Apple ID) и подключите кабель снова";
+/// Тот же отказ службы, но состояние активации узнать не вышло.
+pub const SERVICE_UNAVAILABLE: &str = "Устройство не пускает к списку приложений. Разблокируйте его, проверьте, что настройка завершена, и подключите кабель снова";
+
+/// Отказ lockdown StartService: стоит спросить у устройства `ActivationState`.
+pub fn needs_activation_check(raw: &str) -> bool {
+    raw.contains("InvalidService")
+}
+
+/// Ошибка подключения к службе -> `AppError` с учётом `ActivationState` (если его удалось
+/// прочитать в сессии lockdown). Прочие ошибки — как `map_install_error`.
+pub fn map_service_error(raw: &str, activation_state: Option<&str>) -> AppError {
+    if !needs_activation_check(raw) {
+        return map_install_error(raw);
+    }
+    match activation_state {
+        Some("Unactivated") => AppError::DeviceRejected { reason: NOT_ACTIVATED.into() },
+        _ => AppError::DeviceRejected { reason: SERVICE_UNAVAILABLE.into() },
+    }
+}
+
 /// Загрузка в телефон занимает первую половину шкалы.
 pub fn upload_percent(sent: u64, total: u64) -> u8 {
     if total == 0 {
@@ -671,6 +694,36 @@ mod tests {
                 InstalledApp { bundle_id: "com.example.bad".into(), name: "com.example.bad".into(), version: String::new(), item_id: None, purchaser: None },
             ]
         );
+    }
+
+    /// Живой образец 27.10: iPad (iOS 15.8.8, ActivationState=Unactivated) — StartService
+    /// installation_proxy отвечает "InvalidService", AFC при этом открывается.
+    const LIVE_INVALID_SERVICE: &str = "unknown error `InvalidService` returned from device / UnknownErrorType(\"InvalidService\")";
+
+    #[test]
+    fn invalid_service_on_unactivated_device_says_finish_setup() {
+        assert_eq!(map_service_error(LIVE_INVALID_SERVICE, Some("Unactivated")), rej(NOT_ACTIVATED));
+    }
+
+    #[test]
+    fn invalid_service_with_unknown_activation_is_still_readable() {
+        for state in [None, Some("Activated"), Some("")] {
+            assert_eq!(map_service_error(LIVE_INVALID_SERVICE, state), rej(SERVICE_UNAVAILABLE), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn other_errors_ignore_activation_state() {
+        let pipe = "Socket(Os { code: 32, kind: BrokenPipe, message: \"Broken pipe\" })";
+        assert_eq!(map_service_error(pipe, Some("Unactivated")), map_install_error(pipe));
+        assert_eq!(map_service_error("DeviceLocked", None), AppError::DeviceLocked);
+    }
+
+    #[test]
+    fn needs_activation_check_only_for_invalid_service() {
+        assert!(needs_activation_check(LIVE_INVALID_SERVICE));
+        assert!(!needs_activation_check("DeviceLocked"));
+        assert!(!needs_activation_check("PackageInspectionFailed"));
     }
 
     #[test]
