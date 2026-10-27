@@ -22,7 +22,7 @@ jobs:
           python-version: "3.12"
 
       - name: Unit tests
-        run: python3 -m unittest scripts/test_catalog_check.py
+        run: python3 -m unittest scripts/test_catalog_check.py scripts/test_import_candidates.py
 
       - name: Check catalog against Apple
         run: python3 scripts/catalog-check.py --write > "$RUNNER_TEMP/report.md"

@@ -37,7 +37,7 @@ jobs:
         run: |
           npm test
           (cd src-tauri && cargo test)
-          python3 -m unittest scripts/test_catalog_check.py
+          python3 -m unittest scripts/test_catalog_check.py scripts/test_import_candidates.py
 
       - name: Build universal dmg
         run: npm run tauri build -- --target universal-apple-darwin --bundles dmg
