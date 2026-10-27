@@ -3,6 +3,7 @@ mod app_link;
 mod commands;
 mod catalog;
 mod device;
+mod dropped;
 mod errors;
 mod ipatool;
 mod library;
@@ -38,6 +39,12 @@ pub fn run() {
             commands::setup(app.handle());
             Ok(())
         })
+        // файлы, перетащенные в окно: пути приходят сюда, интерфейсу доступ к ним не нужен
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                commands::on_drop(window.app_handle(), paths.clone());
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::login,
             commands::session_info,
@@ -52,6 +59,7 @@ pub fn run() {
             commands::check_owned,
             commands::owned_visible,
             commands::add_by_link,
+            commands::links_in_text,
             commands::search_store,
             commands::start,
             commands::run_info,

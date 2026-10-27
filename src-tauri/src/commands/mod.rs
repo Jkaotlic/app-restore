@@ -791,6 +791,31 @@ pub fn report_to_catalog(app: AppHandle, track_id: i64, name: String, version: S
         .map_err(|e| ui("report_to_catalog", AppError::Unknown { detail: format!("open url: {e}") }))
 }
 
+/// Перетаскивание в окно (`WindowEvent::DragDrop`): файлы разбирает `dropped` в фоне, итог —
+/// событием `dropped` (`DropDto`). Пути в журнал не пишутся: в них имя пользователя.
+pub fn on_drop<R: Runtime>(app: &AppHandle<R>, paths: Vec<PathBuf>) {
+    let h = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let lib = h.state::<AppState>().library.clone();
+        let (n, no_files) = (paths.len(), paths.is_empty());
+        let out = tauri::async_runtime::spawn_blocking(move || crate::dropped::handle(&lib, &paths))
+            .await
+            .unwrap_or_else(|e| crate::dropped::Outcome { errors: vec![AppError::Unknown { detail: format!("drop: {e}") }], ..Default::default() });
+        for e in &out.errors {
+            log_err("drop", e);
+        }
+        crate::log::write("drop", &format!("{n} files: {} copies, {} ids", out.copies.len(), out.ids.len()));
+        let _ = h.emit("dropped", drop_dto(out, no_files));
+    });
+}
+
+/// Номера приложений из вставленного текста (`app_link::ids_in_text`): несколько ссылок сразу
+/// в поле «Добавить по ссылке».
+#[tauri::command]
+pub fn links_in_text(text: String) -> Vec<i64> {
+    crate::app_link::ids_in_text(&text)
+}
+
 /// «Продолжить без iPhone»: строки без колонки «На iPhone».
 #[tauri::command]
 pub fn clear_installed(state: State<'_, AppState>) {

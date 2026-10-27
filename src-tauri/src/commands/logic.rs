@@ -821,6 +821,21 @@ pub fn copy_dto(c: &crate::library::CopyInfo) -> CopyDto {
     }
 }
 
+/// Итог перетаскивания в окно (событие `dropped`): принятые копии, номера для «Добавить по
+/// ссылке» и ошибки. `no_files` — перетащили не файл (текст или ссылку из браузера): событие
+/// Tauri приносит только пути файлов.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DropDto {
+    pub copies: Vec<CopyDto>,
+    pub ids: Vec<i64>,
+    pub errors: Vec<UiError>,
+    pub no_files: bool,
+}
+
+pub fn drop_dto(out: crate::dropped::Outcome, no_files: bool) -> DropDto {
+    DropDto { copies: out.copies.iter().map(copy_dto).collect(), ids: out.ids, errors: out.errors.into_iter().map(UiError::from).collect(), no_files }
+}
+
 /// Ключ задания для установки копии: отрицательное число от пути, по модулю не больше 2^53 − 1.
 /// Свои ключи у копий: с trackId (они положительные) не пересекаются, одинаковы для одного файла.
 pub fn copy_job_id(path: &std::path::Path) -> i64 {
@@ -1007,6 +1022,28 @@ impl<F: Fn(Option<String>)> Drop for HintScope<'_, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drop_dto_masks_purchaser_and_maps_errors() {
+        let copy = crate::library::CopyInfo {
+            path: "/lib/a.ipa".into(),
+            track_id: Some(5),
+            bundle_id: "com.example.a".into(),
+            name: "А".into(),
+            version: "1.0".into(),
+            device_family: vec![1],
+            purchaser: Some("person@example.com".into()),
+            account_folder: None,
+        };
+        let out = crate::dropped::Outcome { copies: vec![copy], ids: vec![492224193], errors: vec![AppError::NotIpa] };
+        let dto = drop_dto(out, false);
+        assert_eq!(dto.copies[0].path, "/lib/a.ipa");
+        assert!(!serde_json::to_string(&dto).unwrap().contains("person@example.com"));
+        assert_eq!(dto.ids, vec![492224193]);
+        assert_eq!(dto.errors[0].code, "not_ipa");
+        assert!(!dto.no_files);
+        assert!(drop_dto(crate::dropped::Outcome::default(), true).no_files);
+    }
 
     /// Вышли, а снимок убрать не вышло: убранные задания и выход не теряются вместе с ошибкой.
     #[test]

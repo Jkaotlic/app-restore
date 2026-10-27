@@ -33,9 +33,102 @@ pub fn parse_app_link(s: &str) -> Option<i64> {
     digits.parse().ok().filter(|&id| id > 0)
 }
 
+/// Сколько номеров берётся из одного перетаскивания или вставки: список не растёт без конца.
+pub const MAX_TEXT_IDS: usize = 100;
+
+/// Номера приложений из перетащенного или вставленного текста, по порядку и без повторов.
+/// Берутся только ссылки `apps.apple.com/…/idN` и строки «Имя: N» (N — от 6 цифр, как в
+/// `AppsList.txt`); голые числа и прочие адреса — нет.
+pub fn ids_in_text(text: &str) -> Vec<i64> {
+    let mut out = vec![];
+    let mut seen = std::collections::HashSet::new();
+    for line in text.lines() {
+        let found = line
+            .split(|c: char| c.is_whitespace() || "\"'<>()[]{}«»,;=".contains(c))
+            .filter_map(store_link_id)
+            .chain(name_line_id(line));
+        for id in found {
+            if out.len() == MAX_TEXT_IDS {
+                return out;
+            }
+            if seen.insert(id) {
+                out.push(id);
+            }
+        }
+    }
+    out
+}
+
+/// Номер из ссылки `apps.apple.com` (другие адреса, в том числе itunes.apple.com, — нет).
+fn store_link_id(token: &str) -> Option<i64> {
+    let token = token.trim_end_matches(['.', '!', '?', ':']);
+    let lower = token.to_ascii_lowercase();
+    let rest = SCHEMES.iter().find_map(|p| lower.strip_prefix(p)).unwrap_or(&lower);
+    if !rest.starts_with("apps.apple.com/") {
+        return None;
+    }
+    parse_app_link(token)
+}
+
+/// «Имя: N» — строка списка вида `AppsList.txt`: имя не пустое, N — только цифры, от 6.
+fn name_line_id(line: &str) -> Option<i64> {
+    let (name, num) = line.trim().rsplit_once(':')?;
+    let num = num.trim();
+    if name.trim().is_empty() || num.len() < 6 || !num.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    num.parse().ok().filter(|&id| id > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_links_and_name_lines() {
+        let text = "Сбер: https://apps.apple.com/ru/app/sberbank/id492224193?mt=8\n\
+                    «https://apps.apple.com/app/id1631810724».\n\
+                    ВКонтакте: 564177498\n\
+                    Тинькофф : 1234567 \n\
+                    (apps.apple.com/us/app/x/id987654321)\r\n\
+                    URL=https://apps.apple.com/ru/app/vk/id111111111?mt=8";
+        assert_eq!(ids_in_text(text), vec![492224193, 1631810724, 564177498, 1234567, 987654321, 111111111]);
+    }
+
+    #[test]
+    fn text_without_repeats_in_order() {
+        let text = "https://apps.apple.com/ru/app/a/id222222222 https://apps.apple.com/ru/app/b/id111111111\nA: 222222222";
+        assert_eq!(ids_in_text(text), vec![222222222, 111111111]);
+    }
+
+    #[test]
+    fn text_ignores_everything_else() {
+        let bad = [
+            "",
+            "492224193",
+            "просто текст 492224193",
+            "Имя: 12345",
+            ": 492224193",
+            "Имя: 4922241930000000000000",
+            "Имя: 492224193 и ещё",
+            "https://example.com/ru/app/x/id492224193",
+            "https://apps.apple.com.evil.example/ru/app/x/id492224193",
+            "https://apps.apple.com/ru/developer/x/id492224193",
+            "https://itunes.apple.com/app/id492224193",
+            "Имя: 000000",
+        ];
+        for t in bad {
+            assert_eq!(ids_in_text(t), Vec::<i64>::new(), "{t}");
+        }
+    }
+
+    #[test]
+    fn text_ids_are_capped() {
+        let text: String = (0..250).map(|i| format!("A{i}: {}\n", 1_000_000 + i)).collect();
+        let ids = ids_in_text(&text);
+        assert_eq!(ids.len(), MAX_TEXT_IDS);
+        assert_eq!(ids[0], 1_000_000);
+    }
 
     #[test]
     fn valid_forms() {
