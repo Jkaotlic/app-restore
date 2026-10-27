@@ -113,8 +113,11 @@ register("accounts", () => {
       dropped = await call<number[]>("forget_account", { email: a.email });
     } catch (e) {
       // не забыли (или забыли наполовину: вышли, а снимок остался) — вход сверяем с ipatool
-      msg.textContent = errorText(asUiError(e));
+      const err = asUiError(e);
+      msg.textContent = errorText(err);
       msg.hidden = false;
+      // занято (идёт скачивание) — ничего не меняли; сверка встала бы в очередь за скачиванием
+      if (err.code === "busy") return;
       const before = state.account?.email ?? null;
       try {
         state.account = await call<Account | null>("session_info");
