@@ -13,6 +13,9 @@ use tokio::sync::{broadcast, mpsc};
 
 pub const MIN_FREE_MB: u64 = 500;
 pub const POLL: Duration = Duration::from_millis(500);
+/// Скачивание без роста файла столько — зависло: ipatool останавливается, задание `Timeout`
+/// («Повторить» скачает заново), очередь идёт дальше.
+pub const DOWNLOAD_IDLE: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JobState {
@@ -113,6 +116,7 @@ async fn run_job(
     session: &Session,
     library: &Library,
     space: &dyn SpaceProbe,
+    idle: Duration,
     emit: &(dyn Fn(JobState) + Send + Sync),
 ) -> Result<PathBuf, AppError> {
     let _ = std::fs::create_dir_all(library.base());
@@ -132,10 +136,21 @@ async fn run_job(
         tokio::pin!(download);
         let mut tick = tokio::time::interval(POLL);
         tick.tick().await; // первый тик срабатывает сразу
+        let (mut last, mut grew) = (0u64, tokio::time::Instant::now());
         loop {
             tokio::select! {
                 r = &mut download => break r,
-                _ = tick.tick() => emit(JobState::Downloading { bytes: dir_size(&partial) }),
+                _ = tick.tick() => {
+                    let bytes = dir_size(&partial);
+                    if bytes != last {
+                        (last, grew) = (bytes, tokio::time::Instant::now());
+                    } else if grew.elapsed() >= idle {
+                        // `download` бросается ниже: ipatool убивается, замок ipatool свободен
+                        crate::log::write(&format!("job {id}"), &format!("download stalled at {bytes} bytes for {} s, stopped", idle.as_secs()));
+                        break Err(AppError::Timeout);
+                    }
+                    emit(JobState::Downloading { bytes });
+                }
             }
         }
     };
@@ -144,19 +159,23 @@ async fn run_job(
     saved
 }
 
-/// Один job целиком: скачивание (если нужно), затем установка (если задан телефон).
-async fn process(
-    job: Job,
+/// Всё, чем рабочий поток делает задания.
+#[derive(Clone)]
+struct Worker {
     session: Arc<Session>,
     library: Arc<Library>,
     space: Arc<dyn SpaceProbe>,
     hub: Arc<dyn DeviceHub>,
     tgt: Arc<Mutex<Option<String>>>,
-    emit: Arc<dyn Fn(JobState) + Send + Sync>,
-) {
+    idle: Duration,
+}
+
+/// Один job целиком: скачивание (если нужно), затем установка (если задан телефон).
+async fn process(job: Job, w: Worker, emit: Arc<dyn Fn(JobState) + Send + Sync>) {
+    let Worker { session, library, space, hub, tgt, idle } = w;
     // explicit: установку попросили прямо (`install_saved`) — без телефона это ошибка.
     let (saved, explicit) = match job {
-        Job::Download(id) => match run_job(id, &session, &library, space.as_ref(), emit.as_ref()).await {
+        Job::Download(id) => match run_job(id, &session, &library, space.as_ref(), idle, emit.as_ref()).await {
             Ok(path) => {
                 emit(JobState::Saved { path: path.clone() });
                 (Some((path, None)), false)
@@ -185,12 +204,24 @@ impl Queue {
         space: Arc<dyn SpaceProbe>,
         hub: Arc<dyn DeviceHub>,
     ) -> Self {
+        Self::with_idle(session, library, space, hub, DOWNLOAD_IDLE)
+    }
+
+    /// `new` с другим сроком простоя скачивания (`DOWNLOAD_IDLE`).
+    pub fn with_idle(
+        session: Arc<Session>,
+        library: Arc<Library>,
+        space: Arc<dyn SpaceProbe>,
+        hub: Arc<dyn DeviceHub>,
+        idle: Duration,
+    ) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<(u64, Job)>();
         let pending: Arc<Mutex<Pending>> = Arc::default();
         let current = pending.clone();
         let (events, _) = broadcast::channel(4096);
         let target: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-        let (ev, tgt) = (events.clone(), target.clone());
+        let ev = events.clone();
+        let worker = Worker { session, library, space, hub, tgt: target.clone(), idle };
         tokio::spawn(async move {
             while let Some((seq, job)) = rx.recv().await {
                 let id = match &job {
@@ -210,15 +241,7 @@ impl Queue {
                     let _ = ev2.send((id, s));
                 });
                 // Работа в отдельной задаче: паника не должна убить очередь.
-                let work = tokio::spawn(process(
-                    job,
-                    session.clone(),
-                    library.clone(),
-                    space.clone(),
-                    hub.clone(),
-                    tgt.clone(),
-                    emit.clone(),
-                ));
+                let work = tokio::spawn(process(job, worker.clone(), emit.clone()));
                 if work.await.is_err() {
                     emit(JobState::Failed { error: AppError::Unknown { detail: "internal error".into() }, saved: None });
                 }
@@ -443,6 +466,44 @@ mod tests {
                 stderr: String::new(),
             }
         }
+    }
+
+    /// Пишет немного и замолкает навсегда; `dropped` — его бросили (процесс убит).
+    struct StallRunner {
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+    struct OnDrop(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    #[async_trait]
+    impl IpaRunner for StallRunner {
+        async fn run(&self, args: &[String]) -> RunResult {
+            let _g = OnDrop(self.dropped.clone());
+            let o = args.iter().position(|a| a == "-o").unwrap() + 1;
+            std::fs::write(Path::new(&args[o]).join("part.tmp"), vec![0u8; 10]).unwrap();
+            std::future::pending::<()>().await;
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn stalled_download_fails_with_timeout_and_frees_the_queue() {
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let t = tempfile::tempdir().unwrap();
+        let lib = Arc::new(Library::new(t.path().join("lib")));
+        lib.set_account(Some("me@example.com")).unwrap();
+        let session = Arc::new(Session::new(Arc::new(StallRunner { dropped: dropped.clone() }), vec![]));
+        let hub = Arc::new(FakeHub::new(Behavior::Ok));
+        let q = Queue::with_idle(session, lib.clone(), Arc::new(Space(10 * GB)), hub, Duration::from_millis(1200));
+        let mut rx = q.subscribe();
+        q.enqueue(vec![(111, "A".into())]);
+        let ev = collect(&mut rx, 1).await;
+        assert_eq!(of(&ev, 111).last().unwrap(), &&JobState::Failed { error: AppError::Timeout, saved: None });
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst), "ipatool остановлен");
+        assert!(!lib.root().unwrap().join(".partial/111").exists());
     }
 
     #[tokio::test]

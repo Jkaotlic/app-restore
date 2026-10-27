@@ -57,22 +57,53 @@ impl<R: tauri::Runtime> SidecarRunner<R> {
     }
 }
 
+/// Процесс ipatool, который убивается, если его ожидание бросили (срок в `Session` истёк).
+struct KillOnDrop(Option<tauri_plugin_shell::process::CommandChild>);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.take() {
+            let _ = child.kill();
+        }
+    }
+}
+
 #[async_trait]
 impl<R: tauri::Runtime> IpaRunner for SidecarRunner<R> {
     async fn run(&self, args: &[String]) -> RunResult {
         use tauri_plugin_shell::ShellExt;
+        use tauri_plugin_shell::process::CommandEvent;
         let fail = |what: String| RunResult { stdout: String::new(), exit_code: -1, stderr: what };
         let cmd = match self.app.shell().sidecar("ipatool") {
             Ok(c) => c,
             Err(e) => return fail(format!("не удалось подготовить ipatool: {e}")),
         };
-        match cmd.args(args).output().await {
-            Ok(out) => RunResult {
-                stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
-                exit_code: out.status.code().unwrap_or(-1),
-                stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
-            },
-            Err(e) => fail(format!("не удалось запустить ipatool: {e}")),
+        // Как `Command::output`, но процесс в `KillOnDrop`: брошенный вызов не оставляет ipatool жить.
+        let (mut rx, child) = match cmd.args(args).spawn() {
+            Ok(x) => x,
+            Err(e) => return fail(format!("не удалось запустить ipatool: {e}")),
+        };
+        let mut guard = KillOnDrop(Some(child));
+        let (mut stdout, mut stderr, mut code) = (Vec::new(), Vec::new(), None);
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Terminated(t) => code = t.code,
+                CommandEvent::Stdout(line) => {
+                    stdout.extend(line);
+                    stdout.push(b'\n');
+                }
+                CommandEvent::Stderr(line) => {
+                    stderr.extend(line);
+                    stderr.push(b'\n');
+                }
+                _ => {}
+            }
+        }
+        guard.0 = None; // завершился сам
+        RunResult {
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            exit_code: code.unwrap_or(-1),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
         }
     }
 }

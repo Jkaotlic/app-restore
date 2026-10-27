@@ -41,6 +41,9 @@ fn code(e: &AppError) -> &'static str {
         AppError::NotIpa => "not_ipa",
         AppError::SaveSessionFailed => "save_session_failed",
         AppError::DownloadsRunning => "downloads_running",
+        AppError::Busy => "busy",
+        AppError::Timeout => "timeout",
+        AppError::KeychainWaiting => "keychain_waiting",
         AppError::Unknown { .. } => "unknown",
     }
 }
@@ -362,6 +365,9 @@ pub fn retry_action(last: Option<&JobState>) -> RetryAction {
     }
 }
 
+/// Итог `plan_start`: (что скачать — trackId и имя, что поставить готовым — trackId и файл).
+pub type StartPlan = (Vec<(i64, String)>, Vec<(i64, PathBuf)>);
+
 /// Что делать по «Вернуть». Записи каталога с копией в «Мои приложения» ставятся без скачивания:
 /// Apple всё равно держит только последнюю версию до удаления. Покупки и ссылки скачиваются
 /// всегда (свежая версия); копия для них — запасной путь, см. `fallback_copy`.
@@ -372,7 +378,7 @@ pub fn plan_start(
     catalog_ids: &HashSet<i64>,
     saved: &[SavedIpa],
     unknown: &[SavedIpa],
-) -> (Vec<(i64, String)>, Vec<(i64, PathBuf)>) {
+) -> StartPlan {
     let mut download = vec![];
     let mut install = vec![];
     for (id, name) in items {
@@ -727,6 +733,9 @@ mod tests {
             AppError::DeviceRejected { reason: "r".into() },
             AppError::NoDiskSpace { need_mb: 1 },
             AppError::BadLink,
+            AppError::Busy,
+            AppError::Timeout,
+            AppError::KeychainWaiting,
             AppError::Unknown { detail: String::new() },
         ];
         let mut codes: Vec<String> = all.into_iter().map(|e| UiError::from(e).code).collect();
@@ -1293,7 +1302,7 @@ mod tests {
         assert_eq!(switch_guard(Some("me@example.com"), " ME@example.com", &jobs, &downloads), Ok(()), "тот же аккаунт");
         downloads.clear();
         assert_eq!(switch_guard(Some("me@example.com"), "other@example.com", &jobs, &downloads), Ok(()), "установки не мешают");
-        assert_eq!(UiError::from(AppError::DownloadsRunning).text, "Дождитесь окончания скачивания или отмените его");
+        assert_eq!(UiError::from(AppError::DownloadsRunning).text, "Дождитесь окончания скачивания");
         assert_eq!(UiError::from(AppError::DownloadsRunning).code, "downloads_running");
     }
 

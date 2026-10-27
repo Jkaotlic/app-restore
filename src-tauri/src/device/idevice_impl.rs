@@ -1,6 +1,6 @@
 //! Тонкий адаптер к USB: usbmuxd -> lockdown -> AFC (`PublicStaging`) -> installation_proxy.
 //! Логики здесь нет, всё проверяемое лежит в `device/mod.rs`. Проверено вживую (iOS 27.0.1).
-use super::{
+use super::{CONNECT_LIMIT, BROWSE_LIMIT, INSTALL_LIMIT, deadline, 
     DeviceHub, InstalledApp, PhoneInfo, installed_from_browse, install_percent, map_install_error, merge_probes, open_local, staging_path, upload_percent,
 };
 use crate::errors::AppError;
@@ -66,11 +66,12 @@ async fn probe(dev: UsbmuxdDevice) -> Result<PhoneInfo, AppError> {
 #[async_trait]
 impl DeviceHub for IdeviceHub {
     async fn list(&self) -> Result<Vec<PhoneInfo>, AppError> {
-        let mut mux = connect_mux().await?;
-        let devices = mux.get_devices().await.map_err(app_err)?;
+        let mut mux = deadline(CONNECT_LIMIT, "usbmuxd", connect_mux()).await?;
+        let devices = deadline(CONNECT_LIMIT, "devices", async { mux.get_devices().await.map_err(app_err) }).await?;
         let mut probes = vec![];
         for dev in devices.into_iter().filter(is_usb) {
-            probes.push(probe(dev).await);
+            // зависший телефон — сбой только его пробы, остальные в списке
+            probes.push(deadline(CONNECT_LIMIT, "lockdown", probe(dev)).await);
         }
         merge_probes(probes)
     }
@@ -78,18 +79,27 @@ impl DeviceHub for IdeviceHub {
     async fn install(&self, udid: &str, ipa: &Path, progress: Sender<u8>) -> Result<(), AppError> {
         // Локальный диск проверяем до обращения к телефону.
         let (file, total) = open_local(ipa).await?;
-        let mut mux = connect_mux().await?;
-        let dev = mux.get_device(udid).await.map_err(app_err)?;
+        let mut mux = deadline(CONNECT_LIMIT, "usbmuxd", connect_mux()).await?;
+        let dev = deadline(CONNECT_LIMIT, "device", async { mux.get_device(udid).await.map_err(app_err) }).await?;
         let provider = dev.to_provider(UsbmuxdAddr::default(), LABEL);
         let remote = staging_path(ipa);
-        let mut afc = AfcClient::connect(&provider).await.map_err(app_err)?;
-        let result = push_and_install(&mut afc, &provider, file, total, &remote, &progress).await;
+        let mut afc = deadline(CONNECT_LIMIT, "afc", async { AfcClient::connect(&provider).await.map_err(app_err) }).await?;
+        let result = deadline(INSTALL_LIMIT, "install", async {
+            push_and_install(&mut afc, &provider, file, total, &remote, &progress).await.map_err(app_err)
+        })
+        .await;
         // Лучшее, что можно сделать: убрать за собой; ошибки уборки не важны.
-        let _ = afc.remove(remote).await;
-        result.map_err(app_err)
+        let _ = tokio::time::timeout(CONNECT_LIMIT, afc.remove(remote)).await;
+        result
     }
 
     async fn installed(&self, udid: &str) -> Result<Vec<InstalledApp>, AppError> {
+        deadline(BROWSE_LIMIT, "browse", self.browse(udid)).await
+    }
+}
+
+impl IdeviceHub {
+    async fn browse(&self, udid: &str) -> Result<Vec<InstalledApp>, AppError> {
         let mut mux = connect_mux().await?;
         let dev = mux.get_device(udid).await.map_err(app_err)?;
         let provider = dev.to_provider(UsbmuxdAddr::default(), LABEL);

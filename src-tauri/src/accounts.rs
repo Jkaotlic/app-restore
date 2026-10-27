@@ -11,10 +11,12 @@
 //! `<apple id>#<g>.1…N` — сами куски. Новый снимок пишется новым поколением, старый убирается
 //! только после заголовка: оборванная запись не портит прежний снимок.
 //! На Mac кусок один.
+use crate::errors::AppError;
 use crate::ipatool::session::{Account, Session};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Сервис наших снимков в Keychain / Credential Manager.
@@ -420,15 +422,29 @@ impl Sessions {
         }
     }
 
-    /// Снимок нынешнего входа ipatool под адресом `email`. Записи `account` нет — ошибка.
-    pub fn save(&self, email: &str) -> Result<(), String> {
+    /// Снимок нынешнего входа ipatool под адресом `email`. Записи `account` у ipatool нет —
+    /// сохранять нечего: `NothingToSave`, адрес в списке «нужен вход».
+    #[cfg(test)]
+    pub fn save(&self, email: &str) -> Result<Saved, String> {
+        self.save_unless(email, &AtomicBool::new(false))
+    }
+
+    /// Как `save`, но после чтения (оно может ждать окно разрешения macOS) смотрит `cancel`:
+    /// отменили — ничего не пишет. Иначе поздний ответ записал бы под `email` уже чужой вход.
+    pub fn save_unless(&self, email: &str, cancel: &AtomicBool) -> Result<Saved, String> {
         let raw = self.capture()?;
-        let account = raw.account.ok_or("ipatool has no account")?;
+        if cancel.load(Ordering::SeqCst) {
+            return Err("cancelled: keychain answered too late".into());
+        }
+        let Some(account) = raw.account else {
+            self.mark_unsaved(email);
+            return Ok(Saved::NothingToSave);
+        };
         let snap = Snapshot { v: 1, account: STANDARD.encode(account), cookies: raw.cookies.map(|c| STANDARD.encode(c)) };
         let blob = serde_json::to_vec(&snap).map_err(|e| e.to_string())?;
         self.put_blob(&key(email), &blob)?;
         self.set_saved(email, true);
-        Ok(())
+        Ok(Saved::Yes)
     }
 
     /// Снимок `email` (без записи куда-либо). `Ok(None)` — снимка нет.
@@ -475,6 +491,14 @@ impl Sessions {
     }
 }
 
+/// Итог `Sessions::save`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Saved {
+    Yes,
+    /// У ipatool нет входа: снимать нечего.
+    NothingToSave,
+}
+
 /// Итог выбора аккаунта: вошли снимком или нужен вход с подставленным адресом.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseOutcome {
@@ -488,20 +512,40 @@ pub struct UseOutcome {
 }
 
 /// Работа с хранилищами под замком ipatool: ни один его запуск не читает вход, пока его меняем.
-async fn quiet<T: Send + 'static>(session: &Session, f: impl FnOnce() -> T + Send + 'static) -> T {
+/// Связка ключей не ответила в срок — `Err(KeychainWaiting)` (`Session::exclusive`).
+async fn quiet<T: Send + 'static>(session: &Session, f: impl FnOnce() -> T + Send + 'static) -> Result<T, AppError> {
     session.exclusive(f).await
 }
 
-/// Снимок нынешнего входа под `email` (до того, как ipatool его перезапишет). Ошибки — в лог;
-/// `false` — снимок не сохранился.
-pub async fn save_current(session: &Session, sessions: &Arc<Sessions>, email: &str) -> bool {
+/// Снимок нынешнего входа под `email` (до того, как ipatool его перезапишет). Ошибки — в лог.
+/// `SaveSessionFailed` — хранилище отказало (например, «Запретить» в окне macOS);
+/// `KeychainWaiting` — окно разрешения ждёт ответа, снимок отменён; `Busy` — очередь к ipatool.
+pub async fn save_current(session: &Session, sessions: &Arc<Sessions>, email: &str) -> Result<(), AppError> {
     let (s, e) = (sessions.clone(), email.to_string());
-    match quiet(session, move || s.save(&e)).await {
-        Ok(()) => true,
-        Err(err) => {
-            crate::log::write("save session", &err.to_string());
-            false
+    match session.exclusive_cancelable(move |cancel| s.save_unless(&e, cancel)).await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(err)) => {
+            crate::log::write("save session", &err);
+            Err(AppError::SaveSessionFailed)
         }
+        Err(e) => Err(e),
+    }
+}
+
+/// Перед входом: прежний вход ipatool (`current`) — снимком, чтобы вернуться без пароля.
+/// В другой Apple ID без снимка нельзя: ipatool его затрёт — ошибка, интерфейс предложит
+/// «Войти без сохранения» (`skip_save`): прежний адрес остаётся в списке «нужен вход».
+/// В тот же Apple ID сбой снимка не мешает.
+pub async fn prepare_login(session: &Session, sessions: &Arc<Sessions>, current: Option<&str>, target: &str, skip_save: bool) -> Result<(), AppError> {
+    let Some(cur) = current else { return Ok(()) };
+    if skip_save {
+        crate::log::write("login", &format!("previous session of {} not saved (user chose to go on)", crate::device::mask_email(cur)));
+        sessions.mark_unsaved(cur);
+        return Ok(());
+    }
+    match save_current(session, sessions, cur).await {
+        Err(e) if !same_id(cur, target) => Err(e),
+        _ => Ok(()),
     }
 }
 
@@ -522,7 +566,14 @@ fn stale(e: &crate::errors::AppError) -> bool {
 /// Любой сбой записи, чужой адрес или мёртвый вход — откат к запомненному (`kept: true`); откат
 /// не удался — вход ipatool убирается совсем (`kept: false`). Чужой адрес — снимок удаляется,
 /// мёртвый вход — «нужен вход». Сеть недоступна на шаге 3 — вход оставляем.
+#[cfg(test)]
 pub async fn switch_to(session: &Session, sessions: &Arc<Sessions>, current: Option<&str>, email: &str) -> UseOutcome {
+    switch_to_with(session, sessions, current, email, false).await
+}
+
+/// `switch_to`; `skip_save` — прежний вход не сохранять («Перейти без сохранения»), он в списке
+/// «нужен вход». Связка ключей ждёт окна разрешения — `KeychainWaiting` в `error`.
+pub async fn switch_to_with(session: &Session, sessions: &Arc<Sessions>, current: Option<&str>, email: &str, skip_save: bool) -> UseOutcome {
     let kept = |error| UseOutcome { restored: false, account: None, kept: true, error };
     if let Some(cur) = current {
         if same_id(cur, email) {
@@ -531,43 +582,47 @@ pub async fn switch_to(session: &Session, sessions: &Arc<Sessions>, current: Opt
             {
                 return UseOutcome { restored: true, account: Some(acc), kept: false, error: None };
             }
-        } else {
-            let (s, c) = (sessions.clone(), cur.to_string());
-            if let Err(err) = quiet(session, move || s.save(&c)).await {
-                crate::log::write("save session", &err.to_string());
-                return kept(Some(crate::errors::AppError::SaveSessionFailed));
-            }
+        } else if let Err(e) = prepare_login(session, sessions, Some(cur), email, skip_save).await {
+            return kept(Some(e));
         }
     }
     let (s, e) = (sessions.clone(), email.to_string());
     let snap = match quiet(session, move || s.snapshot_of(&e)).await {
-        Ok(Some(raw)) => raw,
-        Ok(None) => return kept(None),
-        Err(err) => {
-            crate::log::write("restore session", &err.to_string());
+        Ok(Ok(Some(raw))) => raw,
+        Ok(Ok(None)) => return kept(None),
+        Ok(Err(err)) => {
+            crate::log::write("restore session", &err);
             sessions.drop_snapshot(email);
             return kept(None);
         }
+        // ждём окно разрешения: снимок не трогаем, он, скорее всего, цел
+        Err(e) => return kept(Some(e)),
     };
     let s = sessions.clone();
     let before = match quiet(session, move || s.capture()).await {
-        Ok(raw) => raw,
-        Err(err) => {
-            crate::log::write("restore session", &err.to_string());
+        Ok(Ok(raw)) => raw,
+        Ok(Err(err)) => {
+            crate::log::write("restore session", &err);
             return kept(None);
         }
+        Err(e) => return kept(Some(e)),
     };
     let rollback = |before: Raw| {
         let s = sessions.clone();
         async move {
-            let ok = quiet(session, move || s.rollback(&before)).await;
+            let ok = quiet(session, move || s.rollback(&before)).await.unwrap_or(false);
             UseOutcome { restored: false, account: None, kept: ok, error: None }
         }
     };
     let s = sessions.clone();
-    if let Err(err) = quiet(session, move || s.apply(&snap)).await {
-        crate::log::write("restore session", &err.to_string());
-        return rollback(before).await;
+    match quiet(session, move || s.apply(&snap)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            crate::log::write("restore session", &err);
+            return rollback(before).await;
+        }
+        // запись ещё ждёт окна и доделается сама: каким будет вход, заранее не знаем
+        Err(e) => return UseOutcome { restored: false, account: None, kept: false, error: Some(e) },
     }
     let acc = match session.info().await {
         Ok(Some(acc)) if same_id(&acc.email, email) => acc,
@@ -646,6 +701,8 @@ pub(crate) mod fake {
         pub cookies: Mutex<Option<Vec<u8>>>,
         pub fail_account: AtomicU32,
         pub fail_cookies: AtomicU32,
+        /// Чтение записи висит столько (окно разрешения macOS, которого никто не видит).
+        pub read_hang: Mutex<Option<std::time::Duration>>,
     }
     fn take(n: &AtomicU32) -> bool {
         n.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_sub(1)).is_ok()
@@ -657,6 +714,10 @@ pub(crate) mod fake {
     }
     impl IpatoolAuth for MemAuth {
         fn read_account(&self) -> Result<Option<Vec<u8>>, String> {
+            let hang = *self.read_hang.lock().unwrap();
+            if let Some(d) = hang {
+                std::thread::sleep(d);
+            }
             Ok(self.account.lock().unwrap().clone())
         }
         fn write_account(&self, data: &[u8]) -> Result<(), String> {
@@ -772,11 +833,20 @@ mod tests {
     }
 
     #[test]
-    fn save_without_ipatool_account_is_error() {
+    fn save_without_ipatool_account_is_nothing_to_save() {
         let e = env(None, CHUNK_MAC);
-        assert!(e.s.save(ME).is_err());
+        e.s.remember(ME);
+        assert_eq!(e.s.save(ME), Ok(Saved::NothingToSave));
         assert!(e.store.items.lock().unwrap().is_empty());
-        assert!(e.s.known().is_empty());
+        assert_eq!(e.s.known(), vec![(ME.to_string(), false)], "честно: для него нужен вход");
+    }
+
+    #[test]
+    fn cancelled_save_writes_nothing() {
+        let e = env(None, CHUNK_MAC);
+        e.ipatool_as(b"token-me", None);
+        assert!(e.s.save_unless(ME, &AtomicBool::new(true)).is_err());
+        assert!(e.store.items.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -1031,6 +1101,68 @@ mod tests {
         let out = switch_to(&session(&r), &e.s, Some(ME), OTHER).await;
         assert!(out.restored);
         assert_eq!(e.auth.state(), raw(b"token-other", Some(b"c-other")));
+    }
+
+    fn fast_limits() -> crate::ipatool::session::Limits {
+        let ms = std::time::Duration::from_millis;
+        crate::ipatool::session::Limits {
+            keychain_run: ms(100),
+            keychain_wait: ms(100),
+            login_wait: ms(100),
+            ..crate::ipatool::session::LIMITS
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_login_saves_or_skips_honestly() {
+        let r = Arc::new(FakeRunner::new(vec![]));
+        let e = env(None, CHUNK_MAC);
+        e.ipatool_as(b"token-me", None);
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false).await, Ok(()));
+        assert!(e.has_blob(ME));
+        // сохранить не вышло: в другой Apple ID — отказ, в тот же — можно
+        let e = env(None, CHUNK_MAC);
+        e.ipatool_as(b"token-me", None);
+        e.store.fail_sets.store(true, Ordering::SeqCst);
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false).await, Err(AppError::SaveSessionFailed));
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), "ME@example.com", false).await, Ok(()));
+        // «Войти без сохранения»: ничего не пишем, прежний — «нужен вход»
+        e.s.remember(ME);
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, true).await, Ok(()));
+        assert_eq!(e.s.known(), vec![(ME.to_string(), false)]);
+        // у ipatool нет входа: сохранять нечего, не тупик
+        let e = env(None, CHUNK_MAC);
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false).await, Ok(()));
+        assert!(r.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn hidden_keychain_dialog_is_reported_and_skippable() {
+        let r = Arc::new(FakeRunner::new(vec![info(OTHER)]));
+        let s = session(&r).with_limits(fast_limits());
+        let e = env(None, CHUNK_MAC);
+        e.ipatool_as(b"token-me", None);
+        *e.auth.read_hang.lock().unwrap() = Some(std::time::Duration::from_millis(400));
+        let t = std::time::Instant::now();
+        assert_eq!(prepare_login(&s, &e.s, Some(ME), OTHER, false).await, Err(AppError::KeychainWaiting));
+        assert!(t.elapsed() < std::time::Duration::from_millis(350), "не ждём окно бесконечно");
+        // замок отпущен сразу: ipatool идёт, а поздний ответ связки ключей ничего не запишет
+        assert!(s.info().await.unwrap().is_some());
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(!e.has_blob(ME), "отменённый снимок не записан");
+        assert_eq!(prepare_login(&s, &e.s, Some(ME), OTHER, true).await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn switch_without_saving_marks_previous_and_goes_on() {
+        let e = env(None, CHUNK_MAC);
+        e.me_now_other_saved();
+        e.store.fail_sets.store(true, Ordering::SeqCst);
+        e.s.remember(ME);
+        let r = Arc::new(FakeRunner::new(vec![info(OTHER), token_ok()]));
+        let out = switch_to_with(&session(&r), &e.s, Some(ME), OTHER, true).await;
+        assert!(out.restored && out.error.is_none());
+        assert!(e.s.known().contains(&(ME.to_string(), false)));
     }
 
     #[tokio::test]

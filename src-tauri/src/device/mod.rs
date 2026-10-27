@@ -196,6 +196,24 @@ pub async fn open_local(ipa: &Path) -> Result<(tokio::fs::File, u64), AppError> 
     Ok((f, len))
 }
 
+/// Телефон не ответил в срок (USB, usbmuxd, lockdown): понятный отказ вместо вечного ожидания.
+pub const NO_ANSWER: &str = "iPhone не ответил вовремя. Отключите кабель, подключите снова и попробуйте ещё раз";
+pub const CONNECT_LIMIT: std::time::Duration = std::time::Duration::from_secs(30);
+pub const BROWSE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+/// Загрузка и установка целиком: большой ipa по USB 2 идёт минуты, не десятки минут.
+pub const INSTALL_LIMIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
+/// `f` не дольше `limit`; дольше — `DeviceRejected(NO_ANSWER)`, шаг (`what`) — в журнал.
+pub async fn deadline<T>(limit: std::time::Duration, what: &str, f: impl std::future::Future<Output = Result<T, AppError>>) -> Result<T, AppError> {
+    match tokio::time::timeout(limit, f).await {
+        Ok(r) => r,
+        Err(_) => {
+            crate::log::write("device", &format!("{what}: no answer in {} s", limit.as_secs()));
+            Err(AppError::DeviceRejected { reason: NO_ANSWER.into() })
+        }
+    }
+}
+
 #[async_trait]
 pub trait DeviceHub: Send + Sync {
     /// Все подключённые по USB устройства (iPhone и iPad); пустой список, если никого нет.
@@ -451,6 +469,15 @@ mod tests {
         let locked = Err(AppError::DeviceLocked);
         assert_eq!(merge_probes(vec![locked.clone(), nt()]), Err(AppError::DeviceNotTrusted));
         assert_eq!(merge_probes(vec![locked]), Err(AppError::DeviceLocked));
+    }
+
+    #[tokio::test]
+    async fn deadline_turns_silence_into_clear_error() {
+        let ms = std::time::Duration::from_millis;
+        assert_eq!(deadline(ms(50), "t", async { Ok::<_, AppError>(1) }).await, Ok(1));
+        let hung = deadline(ms(50), "t", std::future::pending::<Result<(), AppError>>()).await;
+        assert_eq!(hung, Err(AppError::DeviceRejected { reason: NO_ANSWER.into() }));
+        assert_eq!(deadline(ms(50), "t", async { Err::<(), _>(AppError::DeviceLocked) }).await, Err(AppError::DeviceLocked));
     }
 
     #[tokio::test]

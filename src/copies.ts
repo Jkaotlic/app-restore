@@ -121,5 +121,16 @@ export function pickStatusText(slow: boolean): string {
 
 /** Отказ сменить вход (идёт скачивание, не сохранился нынешний вход): человек остаётся на месте. */
 export function staysOnRefusal(e: UiError): boolean {
-  return e.code === "downloads_running" || e.code === "save_session_failed";
+  return ["downloads_running", "save_session_failed", "keychain_waiting", "busy"].includes(e.code);
+}
+
+/** Снимок прежнего входа не сохранился (отказ или окно разрешения macOS): можно идти дальше без него. */
+export function offersSkipSave(e: UiError | null): boolean {
+  return !!e && (e.code === "save_session_failed" || e.code === "keychain_waiting");
+}
+
+/** Что значит «без сохранения» — честно: пароль не хранится, прежний вход потом заново. */
+export function skipSaveNote(previous: string | null): string {
+  const who = previous ?? "прежнего Apple ID";
+  return `Можно продолжить без сохранения: для ${who} потом снова понадобятся пароль и код. Пароли программа не хранит.`;
 }

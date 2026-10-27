@@ -361,27 +361,39 @@ async fn refresh(st: &AppState) {
 }
 
 // Пароль приходит только сюда и уходит в ipatool один раз. Аргументы команд нигде не логируются.
+// Шаги входа пишутся в журнал (адрес маской): следующее зависание будет видно, на каком шаге.
 #[tauri::command]
 pub async fn login(
     state: State<'_, AppState>,
     email: String,
     password: String,
     code: Option<String>,
+    skip_save: Option<bool>,
 ) -> Result<LoginDto, UiError> {
+    let email = email.trim().to_string();
+    let who = crate::device::mask_email(&email);
+    crate::log::write("login", &format!("{who}: start{}", if code.is_some() { " with code" } else { "" }));
     // Вход ipatool сейчас перезапишется: прежний аккаунт сохраняем снимком, чтобы вернуться без пароля.
     let before = state.current_email();
-    state.may_switch(email.trim()).map_err(|e| ui("login", e))?;
-    if let Some(cur) = &before {
-        let saved = save_current(&state.session, &state.sessions, cur).await;
-        // в другой Apple ID — только сохранив нынешний вход, иначе ipatool его затрёт
-        if !saved && !same_id(cur, email.trim()) {
-            return Err(ui("login", AppError::SaveSessionFailed));
-        }
+    state.may_switch(&email).map_err(|e| ui("login", e))?;
+    if before.is_some() {
+        crate::log::write("login", &format!("{who}: saving previous session"));
     }
+    crate::accounts::prepare_login(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false))
+        .await
+        .map_err(|e| ui("login", e))?;
+    crate::log::write("login", &format!("{who}: asking Apple"));
     // `password` уходит из памяти вместе с аргументами по выходу из функции (без затирания).
-    let acc = state.session.login(email.trim(), &password, normalize_code(code)).await.map_err(|e| ui("login", e))?;
+    let acc = state.session.login(&email, &password, normalize_code(code)).await.map_err(|e| ui("login", e))?;
+    crate::log::write("login", &format!("{who}: signed in"));
     state.sessions.remember(&acc.email);
-    save_current(&state.session, &state.sessions, &acc.email).await;
+    // Снимок нового входа — в фоне: окно разрешения macOS не держит экран на «Входим…».
+    let (session, sessions, saved_email) = (state.session.clone(), state.sessions.clone(), acc.email.clone());
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = save_current(&session, &sessions, &saved_email).await {
+            log_err("login: save new session", &e);
+        }
+    });
     // другой Apple ID: как при `use_account` — права, версии и ждущие задания прошлого не годятся
     let dropped = if account_changed(before.as_deref(), Some(&acc.email)) {
         state.clear_account_caches();
@@ -423,6 +435,10 @@ pub async fn session_info(state: State<'_, AppState>) -> Result<Option<Account>,
 
 #[tauri::command]
 pub async fn logout(state: State<'_, AppState>) -> Result<(), UiError> {
+    // выход посреди скачивания: следующие задания упали бы «Вы не вошли»
+    if downloads_running(&state.jobs.lock().unwrap(), &state.downloads.lock().unwrap()) {
+        return Err(ui("logout", AppError::DownloadsRunning));
+    }
     state.sign_out().await.map_err(|e| ui("logout", e))
 }
 
@@ -449,9 +465,12 @@ pub async fn switch_account(state: State<'_, AppState>) -> Result<SwitchDto, UiE
         login_prefill(m.as_ref().filter(|(u, _)| Some(u) == target.as_ref()).map(|(_, m)| m))
     };
     let gone = state.drop_waiting();
-    // Прежний вход остаётся в списке «Apple ID» снимком.
-    if let Some(cur) = state.current_email() {
-        save_current(&state.session, &state.sessions, &cur).await;
+    // Прежний вход остаётся в списке «Apple ID» снимком (не вышло — «нужен вход»).
+    if let Some(cur) = state.current_email()
+        && let Err(e) = save_current(&state.session, &state.sessions, &cur).await
+    {
+        log_err("switch_account: save session", &e);
+        state.sessions.mark_unsaved(&cur);
     }
     // Не вышло выйти — всё равно ведём на вход: новый вход заменит сессию.
     if let Err(e) = state.sign_out().await {
@@ -704,11 +723,12 @@ pub fn list_accounts(state: State<'_, AppState>) -> Vec<crate::accounts::Account
 
 /// Выбор аккаунта: снимок его сессии на место ipatool и проверка `auth info`. Не подошёл —
 /// `restored: false` и адрес для поля входа. Смена аккаунта убирает ждущие задания.
+/// `skip_save`: «Перейти без сохранения» — прежний вход не сохранять (он станет «нужен вход»).
 #[tauri::command]
-pub async fn use_account(state: State<'_, AppState>, email: String) -> Result<UseAccountDto, UiError> {
+pub async fn use_account(state: State<'_, AppState>, email: String, skip_save: Option<bool>) -> Result<UseAccountDto, UiError> {
     state.may_switch(&email).map_err(|e| ui("use_account", e))?;
     let before = state.current_email();
-    let out = crate::accounts::switch_to(&state.session, &state.sessions, before.as_deref(), &email).await;
+    let out = crate::accounts::switch_to_with(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false)).await;
     let error = out.error.clone().map(|e| ui("use_account", e));
     // Не вошли, но вход ipatool как был (`kept`) — программа остаётся в прежнем аккаунте.
     let now = if out.restored {
@@ -742,13 +762,18 @@ pub async fn use_account(state: State<'_, AppState>, email: String) -> Result<Us
 pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result<Vec<i64>, UiError> {
     let mut dropped = vec![];
     if state.current_email().as_deref().is_some_and(|c| same_id(c, &email)) {
+        if downloads_running(&state.jobs.lock().unwrap(), &state.downloads.lock().unwrap()) {
+            return Err(ui("forget_account", AppError::DownloadsRunning));
+        }
         // выйти не вышло — ничего не забываем: вход остался бы в ipatool
         state.sign_out().await.map_err(|e| ui("forget_account", e))?;
         dropped = state.drop_waiting();
     }
     let s = state.sessions.clone();
-    if let Err(e) = state.session.exclusive(move || s.forget(&email)).await {
-        crate::log::write("forget_account", &e.to_string());
+    match state.session.exclusive(move || s.forget(&email)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => crate::log::write("forget_account", &e),
+        Err(e) => log_err("forget_account", &e),
     }
     Ok(dropped)
 }

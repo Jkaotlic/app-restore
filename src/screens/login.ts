@@ -1,5 +1,6 @@
 import { asUiError, call, go, refreshSidebar, register, safe, state, targetPhone } from "../app";
 import { h } from "../dom";
+import { offersSkipSave, skipSaveNote } from "../copies";
 import { afterLoginScreen, sameFromMatch, errorText } from "../labels";
 import type { LoginDto } from "../types";
 import { resetForAccount } from "./accounts";
@@ -27,6 +28,22 @@ register("login", () => {
   const message = h("p", { class: "error", attrs: { role: "alert", "aria-live": "polite" } });
   message.hidden = true;
   const button = h("button", { class: "btn", text: "Войти", attrs: { type: "submit" } });
+  /** Снимок прежнего входа не сохранился: «Войти без сохранения» повторяет вход без него. */
+  let skipSave = false;
+  const skipNote = h("p", { class: "note" });
+  const skipBtn = h("button", {
+    class: "btn ghost small",
+    text: "Войти без сохранения прежнего входа",
+    attrs: { type: "button" },
+    on: {
+      click: () => {
+        skipSave = true;
+        form.requestSubmit();
+      },
+    },
+  });
+  const skipBox = h("div", {}, skipNote, skipBtn);
+  skipBox.hidden = true;
 
   const code = () => boxes.map((b) => b.value).join("");
 
@@ -77,8 +94,11 @@ register("login", () => {
     }
     button.disabled = true;
     button.textContent = "Входим…";
+    const skip = skipSave;
+    skipSave = false;
+    skipBox.hidden = true;
     try {
-      const res = await call<LoginDto>("login", { email: email.value.trim(), password: password.value, code: withCode ? code() : null });
+      const res = await call<LoginDto>("login", { email: email.value.trim(), password: password.value, code: withCode ? code() : null, skipSave: skip });
       password.value = "";
       const acc = { email: res.email, name: res.name };
       for (const id of res.dropped) state.jobs.delete(id);
@@ -106,6 +126,10 @@ register("login", () => {
         boxes[0].focus();
       } else {
         say(errorText(ui), true);
+        if (offersSkipSave(ui)) {
+          skipNote.textContent = skipSaveNote(state.account?.email ?? null);
+          skipBox.hidden = false;
+        }
         if (ui.code === "code_rejected") {
           boxes.forEach((b) => (b.value = ""));
           boxes[0].focus();
@@ -125,6 +149,7 @@ register("login", () => {
     h("label", { class: "field" }, h("span", { text: "Пароль" }), password),
     codeBlock,
     message,
+    skipBox,
     h(
       "div",
       { class: "push" },

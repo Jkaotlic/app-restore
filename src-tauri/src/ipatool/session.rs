@@ -6,7 +6,38 @@ use crate::errors::AppError;
 use crate::retry::{APPLE_DELAYS, with_retry};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
+
+/// Сроки ожидания. Запуск, переросший срок, обрывается: будущее `run` бросается, а
+/// `SidecarRunner` при этом убивает процесс ipatool. Очередь замка — сколько ждать своей очереди.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    /// Короткие запросы к Apple: вход проверить, покупки, версии, выход.
+    pub quick_run: Duration,
+    /// Очередь коротких: дольше обычно значит зависшую связку ключей у предыдущего шага.
+    pub quick_wait: Duration,
+    /// Вход: ipatool ходит к Apple дважды.
+    pub login_run: Duration,
+    /// Вход ждёт своей очереди недолго: человек смотрит на «Входим…».
+    pub login_wait: Duration,
+    /// Скачивание: страховка от вечного зависания; простой без роста ловит очередь (`queue`).
+    pub download_run: Duration,
+    /// Шаг со связкой ключей (`exclusive`): дольше — значит, macOS спрашивает разрешение.
+    pub keychain_run: Duration,
+    /// Очередь шага со связкой ключей.
+    pub keychain_wait: Duration,
+}
+
+pub const LIMITS: Limits = Limits {
+    quick_run: Duration::from_secs(90),
+    quick_wait: Duration::from_secs(15 * 60),
+    login_run: Duration::from_secs(180),
+    login_wait: Duration::from_secs(30),
+    download_run: Duration::from_secs(4 * 3600),
+    keychain_run: Duration::from_secs(20),
+    keychain_wait: Duration::from_secs(30),
+};
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Account {
@@ -20,12 +51,33 @@ pub struct Session {
     delays: Vec<Duration>,
     /// ipatool запускается строго по одному: общий Keychain и токен не любят параллельных вызовов.
     /// Замок держится на время одного запуска, поэтому check_owned и load_purchases идут вперемешку.
-    one_at_a_time: tokio::sync::Mutex<()>,
+    one_at_a_time: Arc<tokio::sync::Mutex<()>>,
+    limits: Limits,
+}
+
+/// Какой срок у запуска (`Limits`).
+#[derive(Clone, Copy)]
+enum Kind {
+    Quick,
+    Login,
+    Download,
 }
 
 impl Session {
     pub fn new(runner: Arc<dyn IpaRunner>, extra_args: Vec<String>) -> Self {
-        Self { runner, extra_args, delays: APPLE_DELAYS.to_vec(), one_at_a_time: tokio::sync::Mutex::new(()) }
+        Self { runner, extra_args, delays: APPLE_DELAYS.to_vec(), one_at_a_time: Arc::default(), limits: LIMITS }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Своя очередь к ipatool не дольше `wait`; не дождались — `Busy` (идёт скачивание или
+    /// предыдущий шаг ждёт связку ключей).
+    async fn turn(&self, wait: Duration) -> Result<tokio::sync::OwnedMutexGuard<()>, AppError> {
+        tokio::time::timeout(wait, self.one_at_a_time.clone().lock_owned()).await.map_err(|_| AppError::Busy)
     }
 
     #[cfg(test)]
@@ -35,13 +87,30 @@ impl Session {
     }
 
     /// Один вызов ipatool: глобальные флаги и extra_args добавляются сюда, вывод разбирается.
-    async fn call(&self, mut args: Vec<String>) -> Result<IpaOutcome, AppError> {
+    async fn call(&self, args: Vec<String>) -> Result<IpaOutcome, AppError> {
+        self.call_as(Kind::Quick, args).await
+    }
+
+    async fn call_as(&self, kind: Kind, mut args: Vec<String>) -> Result<IpaOutcome, AppError> {
         args.extend(["--non-interactive", "--format", "json"].map(String::from));
         args.extend(self.extra_args.iter().cloned());
         let args = Args(args);
+        let l = self.limits;
+        let (wait, run) = match kind {
+            Kind::Quick => (l.quick_wait, l.quick_run),
+            Kind::Login => (l.login_wait, l.login_run),
+            Kind::Download => (l.quick_wait.max(l.download_run), l.download_run),
+        };
         let res = {
-            let _turn = self.one_at_a_time.lock().await;
-            self.runner.run(&args.0).await
+            let _turn = self.turn(wait).await?;
+            match tokio::time::timeout(run, self.runner.run(&args.0)).await {
+                Ok(r) => r,
+                Err(_) => {
+                    // команду без аргументов: среди них может быть пароль
+                    crate::log::write("ipatool", &format!("{} {}: no answer in {} s, stopped", args.0[0], args.0.get(1).map_or("", |s| s.as_str()), run.as_secs()));
+                    return Err(AppError::Timeout);
+                }
+            }
         };
         if res.stdout.trim().is_empty() && !res.stderr.trim().is_empty() {
             return Err(AppError::Unknown { detail: res.stderr.trim().chars().take(300).collect() });
@@ -50,12 +119,48 @@ impl Session {
     }
 
     /// `f` в отдельном потоке, пока ни один запуск ipatool не идёт и не начнётся: для смены
-    /// записи входа и cookies (`accounts`).
-    pub async fn exclusive<T: Send + 'static>(&self, f: impl FnOnce() -> T + Send + 'static) -> T {
-        let _turn = self.one_at_a_time.lock().await;
-        match tokio::task::spawn_blocking(f).await {
-            Ok(v) => v,
-            Err(e) => std::panic::resume_unwind(e.into_panic()),
+    /// записи входа и cookies (`accounts`). Связка ключей молчит дольше `keychain_run` (macOS
+    /// показал окно разрешения, возможно за окном программы) — `KeychainWaiting`; `f` при этом
+    /// доделывается в фоне и держит замок до конца: ipatool не читает вход посреди записи.
+    pub async fn exclusive<T: Send + 'static>(&self, f: impl FnOnce() -> T + Send + 'static) -> Result<T, AppError> {
+        self.exclusive_inner(move |_| f(), false).await
+    }
+
+    /// Как `exclusive`, но по истечении срока замок отпускается сразу, а `f` получает отмену
+    /// (`true` во флаге): после неё `f` ничего не должен записывать. Для снимка перед входом:
+    /// вход тогда может идти дальше без него.
+    pub async fn exclusive_cancelable<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&AtomicBool) -> T + Send + 'static,
+    ) -> Result<T, AppError> {
+        self.exclusive_inner(f, true).await
+    }
+
+    async fn exclusive_inner<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&AtomicBool) -> T + Send + 'static,
+        release: bool,
+    ) -> Result<T, AppError> {
+        let turn = self.turn(self.limits.keychain_wait).await?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let c = cancel.clone();
+        let mut job = tokio::task::spawn_blocking(move || f(&c));
+        match tokio::time::timeout(self.limits.keychain_run, &mut job).await {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(e)) => std::panic::resume_unwind(e.into_panic()),
+            Err(_) => {
+                crate::log::write("keychain", &format!("no answer in {} s (macOS permission dialog?)", self.limits.keychain_run.as_secs()));
+                cancel.store(true, Ordering::SeqCst);
+                if release {
+                    drop(turn);
+                } else {
+                    tokio::spawn(async move {
+                        let _ = job.await;
+                        drop(turn);
+                    });
+                }
+                Err(AppError::KeychainWaiting)
+            }
         }
     }
 
@@ -77,7 +182,7 @@ impl Session {
         }
         // Без повторов: пароль уходит в ipatool один раз на действие пользователя,
         // повтор мог бы сжечь одноразовый код 2FA.
-        Self::account(self.call(args).await?)
+        Self::account(self.call_as(Kind::Login, args).await?)
     }
 
     /// `Ok(None)`, если входа нет: это нормальное состояние, не сбой.
@@ -160,7 +265,7 @@ impl Session {
             .to_str()
             .ok_or_else(|| AppError::Unknown { detail: "output path is not valid UTF-8".into() })?;
         let args = ["download", "-i", &track_id.to_string(), "-o", out].map(String::from).to_vec();
-        match self.call_retry(args).await? {
+        match with_retry(&self.delays, || self.call_as(Kind::Download, args.clone())).await? {
             IpaOutcome::Downloaded { path } => Ok(path),
             o => Err(AppError::Unknown { detail: format!("неожиданный ответ ipatool: {o:?}") }),
         }
@@ -294,8 +399,68 @@ mod tests {
             s.info().await.unwrap();
             log.lock().unwrap().push("info");
         };
-        tokio::join!(busy, info);
+        let (swap, _) = tokio::join!(busy, info);
+        swap.unwrap();
         assert_eq!(*log.lock().unwrap(), ["swap-start", "swap-end", "info"]);
+    }
+
+    /// Висит, пока его не бросят; `dropped` — бросили (так `SidecarRunner` убивает процесс).
+    struct HangRunner {
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+    struct OnDrop(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    #[async_trait::async_trait]
+    impl IpaRunner for HangRunner {
+        async fn run(&self, _args: &[String]) -> RunResult {
+            let _guard = OnDrop(self.dropped.clone());
+            std::future::pending::<()>().await;
+            unreachable!()
+        }
+    }
+
+    fn short() -> Limits {
+        let ms = Duration::from_millis;
+        Limits { quick_run: ms(100), quick_wait: ms(100), login_run: ms(100), login_wait: ms(100), download_run: ms(300), keychain_run: ms(100), keychain_wait: ms(100) }
+    }
+
+    #[tokio::test]
+    async fn hung_ipatool_times_out_and_is_stopped() {
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s = Session::new(Arc::new(HangRunner { dropped: dropped.clone() }), vec![]).with_delays(vec![]).with_limits(short());
+        assert_eq!(s.info().await, Err(AppError::Timeout));
+        assert!(dropped.load(Ordering::SeqCst), "процесс остановлен");
+        assert_eq!(s.login("user@example.com", "pw", None).await, Err(AppError::Timeout));
+        assert_eq!(s.download(1, Path::new("/tmp")).await, Err(AppError::Timeout));
+    }
+
+    #[tokio::test]
+    async fn login_does_not_wait_forever_behind_a_download() {
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let s = Arc::new(Session::new(Arc::new(HangRunner { dropped }), vec![]).with_delays(vec![]).with_limits(Limits { download_run: Duration::from_secs(5), ..short() }));
+        let s2 = s.clone();
+        let dl = tokio::spawn(async move { s2.download(1, Path::new("/tmp")).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let t = std::time::Instant::now();
+        assert_eq!(s.login("user@example.com", "pw", None).await, Err(AppError::Busy));
+        assert!(t.elapsed() < Duration::from_secs(1));
+        assert_eq!(AppError::Busy.user_text(), "Программа ещё скачивает приложение. Дождитесь окончания скачивания и попробуйте снова.");
+        dl.abort();
+    }
+
+    #[tokio::test]
+    async fn keychain_step_that_hangs_holds_the_lock_until_done() {
+        let r = Arc::new(FakeRunner::new(vec![fx("auth-info")]));
+        let s = session(&r, &[]).with_limits(Limits { quick_wait: Duration::from_secs(5), ..short() });
+        let slow = s.exclusive(|| std::thread::sleep(Duration::from_millis(300))).await;
+        assert_eq!(slow, Err(AppError::KeychainWaiting));
+        let t = std::time::Instant::now();
+        s.info().await.unwrap();
+        assert!(t.elapsed() >= Duration::from_millis(150), "ipatool ждал конца записи");
     }
 
     #[tokio::test]

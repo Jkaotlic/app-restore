@@ -1,6 +1,6 @@
 // Шаг «Apple ID»: все, кто входил в программу или чьи копии лежат в «Мои приложения».
 import { asUiError, call, go, refreshSidebar, register, safe, state } from "../app";
-import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, staysOnRefusal } from "../copies";
+import { accountCopiesText, accountStatus, afterUseAccount, offersSkipSave, pickStatusText, skipSaveNote, staysOnRefusal } from "../copies";
 import { errorText } from "../labels";
 import { h } from "../dom";
 import type { AccountEntry, UseAccountDto } from "../types";
@@ -20,6 +20,9 @@ register("accounts", () => {
   const list = h("div", { class: "scroll", attrs: { "aria-live": "polite" } });
   const msg = h("p", { class: "error", attrs: { role: "alert", "aria-live": "polite" } });
   msg.hidden = true;
+  /** Снимок нынешнего входа не сохранился: перейти в выбранный аккаунт без него. */
+  const skipBox = h("div");
+  skipBox.hidden = true;
   let accounts: AccountEntry[] | null = null;
   let busy: string | null = null;
   /** Проверка входа у Apple идёт дольше 3 с. */
@@ -38,11 +41,12 @@ register("accounts", () => {
     render();
   }
 
-  async function pick(a: AccountEntry): Promise<void> {
+  async function pick(a: AccountEntry, skipSave = false): Promise<void> {
     if (busy) return;
     busy = a.email;
     slow = false;
     msg.hidden = true;
+    skipBox.hidden = true;
     render();
     const timer = setTimeout(() => {
       if (busy !== a.email) return;
@@ -51,7 +55,7 @@ register("accounts", () => {
     }, 3000);
     let res: UseAccountDto = { restored: false, account: state.account, prefill: a.email, dropped: [], error: null };
     try {
-      res = await call<UseAccountDto>("use_account", { email: a.email });
+      res = await call<UseAccountDto>("use_account", { email: a.email, skipSave });
     } catch (e) {
       const ui = asUiError(e);
       // идёт скачивание — ничего не меняли, остаёмся; прочее — войдём с адресом
@@ -65,6 +69,16 @@ register("accounts", () => {
       // нынешний вход не сохранился — ничего не меняли
       msg.textContent = res.error ? errorText(res.error) : "";
       msg.hidden = false;
+      if (offersSkipSave(res.error)) {
+        const skip = h("button", {
+          class: "btn ghost small",
+          text: "Перейти без сохранения",
+          attrs: { type: "button" },
+          on: { click: safe(() => pick(a, true)) },
+        });
+        skipBox.replaceChildren(h("p", { class: "note", text: skipSaveNote(state.account?.email ?? null) }), skip);
+        skipBox.hidden = false;
+      }
       render();
       return;
     }
@@ -153,6 +167,7 @@ register("accounts", () => {
     h("h2", { text: "Выберите Apple ID" }),
     h("p", { class: "lead", text: "Тот, на котором вы раньше скачивали эти приложения." }),
     msg,
+    skipBox,
     list,
     h("div", { class: "push" }, add),
   );

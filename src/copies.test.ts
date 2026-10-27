@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, showCopiesLink, staysOnRefusal, copiesWord, copyInstallButton, copyNotes, copyPhone, markCopyPhone, copyWarning, groupCopies, stepIndex } from "./copies";
+import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, showCopiesLink, staysOnRefusal, copiesWord, copyInstallButton, copyNotes, copyPhone, markCopyPhone, offersSkipSave, skipSaveNote, copyWarning, groupCopies, stepIndex } from "./copies";
 import type { CopyDto, PhoneDto } from "./types";
 
 const c = (name: string, purchaser: string | null, extra: Partial<CopyDto> = {}): CopyDto => ({
@@ -147,5 +147,24 @@ describe("copyPhone", () => {
   it("marks only the screen's own phone as target", () => {
     expect(markCopyPhone([a, b], "B").map((p) => p.target)).toEqual([false, true]);
     expect(markCopyPhone([a, b], null).map((p) => p.target)).toEqual([true, false]);
+  });
+});
+
+describe("skip saving the previous login", () => {
+  const e = (code: string) => ({ code, text: "x", retryable: false });
+  it("offered only when the snapshot could not be saved", () => {
+    expect(offersSkipSave(e("save_session_failed"))).toBe(true);
+    expect(offersSkipSave(e("keychain_waiting"))).toBe(true);
+    expect(offersSkipSave(e("wrong_credentials"))).toBe(false);
+    expect(offersSkipSave(null)).toBe(false);
+  });
+  it("these refusals keep the person on the screen", () => {
+    for (const c of ["keychain_waiting", "busy", "save_session_failed", "downloads_running"]) expect(staysOnRefusal(e(c))).toBe(true);
+  });
+  it("honest note, masked address, no password promise", () => {
+    expect(skipSaveNote("us***@example.com")).toBe(
+      "Можно продолжить без сохранения: для us***@example.com потом снова понадобятся пароль и код. Пароли программа не хранит.",
+    );
+    expect(skipSaveNote(null)).toBe("Можно продолжить без сохранения: для прежнего Apple ID потом снова понадобятся пароль и код. Пароли программа не хранит.");
   });
 });
