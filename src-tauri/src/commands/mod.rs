@@ -676,7 +676,7 @@ impl AppState {
         if self.meta_gate.lock().unwrap().wait_left(std::time::Instant::now()).is_some() {
             return Err(AppError::AppleUnavailable { status: Some(429) });
         }
-        let m = match self.session.version_meta(track_id, &key.1).await {
+        let m = match meta_or_blank(self.session.version_meta(track_id, &key.1).await) {
             Ok(m) => m,
             Err(e) => {
                 self.meta_gate.lock().unwrap().note(&e, std::time::Instant::now());

@@ -23,6 +23,7 @@ pub struct UiError {
 fn code(e: &AppError) -> &'static str {
     match e {
         AppError::AuthCodeRequired => "auth_code_required",
+        AppError::VersionMetaBroken { .. } => "version_meta_broken",
         AppError::WrongCredentials => "wrong_credentials",
         AppError::CodeRejected => "code_rejected",
         AppError::NotPurchased => "not_purchased",
@@ -273,6 +274,15 @@ pub struct VersionDto {
     pub released: Option<String>,
     /// Apple о ней спросили; `false` — не успели (пауза после 429), можно спросить позже.
     pub checked: bool,
+}
+
+/// Метаданные версии: нечитаемые (`VersionMetaBroken`) — версия без сведений (и с датой, если
+/// она нашлась в ошибке), а не ошибка списка. Прочие ошибки — как есть.
+pub fn meta_or_blank(r: Result<crate::ios_compat::VersionMeta, AppError>) -> Result<crate::ios_compat::VersionMeta, AppError> {
+    match r {
+        Err(AppError::VersionMetaBroken { released }) => Ok(crate::ios_compat::VersionMeta { display: String::new(), released }),
+        other => other,
+    }
 }
 
 pub fn version_dto(id: &str, meta: Option<&crate::ios_compat::VersionMeta>) -> VersionDto {
@@ -1181,6 +1191,15 @@ impl<F: Fn(Option<String>)> Drop for HintScope<'_, F> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn broken_metadata_is_a_version_without_details() {
+        let m = meta_or_blank(Err(AppError::VersionMetaBroken { released: Some("2022-04-04T11:59:04".into()) })).unwrap();
+        assert_eq!(version_dto("7", Some(&m)), VersionDto { id: "7".into(), display: None, released: Some("2022-04-04".into()), checked: true });
+        let m = meta_or_blank(Err(AppError::VersionMetaBroken { released: None })).unwrap();
+        assert_eq!(version_dto("7", Some(&m)), VersionDto { id: "7".into(), display: None, released: None, checked: true });
+        assert_eq!(meta_or_blank(Err(AppError::AppleUnavailable { status: Some(429) })), Err(AppError::AppleUnavailable { status: Some(429) }));
+    }
+
     use super::*;
     use std::time::Duration;
 

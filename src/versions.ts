@@ -49,9 +49,10 @@ export interface ChosenVersion {
  * «не проверено». */
 export function versionLabel(v: VersionDto): string {
   if (!v.checked) return `${v.display ?? `Версия № ${v.id}`} (не проверено)`;
-  if (!v.display) return `Версия № ${v.id} (Apple не назвал)`;
   const m = v.released ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(v.released) : null;
-  return m ? `${v.display} · ${m[3]}.${m[2]}.${m[1]}` : v.display;
+  const date = m ? ` · ${m[3]}.${m[2]}.${m[1]}` : "";
+  if (!v.display) return date ? `Версия № ${v.id}${date}` : `Версия № ${v.id} (Apple не назвал)`;
+  return `${v.display}${date}`;
 }
 
 /** Для `start`: (trackId, external id) выбранных версий среди запускаемых строк. */

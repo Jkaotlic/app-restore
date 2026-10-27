@@ -67,6 +67,8 @@ describe("versions", () => {
     expect(versionLabel({ id: "1", display: "12.15.0", released: "2022-03-18", checked: true })).toBe("12.15.0 · 18.03.2022");
     expect(versionLabel({ id: "1", display: "12.15.0", released: null, checked: true })).toBe("12.15.0");
     expect(versionLabel({ id: "847801982", display: null, released: null, checked: true })).toBe("Версия № 847801982 (Apple не назвал)");
+    // ipatool не разобрал метаданные, но дату удалось достать из ошибки
+    expect(versionLabel({ id: "847801982", display: null, released: "2022-04-04", checked: true })).toBe("Версия № 847801982 · 04.04.2022");
     // не спросили (пауза после 429) — так и говорим
     expect(versionLabel({ id: "847801982", display: null, released: null, checked: false })).toBe("Версия № 847801982 (не проверено)");
   });

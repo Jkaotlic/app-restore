@@ -52,9 +52,23 @@ fn status_of(e: &str) -> Option<u16> {
     None
 }
 
+/// Дата из «invalid release date: 2022-04-04T11:59:04»: только вида `YYYY-MM-DD…`.
+fn broken_date(raw: &str) -> Option<String> {
+    const P: &str = "invalid release date:";
+    let at = raw.find(P)? + P.len();
+    let d: String = raw[at..].trim_start().chars().take_while(|c| c.is_ascii_digit() || matches!(c, '-' | 'T' | ':' | '.' | 'Z' | '+')).collect();
+    let b = d.as_bytes();
+    let ok = b.len() >= 10 && b[..10].iter().enumerate().all(|(i, c)| if i == 4 || i == 7 { *c == b'-' } else { c.is_ascii_digit() });
+    ok.then_some(d)
+}
+
 fn map_error(raw: &str) -> AppError {
     let e = raw.to_lowercase();
     let has = |p: &[&str]| p.iter().any(|x| e.contains(x));
+    // метаданные версии не разобрались — это не сбой входа и не «Apple не отвечает»
+    if has(&["failed to parse release date", "invalid release date", "failed to read remote file size"]) {
+        return AppError::VersionMetaBroken { released: broken_date(raw) };
+    }
     if has(&["auth code is required", "2fa code is required"]) {
         AppError::AuthCodeRequired
     } else if has(&["2fa", "verification", "auth code", "authcode"]) {
@@ -304,5 +318,16 @@ mod tests {
         assert!(matches!(parse_output("segfault: core dumped\n", 139), Err(AppError::Unknown { .. })));
         assert!(matches!(parse_output("", 1), Err(AppError::Unknown { .. })));
         assert!(matches!(parse_output(&err_line("weird new thing"), 1), Err(AppError::Unknown { .. })));
+    }
+
+    #[test]
+    fn broken_version_metadata_is_its_own_error() {
+        // живой журнал: ipatool не принимает дату без «Z» и не всегда может прочесть размер
+        let date = err_line("failed to parse release date: invalid release date: 2022-04-04T11:59:04");
+        assert_eq!(parse_output(&date, 1), Err(AppError::VersionMetaBroken { released: Some("2022-04-04T11:59:04".into()) }));
+        let size = err_line("failed to read remote file size");
+        assert_eq!(parse_output(&size, 1), Err(AppError::VersionMetaBroken { released: None }));
+        let odd = err_line("failed to parse release date: invalid release date: soon");
+        assert_eq!(parse_output(&odd, 1), Err(AppError::VersionMetaBroken { released: None }));
     }
 }

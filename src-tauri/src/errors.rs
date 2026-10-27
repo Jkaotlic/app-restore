@@ -5,6 +5,10 @@ use thiserror::Error;
 pub enum AppError {
     #[error("auth code required")]
     AuthCodeRequired,
+    /// ipatool не разобрал метаданные одной версии (дата без «Z», не прочёлся размер): версия
+    /// есть, сведений о ней нет. `released` — дата, если её удалось достать из текста ошибки.
+    #[error("version metadata unreadable")]
+    VersionMetaBroken { released: Option<String> },
     #[error("wrong credentials")]
     WrongCredentials,
     #[error("code rejected")]
@@ -71,6 +75,7 @@ impl AppError {
     pub fn user_text(&self) -> String {
         match self {
             AppError::AuthCodeRequired => "Apple прислал код на ваши устройства. Введите его, чтобы продолжить.".into(),
+            AppError::VersionMetaBroken { .. } => "Apple не отдал сведения об этой версии.".into(),
             AppError::WrongCredentials | AppError::CodeRejected => {
                 "Apple не принял пароль или код. Проверьте и попробуйте снова.".into()
             }
