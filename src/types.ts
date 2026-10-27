@@ -168,3 +168,10 @@ export interface UseAccountDto {
   /** Ошибка на шаге сохранения нынешнего входа: можно «Перейти без сохранения». */
   can_skip_save: boolean;
 }
+
+/** Итог «Забыть». `error` — вышли (или не надо было), но снимок убрать не вышло. */
+export interface ForgetDto {
+  dropped: number[];
+  signed_out: boolean;
+  error: UiError | null;
+}

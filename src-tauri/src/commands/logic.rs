@@ -890,6 +890,19 @@ pub fn is_report_url(url: &str) -> bool {
         .is_some_and(|q| !q.is_empty() && q.chars().all(|c| c.is_ascii_alphanumeric() || "-_.~%=&".contains(c)))
 }
 
+/// Итог «Забыть»: убранные задания и вышли ли из нынешнего входа — даже если снимок убрать
+/// не вышло (`error`): тогда адрес остаётся в списке.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ForgetDto {
+    pub dropped: Vec<i64>,
+    pub signed_out: bool,
+    pub error: Option<UiError>,
+}
+
+pub fn forget_dto(dropped: Vec<i64>, signed_out: bool, forgot: Result<(), AppError>) -> ForgetDto {
+    ForgetDto { dropped, signed_out, error: forgot.err().map(UiError::from) }
+}
+
 /// Подсказка про окно Связки ключей на время одного шага. Показывает `on_slow` (если шаг
 /// затянулся), убирает `done` — только если этот шаг её показал и других показанных нет.
 /// `active` — общий счётчик показанных подсказок.
@@ -930,6 +943,18 @@ impl<F: Fn(Option<String>)> Drop for HintScope<'_, F> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Вышли, а снимок убрать не вышло: убранные задания и выход не теряются вместе с ошибкой.
+    #[test]
+    fn forget_keeps_dropped_jobs_with_the_error() {
+        let ok = forget_dto(vec![3], true, Ok(()));
+        assert_eq!((ok.dropped.clone(), ok.signed_out, ok.error), (vec![3], true, None));
+        let half = forget_dto(vec![3, 4], true, Err(AppError::Busy));
+        assert_eq!((half.dropped, half.signed_out), (vec![3, 4], true));
+        assert_eq!(half.error.unwrap().code, "busy");
+        let other = forget_dto(vec![], false, Err(AppError::KeychainWaiting));
+        assert!(!other.signed_out && other.error.is_some());
+    }
 
     #[test]
     fn hint_is_cleared_only_by_the_step_that_showed_it() {

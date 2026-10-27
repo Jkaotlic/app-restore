@@ -929,10 +929,11 @@ fn reconcile_account<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// «Забыть»: удалить сохранённую сессию и адрес из списка. Копии остаются. Нынешний вход —
-/// ещё и выход из ipatool.
+/// ещё и выход из ipatool. Ошибка до выхода — `Err` (ничего не меняли); после — в `error`.
 #[tauri::command]
-pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result<Vec<i64>, UiError> {
+pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result<ForgetDto, UiError> {
     let mut dropped = vec![];
+    let mut signed_out = false;
     if state.current_email().as_deref().is_some_and(|c| same_id(c, &email)) {
         if downloads_running(&state.jobs.lock().unwrap(), &state.downloads.lock().unwrap()) {
             return Err(ui("forget_account", AppError::DownloadsRunning));
@@ -940,14 +941,20 @@ pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result
         // выйти не вышло — ничего не забываем: вход остался бы в ipatool
         state.sign_out().await.map_err(|e| ui("forget_account", e))?;
         dropped = state.drop_waiting();
+        signed_out = true;
     }
     let s = state.sessions.clone();
-    // не забыли (очередь к ipatool, связка ключей) — сказать, а не делать вид, что вышло
-    match state.session.exclusive(move || s.forget(&email)).await {
-        Ok(Ok(())) => Ok(dropped),
-        Ok(Err(e)) => Err(ui("forget_account", AppError::Unknown { detail: format!("forget: {e}") })),
-        Err(e) => Err(ui("forget_account", e)),
+    // не забыли (очередь к ipatool, связка ключей) — сказать, а не делать вид, что вышло;
+    // выход и убранные задания при этом уже случились — их интерфейс получает тоже
+    let forgot = match state.session.exclusive(move || s.forget(&email)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(AppError::Unknown { detail: format!("forget: {e}") }),
+        Err(e) => Err(e),
+    };
+    if let Err(e) = &forgot {
+        log_err("forget_account", e);
     }
+    Ok(forget_dto(dropped, signed_out, forgot))
 }
 
 /// «Все копии»: каждая ipa из «Мои приложения» и папок аккаунтов. Без входа тоже.
