@@ -18,6 +18,7 @@ import {
   mergePurchases,
   pendingChecks,
   recheckIds,
+  purchasesForSource,
   replacePhoneRows,
   sourceChoices,
   OTHER_ID_LOGIN_NOTE,
@@ -34,7 +35,7 @@ import {
   type OwnedMap,
   type TileLine,
 } from "../rows";
-import type { InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, UiError } from "../types";
+import type { InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, UiError } from "../types";
 
 export function appIcon(r: RowDto): HTMLElement {
   const { letter, color } = iconFor(r);
@@ -78,6 +79,10 @@ register("choose", () => {
   let withPhone = false;
   /** Телефон-источник группы «С этого iPhone» (Rust: `source_udid`); меняет `set_source_phone`. */
   let sourceUdid: string | null = null;
+  /** Источник, выбранный человеком; `null` — выбирает Rust. События покупок для другого источника перестраиваются. */
+  let chosenSource: string | null = null;
+  /** Номер последнего `set_source_phone`: ответ на прежний запрос не берём. */
+  let sourceReq = 0;
   let sourceBusy = false;
   let sourceError: string | null = null;
   /** Подключённые телефоны (udid через запятую): выбор источника перерисовывается, только когда они меняются. */
@@ -255,23 +260,34 @@ register("choose", () => {
 
   async function changeSource(udid: string) {
     if (!udid || udid === sourceUdid) return;
+    await loadSource(udid);
+    list.querySelector<HTMLSelectElement>(".sourcebox select")?.focus();
+  }
+
+  /** Строки группы по источнику `udid`. Берётся только ответ на последний запрос и только для этого источника. */
+  async function loadSource(udid: string) {
+    const req = ++sourceReq;
+    chosenSource = udid;
     sourceBusy = true;
     sourceError = null;
     renderList();
     try {
-      const incoming = await call<RowDto[]>("set_source_phone", { udid });
+      const res = await call<SourceRowsDto>("set_source_phone", { udid });
+      if (req !== sourceReq) return;
+      if (res.source_udid !== udid) throw new Error("source mismatch");
+      const incoming = res.rows;
       sourceUdid = udid;
       rows = replacePhoneRows(rows, incoming);
       for (const r of incoming) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
       // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки
       if (idsToCheck(incoming).length) void call("check_owned", { trackIds: pendingChecks(rows, owned) }).catch(() => undefined);
     } catch (e) {
+      if (req !== sourceReq) return;
       sourceError = errorText(asUiError(e));
     }
     sourceBusy = false;
     renderChips();
     renderList();
-    list.querySelector<HTMLSelectElement>(".sourcebox select")?.focus();
   }
 
   function applyA11y(tile: HTMLElement, r: RowDto, line: TileLine, enabled: boolean) {
@@ -475,9 +491,13 @@ register("choose", () => {
 
   function onPurchases(d: RowsDto) {
     dto = d;
-    sourceUdid = d.source_udid;
-    sourceError = null;
-    rows = mergePurchases(rows, d.rows);
+    // покупки построены для прежнего источника, а человек уже выбрал другой: группу перестроить
+    const { rows: incoming, stale } = purchasesForSource(rows, d.rows, d.source_udid, chosenSource);
+    if (!stale) {
+      sourceUdid = d.source_udid;
+      sourceError = null;
+    }
+    rows = mergePurchases(rows, incoming);
     for (const r of rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
     purchasesLoading = false;
     if (loaded) {
@@ -485,6 +505,10 @@ register("choose", () => {
       renderList();
     }
     // новые строки «С этого iPhone» проверяются вместе с ещё ждущими: новый вызов отменяет прежний
+    if (stale && chosenSource) {
+      void loadSource(chosenSource).catch(() => undefined);
+      return;
+    }
     const phoneIds = idsToCheck(d.rows.filter((r) => r.source === "phone"));
     if (phoneIds.length) void call("check_owned", { trackIds: pendingChecks(rows, owned) }).catch(() => undefined);
   }

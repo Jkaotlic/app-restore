@@ -62,6 +62,12 @@ export interface RowsDto {
   source_udid: string | null;
 }
 
+/** Итог `set_source_phone`: строки группы «С этого iPhone» и источник, по которому они построены. */
+export interface SourceRowsDto {
+  source_udid: string | null;
+  rows: RowDto[];
+}
+
 export interface OwnedEvent {
   track_id: number;
   owned: boolean | null;

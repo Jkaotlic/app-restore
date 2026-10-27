@@ -298,3 +298,11 @@ export function replacePhoneRows(rows: RowDto[], incoming: RowDto[]): RowDto[] {
   const ids = new Set(rest.map((r) => r.track_id));
   return [...rest, ...incoming.filter((r) => !ids.has(r.track_id))];
 }
+
+/** Пришли покупки (`purchases`), помеченные источником `tag`. Человек уже выбрал другой (`chosen`,
+ * `set_source_phone`) — строки группы на экране остаются, остальное берётся новое, а группу надо
+ * перестроить (`stale`). Без явного выбора событие берётся как есть. */
+export function purchasesForSource(current: RowDto[], incoming: RowDto[], tag: string | null, chosen: string | null): { rows: RowDto[]; stale: boolean } {
+  if (chosen === null || tag === chosen) return { rows: incoming, stale: false };
+  return { rows: replacePhoneRows(incoming, current.filter((r) => r.source === "phone")), stale: true };
+}

@@ -27,6 +27,7 @@ import {
   tileLine,
   visibleGroups,
   replacePhoneRows,
+  purchasesForSource,
   sourceChoices,
   SOURCE_HINT,
   OTHER_ID_LOGIN_NOTE,
@@ -481,5 +482,21 @@ describe("phone as a source", () => {
   it("texts", () => {
     expect(SOURCE_HINT).toBe("Само приложение с телефона не забрать — копию скачаем с Apple по номеру. Работает, если приложение есть на Apple ID");
     expect(OTHER_ID_LOGIN_NOTE).toBe("Войдите в Apple ID, с которого скачано это приложение");
+  });
+});
+
+describe("purchases built for another source", () => {
+  const list = [row(1, "К", { source: "removed" }), row(60, "С нового", { source: "phone" })];
+  const incoming = [row(1, "К", { source: "removed" }), row(10, "П"), row(70, "Со старого", { source: "phone" })];
+  it("matching tag or no explicit choice: the event is taken as is", () => {
+    expect(purchasesForSource(list, incoming, "OLD", null)).toEqual({ rows: incoming, stale: false });
+    expect(purchasesForSource(list, incoming, "NEW", "NEW")).toEqual({ rows: incoming, stale: false });
+  });
+  it("tag differs from the chosen source: phone rows on screen stay, the rest is new", () => {
+    const r = purchasesForSource(list, incoming, "OLD", "NEW");
+    expect(r.stale).toBe(true);
+    expect(r.rows.map((x) => x.track_id)).toEqual([1, 10, 60]);
+    // без группы (Lookup упал) — тоже не тот источник: перестроить
+    expect(purchasesForSource(list, incoming, null, "NEW").stale).toBe(true);
   });
 });
