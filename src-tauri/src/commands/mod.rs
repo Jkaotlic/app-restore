@@ -106,6 +106,8 @@ pub struct AppState {
     owned_cache: OwnedCache,
     /// trackId строк, видимых при текущем поиске/фильтре (`owned_visible`): их проверяют первыми.
     visible: Mutex<HashSet<i64>>,
+    /// «Проверить весь каталог» идёт: эпоха Apple ID, при которой его начали (`check_catalog`).
+    sweep: Mutex<Option<u64>>,
     /// trackId последнего ответа «В App Store»: их устаревшие ответы тоже перепроверяются.
     store_ids: Mutex<Vec<i64>>,
     /// Последние версии у Apple (`latest_version`) по trackId.
@@ -189,6 +191,7 @@ impl AppState {
             owned: Mutex::new(HashMap::new()),
             owned_cache: OwnedCache::open(data_dir.join("owned-cache.json")),
             visible: Mutex::new(HashSet::new()),
+            sweep: Mutex::new(None),
             store_ids: Mutex::new(vec![]),
             latest: Mutex::new(HashMap::new()),
             sizes: Mutex::new(HashMap::new()),
@@ -286,6 +289,31 @@ impl AppState {
         self.owned.lock().unwrap().clear();
         self.latest.lock().unwrap().clear();
         *self.phone_taken.lock().unwrap() = None;
+        *self.sweep.lock().unwrap() = None;
+    }
+
+    /// «Проверить весь каталог» идёт для нынешнего Apple ID.
+    fn sweeping(&self) -> bool {
+        *self.sweep.lock().unwrap() == Some(self.account_epoch.load(Ordering::SeqCst))
+    }
+
+    async fn catalog_ids(&self) -> Vec<i64> {
+        self.catalog.read().await.iter().map(|r| r.track_id).collect()
+    }
+
+    /// Событие `catalog_check`: «проверено N из M» по кэшу Apple ID `email`.
+    async fn emit_sweep<R: Runtime>(&self, app: &AppHandle<R>, email: Option<&str>, running: bool) {
+        let entries = email.map(|e| self.owned_cache.entries(e)).unwrap_or_default();
+        let (checked, total) = owned_cache::sweep_progress(&self.catalog_ids().await, &entries, owned_cache::now());
+        let _ = app.emit("catalog_check", SweepDto { checked, total, running });
+    }
+
+    /// Проверка всего каталога кончилась (или её остановили): больше не идёт, событие с итогом.
+    async fn end_sweep<R: Runtime>(&self, app: &AppHandle<R>, email: Option<&str>) {
+        let was = self.sweep.lock().unwrap().take().is_some();
+        if was {
+            self.emit_sweep(app, email, false).await;
+        }
     }
 
     /// Смена аккаунта: убрать ждущие задания (`Saved` и `Queued`, которые очередь ещё не взяла;
@@ -881,8 +909,30 @@ pub fn clear_installed(state: State<'_, AppState>) {
 #[tauri::command]
 pub async fn check_owned(app: AppHandle, track_ids: Vec<i64>, recheck: Option<bool>) -> Result<(), ()> {
     let recheck = recheck.unwrap_or(false) || !track_ids.is_empty();
+    if !recheck {
+        // «стоп» (уход с «Выбора»): и проверка всего каталога тоже
+        let st = app.state::<AppState>();
+        st.end_sweep(&app, st.current_email().as_deref()).await;
+    }
     run_checks(app, track_ids, recheck).await;
     Ok(())
+}
+
+/// «Проверить весь каталог»: все записи каталога без свежего ответа — в очередь проверок с самым
+/// низким приоритетом (видимые всё равно первыми, свежие ответы кэша не переспрашиваются).
+/// `track_ids` — что интерфейс ещё ждёт: новая очередь заменяет прежнюю. Прогресс — событие
+/// `catalog_check`; следующие `check_owned` проверку не прерывают, «стоп» и смена Apple ID — да.
+#[tauri::command]
+pub async fn check_catalog(app: AppHandle, state: State<'_, AppState>, track_ids: Vec<i64>) -> Result<SweepDto, UiError> {
+    let email = state.current_email().ok_or_else(|| ui("check_catalog", AppError::NotLoggedIn))?;
+    let entries = state.owned_cache.entries(&email);
+    let (checked, total) = owned_cache::sweep_progress(&state.catalog_ids().await, &entries, owned_cache::now());
+    let running = checked < total;
+    if running {
+        *state.sweep.lock().unwrap() = Some(state.account_epoch.load(Ordering::SeqCst));
+    }
+    run_checks(app.clone(), track_ids, true).await;
+    Ok(SweepDto { checked, total, running })
 }
 
 /// Новая очередь проверок вместо прежней. `recheck` — дописать устаревшие ответы строк «Выбора».
@@ -895,6 +945,9 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
     let now = owned_cache::now();
     let stale = if recheck { owned_cache::stale_ids(&entries, &st.on_screen().await, now) } else { vec![] };
     let plan = owned_cache::plan(&track_ids, &entries, &stale, now);
+    // «весь каталог» — отдельной очередью после заказанных и перепроверок
+    let sweeping = st.sweeping();
+    let mut bulk = if sweeping { owned_cache::sweep_queue(&st.catalog_ids().await, &entries, &plan.check, now) } else { vec![] };
     let current = move |st: &AppState| st.owned_gen.load(Ordering::SeqCst) == generation;
     // ответы кэша — без ipatool, сразу
     st.apply_cached(&plan.cached.iter().cloned().collect(), epoch);
@@ -912,8 +965,17 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
             if !current(&st) {
                 return;
             }
-            let Some(i) = owned_cache::next_check(&queue, &st.visible.lock().unwrap()) else { return };
-            let (id, stale) = queue.remove(i);
+            let pick = owned_cache::next_pick(&queue, &bulk, &st.visible.lock().unwrap());
+            let (id, stale) = match pick {
+                Some(owned_cache::Pick::Main(i)) => queue.remove(i),
+                Some(owned_cache::Pick::Sweep(i)) => bulk.remove(i),
+                None => {
+                    if sweeping {
+                        st.end_sweep(&h, email.as_deref()).await;
+                    }
+                    return;
+                }
+            };
             let r = owned_result(st.session.latest_version(id).await);
             // ответ (и «Apple больше не отдаёт» — как «нет прав»); сбой — `None`
             let answer = Entry::from_result(&r, owned_cache::now());
@@ -945,7 +1007,13 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
                 }
             }
             if stop {
+                if sweeping {
+                    st.end_sweep(&h, email.as_deref()).await;
+                }
                 return;
+            }
+            if sweeping && current(&st) {
+                st.emit_sweep(&h, email.as_deref(), true).await;
             }
         }
     });

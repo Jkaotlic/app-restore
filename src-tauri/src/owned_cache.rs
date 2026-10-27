@@ -110,6 +110,44 @@ pub fn next_check(queue: &[(i64, bool)], visible: &HashSet<i64>) -> Option<usize
         .map(|(i, _)| i)
 }
 
+/// «Проверить весь каталог»: записи каталога без свежего ответа, кроме уже стоящих в основной
+/// очереди (`queued`). `true` — устаревший ответ есть: сбой перепроверки плитку не трогает.
+/// Порядок каталога, без повторов.
+pub fn sweep_queue(catalog: &[i64], entries: &HashMap<i64, Entry>, queued: &[(i64, bool)], now: u64) -> Vec<(i64, bool)> {
+    let mut seen: HashSet<i64> = queued.iter().map(|(id, _)| *id).collect();
+    catalog
+        .iter()
+        .filter(|id| !entries.get(id).is_some_and(|e| fresh(e, now)) && seen.insert(**id))
+        .map(|id| (*id, entries.contains_key(id)))
+        .collect()
+}
+
+/// «Проверено N из M»: записи каталога со свежим ответом и всего записей (без повторов).
+pub fn sweep_progress(catalog: &[i64], entries: &HashMap<i64, Entry>, now: u64) -> (usize, usize) {
+    let all: HashSet<i64> = catalog.iter().copied().collect();
+    let done = all.iter().filter(|id| entries.get(id).is_some_and(|e| fresh(e, now))).count();
+    (done, all.len())
+}
+
+/// Откуда взять следующую проверку: основная очередь (заказанные и перепроверки) или «весь каталог».
+#[derive(Debug, PartialEq, Eq)]
+pub enum Pick {
+    Main(usize),
+    Sweep(usize),
+}
+
+/// Следующая проверка из двух очередей: видимые при поиске/фильтре — вперёд; при равной
+/// видимости основная очередь раньше «всего каталога» (у него самый низкий приоритет).
+pub fn next_pick(main: &[(i64, bool)], sweep: &[(i64, bool)], visible: &HashSet<i64>) -> Option<Pick> {
+    let m = next_check(main, visible);
+    let s = next_check(sweep, visible);
+    match (m, s) {
+        (Some(m), Some(s)) if !visible.contains(&main[m].0) && visible.contains(&sweep[s].0) => Some(Pick::Sweep(s)),
+        (Some(m), _) => Some(Pick::Main(m)),
+        (None, s) => s.map(Pick::Sweep),
+    }
+}
+
 /// Устаревшие ответы, чьи строки сейчас на «Выборе» (`on_screen`): их перепроверяют в фоне. По trackId.
 pub fn stale_ids(entries: &HashMap<i64, Entry>, on_screen: &HashSet<i64>, now: u64) -> Vec<i64> {
     let mut v: Vec<i64> = entries.iter().filter(|(id, e)| on_screen.contains(id) && !fresh(e, now)).map(|(id, _)| *id).collect();
@@ -234,6 +272,34 @@ mod tests {
         assert_eq!(next_check(&q, &[4, 2].into()), Some(1));
         assert_eq!(next_check(&q[1..2], &HashSet::new()), Some(0));
         assert_eq!(next_check(&[], &[1].into()), None);
+    }
+
+    #[test]
+    fn sweep_queue_skips_fresh_and_queued() {
+        let entries: HashMap<i64, Entry> = [(1, e(true, NOW)), (2, e(false, NOW - TTL_SECS)), (3, e(false, NOW - TTL_SECS))].into();
+        let got = sweep_queue(&[1, 2, 3, 4, 5, 4], &entries, &[(3, true), (5, false)], NOW);
+        assert_eq!(got, vec![(2, true), (4, false)]);
+        assert!(sweep_queue(&[1], &entries, &[], NOW).is_empty());
+    }
+
+    #[test]
+    fn sweep_progress_counts_fresh_catalog_answers() {
+        let entries: HashMap<i64, Entry> = [(1, e(true, NOW)), (2, e(false, NOW - TTL_SECS)), (3, e(false, NOW)), (9, e(true, NOW))].into();
+        assert_eq!(sweep_progress(&[1, 2, 3, 4, 3], &entries, NOW), (2, 4));
+        assert_eq!(sweep_progress(&[], &entries, NOW), (0, 0));
+    }
+
+    #[test]
+    fn next_pick_visible_first_then_main_then_sweep() {
+        let none = HashSet::new();
+        let main = [(1, false), (2, true)];
+        let sweep = [(7, false), (8, true)];
+        assert_eq!(next_pick(&main, &sweep, &none), Some(Pick::Main(0)));
+        assert_eq!(next_pick(&main, &sweep, &[8].into()), Some(Pick::Sweep(1)));
+        assert_eq!(next_pick(&main, &sweep, &[2, 8].into()), Some(Pick::Main(1)));
+        assert_eq!(next_pick(&[], &sweep, &none), Some(Pick::Sweep(0)));
+        assert_eq!(next_pick(&main, &[], &[8].into()), Some(Pick::Main(0)));
+        assert_eq!(next_pick(&[], &[], &none), None);
     }
 
     #[test]

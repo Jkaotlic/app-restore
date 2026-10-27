@@ -821,6 +821,15 @@ pub fn copy_dto(c: &crate::library::CopyInfo) -> CopyDto {
     }
 }
 
+/// «Проверить весь каталог» (команда `check_catalog`, событие `catalog_check`): «проверено N из M».
+/// `running: false` — проверка кончилась или остановлена.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct SweepDto {
+    pub checked: usize,
+    pub total: usize,
+    pub running: bool,
+}
+
 /// Итог перетаскивания в окно (событие `dropped`): принятые копии, номера для «Добавить по
 /// ссылке» и ошибки. `no_files` — перетащили не файл (текст или ссылку из браузера): событие
 /// Tauri приносит только пути файлов.

@@ -63,6 +63,7 @@ pub fn run() {
             commands::clear_installed,
             commands::check_owned,
             commands::owned_visible,
+            commands::check_catalog,
             commands::add_by_link,
             commands::links_in_text,
             commands::search_store,
