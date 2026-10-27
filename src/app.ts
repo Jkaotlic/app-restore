@@ -6,6 +6,7 @@ import { showCopiesLink, stepIndex } from "./copies";
 import { pendingNote } from "./drop";
 import { errorText, installsToIphone } from "./labels";
 import type { ChosenVersion } from "./versions";
+import type { KeptHistory } from "./history";
 import type { AccountEntry, AccountMatchDto, Account, DropDto, HistoryOutcome, HistoryProgress, JobDto, OwnedEvent, PhoneDto, PurchasesProgress, RowDto, RowsDto, RunDto, SweepDto, UiError } from "./types";
 
 export type Screen = "warning" | "accounts" | "login" | "choose" | "phone" | "done" | "copies";
@@ -62,6 +63,8 @@ export interface State {
   versions: Map<number, ChosenVersion>;
   /** Очередь на «Паузе» (событие `queue_paused`): новые задания не начинаются. */
   paused: boolean;
+  /** Найденное в истории покупок Apple (событие `history`), по Apple ID: «Выбор» берёт его при загрузке. */
+  history: KeptHistory;
 }
 
 let markReady: () => void = () => undefined;
@@ -95,6 +98,7 @@ export const state: State = {
   pickCopy: null,
   versions: new Map(),
   paused: false,
+  history: null,
 };
 
 /** Что экран хочет знать о событиях, пока он на виду. */

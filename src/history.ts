@@ -1,4 +1,5 @@
 // «Найти всё, что вы скачивали» (история покупок Apple): тексты и слияние строк. Без DOM.
+import { idsToCheck, initialOwned, pendingChecks, type OwnedMap } from "./rows";
 import type { RowDto } from "./types";
 
 /** Подсказка под группой «Из истории покупок». */
@@ -35,4 +36,29 @@ export function historyResultText(found: number, fresh: number): string {
 export function mergeHistoryRows(rows: RowDto[], incoming: RowDto[]): RowDto[] {
   const ids = new Set(rows.map((r) => r.track_id));
   return [...rows, ...incoming.filter((r) => !ids.has(r.track_id) && ids.add(r.track_id))];
+}
+
+/** Итог истории на «Выборе»: строки после слияния, реально добавленные (для «новых N») и что
+ * отправить в `check_owned`. `check = null` — среди добавленных нечего проверять: пустой список
+ * для Rust — «стоп», он остановил бы и «Проверить весь каталог». */
+export function takeHistory(rows: RowDto[], owned: OwnedMap, incoming: RowDto[]): { rows: RowDto[]; added: RowDto[]; owned: OwnedMap; check: number[] | null } {
+  const merged = mergeHistoryRows(rows, incoming);
+  const added = merged.slice(rows.length);
+  const map = new Map(owned);
+  for (const [id, o] of initialOwned(added)) if (!map.has(id)) map.set(id, o);
+  return { rows: merged, added, owned: map, check: idsToCheck(added).length ? pendingChecks(merged, map) : null };
+}
+
+/** Найденное в истории — в состоянии программы, по Apple ID: переживает уход с «Выбора». */
+export type KeptHistory = { email: string | null; rows: RowDto[] } | null;
+
+/** Итог `history` пришёл (на любом экране): дописать к строкам этого же Apple ID. */
+export function rememberHistory(kept: KeptHistory, email: string | null, incoming: RowDto[]): KeptHistory {
+  const base = kept && kept.email === email ? kept.rows : [];
+  return { email, rows: mergeHistoryRows(base, incoming) };
+}
+
+/** Строки истории для «Выбора» нынешнего Apple ID; другой вход — пусто. */
+export function keptHistory(kept: KeptHistory, email: string | null): RowDto[] {
+  return kept && email !== null && kept.email === email ? kept.rows : [];
 }

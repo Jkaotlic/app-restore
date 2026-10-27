@@ -2,6 +2,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { call, currentScreen, go, refreshSidebar, sessionChecked, startScreen, state } from "./app";
 import { dropMessages, mergePending } from "./drop";
+import { rememberHistory } from "./history";
 import { h } from "./dom";
 import { jobInbox } from "./jobs";
 import { speedMeter } from "./queue";
@@ -54,7 +55,11 @@ async function wire(): Promise<void> {
   await listen<PurchasesProgress>("purchases_progress", ({ payload }) => currentScreen()?.onPurchasesProgress?.(payload));
   await listen<RowsDto>("purchases", ({ payload }) => currentScreen()?.onPurchases?.(payload));
   await listen<HistoryProgress>("history_progress", ({ payload }) => currentScreen()?.onHistoryProgress?.(payload));
-  await listen<HistoryOutcome>("history", ({ payload }) => currentScreen()?.onHistory?.(payload));
+  // итог истории — в состояние программы: не теряется, если «Выбор» сейчас не открыт
+  await listen<HistoryOutcome>("history", ({ payload }) => {
+    state.history = rememberHistory(state.history, state.account?.email ?? null, payload.rows);
+    currentScreen()?.onHistory?.(payload);
+  });
   // окно Связки ключей macOS ждёт ответа (вход, снимок после входа, смена Apple ID); null — всё
   await listen<string | null>("keychain_note", ({ payload }) => {
     state.keychainNote = payload;

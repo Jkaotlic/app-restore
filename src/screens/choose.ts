@@ -51,7 +51,7 @@ import {
 } from "../rows";
 import type { DropDto, FoundVersionDto, HistoryOutcome, HistoryProgress, InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, SweepDto, UiError, VersionDto, VersionsDto } from "../types";
 import { canPickVersion, findOffered, foundMessage, recheckFrom, splitStart, startVersions, tooOldNote, versionLabel, waitText } from "../versions";
-import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, mergeHistoryRows } from "../history";
+import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, keptHistory, mergeHistoryRows, takeHistory } from "../history";
 
 export function appIcon(r: RowDto): HTMLElement {
   const { letter, color } = iconFor(r);
@@ -359,17 +359,17 @@ register("choose", () => {
   function onHistory(o: HistoryOutcome) {
     setHistoryPhase("idle");
     historyBtn.textContent = "Найти ещё раз";
-    rows = mergeHistoryRows(rows, o.rows);
-    for (const r of o.rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
-    const hasGroup = rows.some((r) => r.source === "history");
-    historyStatus(o.error ?? historyResultText(o.found, o.rows.length), { error: o.error !== null, show: hasGroup && o.rows.length > 0 });
+    const t = takeHistory(rows, owned, o.rows);
+    rows = t.rows;
+    owned = t.owned;
+    historyStatus(o.error ?? historyResultText(o.found, t.added.length), { error: o.error !== null, show: t.added.length > 0 });
     if (loaded) {
       renderChips();
       renderList();
     }
     historyMsg.scrollIntoView({ block: "nearest" });
-    // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки
-    if (o.rows.length) void call("check_owned", { trackIds: pendingChecks(rows, owned) }).catch(() => undefined);
+    // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки (только если есть новое)
+    if (t.check) void call("check_owned", { trackIds: t.check }).catch(() => undefined);
   }
 
   const switchId = h("button", {
@@ -1231,7 +1231,8 @@ register("choose", () => {
     }
     try {
       const d = await call<RowsDto>("load_catalog_rows");
-      rows = d.rows;
+      // найденное в истории этим Apple ID раньше — снова на экране (и проверяется вместе со всем)
+      rows = mergeHistoryRows(d.rows, keptHistory(state.history, state.account?.email ?? null));
     } catch {
       rows = [];
     }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, mergeHistoryRows } from "./history";
+import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, mergeHistoryRows, rememberHistory, takeHistory, keptHistory } from "./history";
 import { autoChecks, canSelect, idsToCheck, mergePurchases, pendingChecks, tileLine, visibleGroups, initialOwned } from "./rows";
 import type { RowDto } from "./types";
 
@@ -64,6 +64,40 @@ describe("history group", () => {
   it("adds only rows that are not on screen yet", () => {
     const merged = mergeHistoryRows([row(10, "A"), hist(20, "Сила")], [hist(10, "A"), hist(20, "Сила"), hist(30, "Новое")]);
     expect(merged.map((r) => r.track_id)).toEqual([10, 20, 30]);
+  });
+});
+
+describe("history kept in app state", () => {
+  it("survives screen changes for the same Apple ID and is dropped for another", () => {
+    let h = rememberHistory(null, "a@example.com", [hist(20, "Сила")]);
+    h = rememberHistory(h, "a@example.com", [hist(20, "Сила"), hist(30, "Б")]);
+    expect(keptHistory(h, "a@example.com").map((r) => r.track_id)).toEqual([20, 30]);
+    expect(keptHistory(h, "b@example.com")).toEqual([]);
+    expect(keptHistory(h, null)).toEqual([]);
+    expect(keptHistory(null, "a@example.com")).toEqual([]);
+    // итог пришёл уже для другого Apple ID — прежние строки не смешиваются
+    h = rememberHistory(h, "b@example.com", [hist(40, "В")]);
+    expect(keptHistory(h, "b@example.com").map((r) => r.track_id)).toEqual([40]);
+  });
+});
+
+describe("takeHistory", () => {
+  it("counts only rows really added and checks only when an added row is unchecked", () => {
+    const rows = [row(10, "A"), hist(20, "Сила")];
+    const owned = initialOwned(rows);
+    // всё уже на экране: новых 0, check_owned не зовём — пустой список остановил бы «Проверить весь каталог»
+    const same = takeHistory(rows, owned, [hist(20, "Сила")]);
+    expect(same.added.map((r) => r.track_id)).toEqual([]);
+    expect(same.check).toBeNull();
+    // новые, но с ответом из кэша прав (owned известен) — проверять нечего
+    const known = takeHistory(rows, owned, [hist(30, "Б", { owned: true })]);
+    expect(known.added.map((r) => r.track_id)).toEqual([30]);
+    expect(known.check).toBeNull();
+    expect(known.owned.get(30)).toEqual({ kind: "yes" });
+    // новая без ответа — проверяется вместе со всем ждущим
+    const fresh = takeHistory(rows, owned, [hist(40, "В")]);
+    expect(fresh.rows.map((r) => r.track_id)).toEqual([10, 20, 40]);
+    expect(fresh.check).toEqual([20, 40]);
   });
 });
 
