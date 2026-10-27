@@ -758,6 +758,7 @@ mod tests {
             status: None,
             seller: None,
             ipad_only: false,
+            category: None,
         }
     }
     fn app(id: i64, bundle: &str, name: &str) -> OwnedApp {

@@ -299,6 +299,7 @@ mod tests {
             status: None,
             seller: None,
             ipad_only: false,
+            category: None,
         }
     }
 

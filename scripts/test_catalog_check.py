@@ -282,6 +282,13 @@ class FileTests(unittest.TestCase):
         self.assertTrue(all("owned" not in e for e in cat))
         self.assertTrue(by_id[492224193]["source"].startswith("https://web.archive.org/"))
 
+    def test_real_catalog_entries_have_a_known_category(self):
+        real = os.path.join(HERE, "..", "catalog", "ru-removed.json")
+        with open(real, encoding="utf-8") as f:
+            cat = json.load(f)
+        bad = [e["track_id"] for e in cat if e.get("category") not in ("bank", "social", "travel", "other")]
+        self.assertEqual(bad, [])
+
     def test_real_catalog_roundtrips_byte_for_byte(self):
         real = os.path.join(HERE, "..", "catalog", "ru-removed.json")
         with open(real, encoding="utf-8") as f:

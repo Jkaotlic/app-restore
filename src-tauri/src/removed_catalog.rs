@@ -28,6 +28,21 @@ pub struct RemovedApp {
     /// Только для iPad (UIDeviceFamily = [2]): iPhone такое не ставит.
     #[serde(default)]
     pub ipad_only: bool,
+    /// Фильтр на «Выборе»: `bank`, `social`, `travel` (транспорт, путешествия, покупки, сервисы)
+    /// или `other`. Нет или неизвестно — `other` (см. `category()`).
+    #[serde(default)]
+    pub category: Option<String>,
+}
+
+/// Известные значения `category`.
+pub const CATEGORIES: [&str; 4] = ["bank", "social", "travel", "other"];
+
+impl RemovedApp {
+    /// Категория для интерфейса: неизвестная или пропущенная — `other`.
+    pub fn category(&self) -> &'static str {
+        let c = self.category.as_deref().unwrap_or_default();
+        CATEGORIES.into_iter().find(|k| *k == c).unwrap_or("other")
+    }
 }
 
 const BUNDLED: &str = include_str!("../../catalog/ru-removed.json");
@@ -125,6 +140,30 @@ pub fn bundled() -> Vec<RemovedApp> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn category_is_optional_and_unknown_means_other() {
+        let apps: Vec<RemovedApp> = serde_json::from_str(
+            r##"[{"track_id":1,"name":"A","letter":"A","color":"#000000","source":"s"},
+                {"track_id":2,"name":"B","letter":"B","color":"#000000","source":"s","category":"bank"},
+                {"track_id":3,"name":"C","letter":"C","color":"#000000","source":"s","category":"games"},
+                {"track_id":4,"name":"D","letter":"D","color":"#000000","source":"s","category":"travel"},
+                {"track_id":5,"name":"E","letter":"E","color":"#000000","source":"s","category":"social"}]"##,
+        )
+        .unwrap();
+        let got: Vec<&str> = apps.iter().map(RemovedApp::category).collect();
+        assert_eq!(got, ["other", "bank", "other", "travel", "social"]);
+    }
+
+    #[test]
+    fn bundled_entries_all_have_a_known_category() {
+        for a in bundled() {
+            let c = a.category.as_deref();
+            assert!(matches!(c, Some("bank" | "social" | "travel" | "other")), "{}: {c:?}", a.track_id);
+        }
+        let by_id = |id: i64| bundled().into_iter().find(|a| a.track_id == id).unwrap().category();
+        assert_eq!((by_id(492224193), by_id(564177498), by_id(1195015982)), ("bank", "social", "travel"));
+    }
 
     #[test]
     fn ipad_only_is_optional() {
