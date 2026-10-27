@@ -163,7 +163,7 @@ fn read_opt(p: &Path) -> Result<Option<Vec<u8>>, String> {
 }
 
 /// Запись целиком через временный файл рядом и перенос поверх: читатель видит старый или новый файл.
-fn write_atomic(p: &Path, data: &[u8]) -> Result<(), String> {
+pub(crate) fn write_atomic(p: &Path, data: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let dir = p.parent().ok_or("no parent")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("mkdir: {e}"))?;

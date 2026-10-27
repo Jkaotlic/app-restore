@@ -7,6 +7,7 @@ mod errors;
 mod ipatool;
 mod library;
 mod log;
+mod owned_cache;
 mod lookup;
 mod queue;
 mod removed_catalog;
@@ -49,6 +50,7 @@ pub fn run() {
             commands::switch_account,
             commands::clear_installed,
             commands::check_owned,
+            commands::owned_visible,
             commands::add_by_link,
             commands::search_store,
             commands::start,

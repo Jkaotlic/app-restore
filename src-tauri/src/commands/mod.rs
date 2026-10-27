@@ -23,6 +23,7 @@ use crate::errors::AppError;
 use crate::ipatool::runner::SidecarRunner;
 use crate::ipatool::session::{Account, Session};
 use crate::library::Library;
+use crate::owned_cache::{self, Entry, OwnedCache};
 use crate::lookup::{Fetch, HttpLookup, Lookup, ReqwestFetch, app_name};
 use crate::queue::{FsSpace, JobState, Queue};
 use crate::removed_catalog::{RemovedApp, bundled, fetch_catalog};
@@ -98,6 +99,10 @@ pub struct AppState {
     catalog: RwLock<Vec<RemovedApp>>,
     /// Итоги `check_owned` по записям каталога: строки «Выбора» их подставляют.
     owned: Mutex<HashMap<i64, bool>>,
+    /// Те же итоги между запусками, по Apple ID (`owned-cache.json`).
+    owned_cache: OwnedCache,
+    /// trackId строк, видимых при текущем поиске/фильтре (`owned_visible`): их проверяют первыми.
+    visible: Mutex<HashSet<i64>>,
     /// Последние версии у Apple (`latest_version`) по trackId.
     latest: Mutex<HashMap<i64, String>>,
     /// Размеры из Lookup (`fileSizeBytes`) по trackId: для «≈ размер» на «Выборе».
@@ -130,6 +135,8 @@ pub struct AppState {
     phones: Mutex<Phones>,
     /// Новый `check_owned` останавливает предыдущий.
     owned_gen: AtomicU64,
+    /// Растёт при каждой смене Apple ID: ответ, полученный до смены, не записывается.
+    account_epoch: AtomicU64,
     /// Новый `load_purchases` (и выход) отменяет итог предыдущего.
     purchases_gen: AtomicU64,
 }
@@ -174,6 +181,8 @@ impl AppState {
             catalog_cache: data_dir.join("catalog-cache.json"),
             catalog: RwLock::new(bundled()),
             owned: Mutex::new(HashMap::new()),
+            owned_cache: OwnedCache::open(data_dir.join("owned-cache.json")),
+            visible: Mutex::new(HashSet::new()),
             latest: Mutex::new(HashMap::new()),
             sizes: Mutex::new(HashMap::new()),
             installed: Mutex::new(None),
@@ -191,6 +200,7 @@ impl AppState {
             run: Mutex::new(None),
             phones: Mutex::new(Phones::default()),
             owned_gen: AtomicU64::new(0),
+            account_epoch: AtomicU64::new(0),
             purchases_gen: AtomicU64::new(0),
         }
     }
@@ -263,6 +273,7 @@ impl AppState {
 
     /// Права и версии прошлого аккаунта больше не верны: отменить проверки и забыть их.
     fn clear_account_caches(&self) {
+        self.account_epoch.fetch_add(1, Ordering::SeqCst);
         self.owned_gen.fetch_add(1, Ordering::SeqCst);
         self.purchases_gen.fetch_add(1, Ordering::SeqCst);
         self.owned.lock().unwrap().clear();
@@ -318,11 +329,56 @@ impl AppState {
     }
 
     /// Аккаунт программы и его папка в «Мои приложения». Без папки копии выключены.
+    /// Другой Apple ID — права и версии прежнего забываются; права нового — сразу из кэша.
     fn set_account(&self, acc: Option<Account>) {
         if let Err(e) = self.library.set_account(acc.as_ref().map(|a| a.email.as_str())) {
             log_err("library account", &e);
         }
-        *self.account.lock().unwrap() = acc;
+        let mut cur = self.account.lock().unwrap();
+        let after = acc.as_ref().map(|a| a.email.as_str());
+        if !owned_cache::same_account(cur.as_ref().map(|a| a.email.as_str()), after) {
+            self.clear_account_caches();
+        }
+        if let Some(email) = after {
+            self.apply_cached(&self.owned_cache.entries(email));
+        }
+        *cur = acc;
+    }
+
+    /// Ответы кэша — в права и версии, не поверх полученных в этом запуске.
+    fn apply_cached(&self, entries: &HashMap<i64, Entry>) {
+        let (mut owned, mut latest) = (self.owned.lock().unwrap(), self.latest.lock().unwrap());
+        for (id, e) in entries {
+            owned.entry(*id).or_insert(e.owned);
+            if let Some(v) = &e.version {
+                latest.entry(*id).or_insert_with(|| v.clone());
+            }
+        }
+    }
+
+    /// Права из покупок: в память и в кэш Apple ID `email` (тот, при котором их загружали).
+    fn apply_bought(&self, email: Option<&str>, answers: &[(i64, Entry)]) {
+        {
+            let (mut owned, mut latest) = (self.owned.lock().unwrap(), self.latest.lock().unwrap());
+            for (id, e) in answers {
+                owned.insert(*id, true);
+                if let Some(v) = &e.version {
+                    latest.entry(*id).or_insert_with(|| v.clone());
+                }
+            }
+        }
+        if let Some(e) = email {
+            self.owned_cache.put(e, answers.iter().cloned());
+        }
+    }
+
+    /// trackId строк на «Выборе»: каталог, покупки и группа «С этого iPhone». По ним выбираются
+    /// устаревшие ответы кэша для фоновой перепроверки.
+    async fn on_screen(&self) -> HashSet<i64> {
+        let mut out: HashSet<i64> = self.catalog.read().await.iter().map(|r| r.track_id).collect();
+        out.extend(self.phone_taken.lock().unwrap().iter().flatten().copied());
+        out.extend(self.phone_lists.lock().unwrap().values().flatten().filter_map(|a| a.item_id));
+        out
     }
 
     fn emit_job<R: Runtime>(&self, app: &AppHandle<R>, track_id: i64, state: &JobState) {
@@ -529,7 +585,13 @@ pub async fn logout(state: State<'_, AppState>) -> Result<(), UiError> {
     if downloads_running(&state.jobs.lock().unwrap(), &state.downloads.lock().unwrap()) {
         return Err(ui("logout", AppError::DownloadsRunning));
     }
-    state.sign_out().await.map_err(|e| ui("logout", e))
+    let email = state.current_email();
+    state.sign_out().await.map_err(|e| ui("logout", e))?;
+    // вышел сам — ответы этого Apple ID на диске больше не храним
+    if let Some(e) = email {
+        state.owned_cache.forget(&e);
+    }
+    Ok(())
 }
 
 /// Итог `switch_account`: адрес телефона для поля входа (если он известен и другой) и trackId
@@ -593,6 +655,7 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
     let generation = state.purchases_gen.fetch_add(1, Ordering::SeqCst) + 1;
     tauri::async_runtime::spawn(async move {
         let st = app.state::<AppState>();
+        let email = st.current_email();
         let current = || st.purchases_gen.load(Ordering::SeqCst) == generation;
         let progress = |page: u32, total: u32| {
             if current() {
@@ -605,6 +668,9 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
         }
         let rows = match result {
             Ok(purchases) => {
+                // купленное — с правами: каталогу, «С этого iPhone» и «В App Store» list-versions не нужен
+                let answers = owned_cache::from_purchases(&purchases, owned_cache::now());
+                st.apply_bought(email.as_deref(), &answers);
                 // одним Lookup и покупки, и кандидаты «С этого iPhone» (нет в каталоге и покупках)
                 let mut ids: Vec<i64> = purchases.iter().map(|a| a.id).collect();
                 let taken: HashSet<i64> = st.catalog.read().await.iter().map(|r| r.track_id).chain(ids.iter().copied()).collect();
@@ -647,6 +713,9 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
             }
         };
         if current() {
+            // устаревшие ответы перепроверяются в фоне, даже если интерфейсу проверять нечего;
+            // его `check_owned` после `purchases` заменит эту очередь своей (с ними же в конце)
+            run_checks(app.clone(), vec![], true).await;
             let _ = app.emit("purchases", rows);
         }
     });
@@ -716,37 +785,82 @@ pub fn clear_installed(state: State<'_, AppState>) {
 }
 
 /// Права и последняя версия по одной записи (~2–4 с каждая) в фоне; итоги приходят событиями
-/// `owned`. Пустой список просто останавливает идущую проверку.
+/// `owned`. Пустой список просто останавливает идущую проверку. Ответы из кэша — сразу, устаревшие
+/// перепроверяются в конце; видимые строки (`owned_visible`) — первыми. ipatool — по одному.
 #[tauri::command]
-pub async fn check_owned(app: AppHandle, state: State<'_, AppState>, track_ids: Vec<i64>) -> Result<(), ()> {
-    let generation = state.owned_gen.fetch_add(1, Ordering::SeqCst) + 1;
+pub async fn check_owned(app: AppHandle, track_ids: Vec<i64>) -> Result<(), ()> {
+    let stop_only = track_ids.is_empty();
+    run_checks(app, track_ids, !stop_only).await;
+    Ok(())
+}
+
+/// Новая очередь проверок вместо прежней. `recheck` — дописать устаревшие ответы строк «Выбора».
+async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
+    let st = app.state::<AppState>();
+    let generation = st.owned_gen.fetch_add(1, Ordering::SeqCst) + 1;
+    let epoch = st.account_epoch.load(Ordering::SeqCst);
+    let email = st.current_email();
+    let entries = email.as_deref().map(|e| st.owned_cache.entries(e)).unwrap_or_default();
+    let now = owned_cache::now();
+    let stale = if recheck { owned_cache::stale_ids(&entries, &st.on_screen().await, now) } else { vec![] };
+    let plan = owned_cache::plan(&track_ids, &entries, &stale, now);
+    let current = move |st: &AppState| st.owned_gen.load(Ordering::SeqCst) == generation;
+    // ответы кэша — без ipatool, сразу
+    if st.account_epoch.load(Ordering::SeqCst) == epoch {
+        st.apply_cached(&plan.cached.iter().cloned().collect());
+    }
+    for (id, e) in &plan.cached {
+        let ev = st.with_ctx(|ctx| owned_event(*id, &Ok((e.owned, e.version.clone())), ctx)).await;
+        if current(&st) {
+            let _ = app.emit("owned", ev);
+        }
+    }
+    let mut queue = plan.check;
+    let h = app.clone();
     tauri::async_runtime::spawn(async move {
-        let st = app.state::<AppState>();
-        for id in track_ids {
-            if st.owned_gen.load(Ordering::SeqCst) != generation {
+        let st = h.state::<AppState>();
+        loop {
+            if !current(&st) {
                 return;
             }
+            let Some(i) = owned_cache::next_check(&queue, &st.visible.lock().unwrap()) else { return };
+            let (id, stale) = queue.remove(i);
             let r = owned_result(st.session.latest_version(id).await);
+            // ответ прежнего Apple ID новому не годится
+            if st.account_epoch.load(Ordering::SeqCst) != epoch {
+                return;
+            }
             if let Ok((owned, latest)) = &r {
                 st.owned.lock().unwrap().insert(id, *owned);
                 if let Some(v) = latest {
                     st.latest.lock().unwrap().insert(id, v.clone());
+                }
+                if let Some(e) = &email {
+                    st.owned_cache.put(e, [(id, Entry { owned: *owned, checked_at: owned_cache::now(), version: latest.clone() })]);
                 }
             }
             let stop = r.as_ref().err().is_some_and(stops_owned_check);
             if let Err(e) = &r {
                 log_err(&format!("owns {id}"), e);
             }
-            let ev = st.with_ctx(|ctx| owned_event(id, &r, ctx)).await;
-            if st.owned_gen.load(Ordering::SeqCst) == generation {
-                let _ = app.emit("owned", ev);
+            // перепроверка не вышла — плитка остаётся с ответом из кэша
+            if !(stale && r.is_err()) {
+                let ev = st.with_ctx(|ctx| owned_event(id, &r, ctx)).await;
+                if current(&st) {
+                    let _ = h.emit("owned", ev);
+                }
             }
             if stop {
                 return;
             }
         }
     });
-    Ok(())
+}
+
+/// Строки, видимые при текущем поиске/фильтре: проверка прав берёт их первыми.
+#[tauri::command]
+pub fn owned_visible(state: State<'_, AppState>, track_ids: Vec<i64>) {
+    *state.visible.lock().unwrap() = track_ids.into_iter().collect();
 }
 
 /// «В App Store»: поиск по российскому магазину (Search API). Отдаёт строки, которых ещё нет на
@@ -765,6 +879,9 @@ pub async fn add_by_link(state: State<'_, AppState>, link: String) -> Result<Row
     let id = crate::app_link::parse_app_link(&link).ok_or_else(|| ui("add_by_link", AppError::BadLink))?;
     let latest = state.session.latest_version(id).await.map_err(|e| ui("add_by_link", e))?;
     state.owned.lock().unwrap().insert(id, true);
+    if let Some(e) = state.current_email() {
+        state.owned_cache.put(&e, [(id, Entry { owned: true, checked_at: owned_cache::now(), version: latest.clone() })]);
+    }
     if let Some(v) = latest {
         state.latest.lock().unwrap().insert(id, v);
     }
@@ -989,6 +1106,7 @@ pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result
         signed_out = true;
     }
     let s = state.sessions.clone();
+    state.owned_cache.forget(&email);
     // не забыли (очередь к ipatool, связка ключей) — сказать, а не делать вид, что вышло;
     // выход и убранные задания при этом уже случились — их интерфейс получает тоже
     let forgot = match state.session.exclusive(move || s.forget(&email)).await {
