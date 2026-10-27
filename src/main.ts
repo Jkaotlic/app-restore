@@ -2,6 +2,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { call, currentScreen, go, refreshSidebar, sessionChecked, startScreen, state } from "./app";
 import { h } from "./dom";
+import { jobInbox } from "./jobs";
 import "./screens/accounts";
 import "./screens/allcopies";
 import "./screens/choose";
@@ -14,11 +15,8 @@ import type { Account, JobEvent, OwnedEvent, PhonesEvent, PurchasesProgress, Row
 
 async function wire(): Promise<void> {
   await listen<JobEvent>("job", ({ payload }) => {
-    const job = state.jobs.get(payload.track_id);
-    if (!job) return; // задание прошлого захода
-    job.state = payload.state;
-    job.fromSaved = payload.from_saved;
-    currentScreen()?.onJob?.();
+    // неизвестный номер: задание ещё регистрируется (или прошлого захода) — ждёт в jobInbox
+    if (jobInbox.apply(state.jobs, payload)) currentScreen()?.onJob?.();
   });
   await listen<OwnedEvent>("owned", ({ payload }) => currentScreen()?.onOwned?.(payload));
   await listen<PurchasesProgress>("purchases_progress", ({ payload }) => currentScreen()?.onPurchasesProgress?.(payload));

@@ -3,6 +3,7 @@
 import { asUiError, call, go, register, safe, state, type Job } from "../app";
 import { copyInstallButton, copyNotes, copyPhone, copyRow, copyWarning, groupCopies, markCopyPhone } from "../copies";
 import { h } from "../dom";
+import { jobInbox } from "../jobs";
 import { jobView } from "../labels";
 import type { AccountMatchDto, CopyDto } from "../types";
 import { appIcon } from "./choose";
@@ -126,7 +127,8 @@ register("copies", () => {
     try {
       const id = await call<number>("install_copy", { path: c.path, udid: t.udid });
       const job: Job = { track_id: id, name: c.name, row: copyRow(c), state: { kind: "queued" }, fromSaved: null };
-      state.jobs.set(id, job);
+      // события, пришедшие до ответа install_copy (быстрый отказ телефона), не теряются
+      jobInbox.register(state.jobs, job);
       if (!mine.includes(id)) mine.push(id);
       renderJobs();
     } catch (e) {
