@@ -37,7 +37,7 @@ pub fn check(need: Option<&str>, have: Option<&str>) -> Result<(), AppError> {
 }
 
 /// Даты выхода крупных версий iOS (публичный выпуск). После 18 Apple перешла к номеру года — 26.
-const IOS_RELEASES: [(u64, &str); 11] = [
+const IOS_RELEASES: [(u64, &str); 12] = [
     (9, "2015-09-16"),
     (10, "2016-09-13"),
     (11, "2017-09-19"),
@@ -49,6 +49,7 @@ const IOS_RELEASES: [(u64, &str); 11] = [
     (17, "2023-09-18"),
     (18, "2024-09-16"),
     (26, "2025-09-15"),
+    (27, "2026-09-14"),
 ];
 
 /// Выход следующей крупной iOS после версии телефона: что вышло раньше, не может требовать iOS
@@ -156,8 +157,9 @@ mod tests {
         assert_eq!(next_ios_release("15.8.8"), Some((16, "2022-09-12")));
         assert_eq!(next_ios_release("12"), Some((13, "2019-09-19")));
         assert_eq!(next_ios_release("18.7"), Some((26, "2025-09-15")));
+        assert_eq!(next_ios_release("26.1"), Some((27, "2026-09-14")));
         assert_eq!(next_ios_release("8.4"), Some((9, "2015-09-16")));
-        assert_eq!(next_ios_release("26.1"), None);
+        assert_eq!(next_ios_release("27.0.1"), None);
         assert_eq!(next_ios_release(""), None);
     }
 
