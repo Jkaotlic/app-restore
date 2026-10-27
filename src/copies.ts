@@ -100,6 +100,10 @@ export function copyRow(c: CopyDto): RowDto {
     checked: false,
     ipad_only: c.ipad_only,
     unknown_account: c.purchaser_masked === null,
+    aliases: [],
+    category: null,
+    size_bytes: null,
+    other_account: false,
   };
 }
 

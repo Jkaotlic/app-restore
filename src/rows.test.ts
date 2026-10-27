@@ -5,13 +5,22 @@ import {
   mergePurchases,
   applyOwned,
   canSelect,
-  groupRows,
+  chipCounts,
+  chipList,
+  emptySearchText,
+  groupPick,
+  hasNewer,
   iconFor,
   idsToCheck,
   initialOwned,
+  isLight,
   matchesQuery,
-  ownedView,
+  matchesRow,
+  pendingChecks,
   recheckIds,
+  selectionSummary,
+  tileLine,
+  visibleGroups,
 } from "./rows";
 import type { OwnedEvent, RowDto } from "./types";
 
@@ -33,6 +42,10 @@ function row(id: number, name: string, over: Partial<RowDto> = {}): RowDto {
     checked: false,
     ipad_only: false,
     unknown_account: false,
+    aliases: [],
+    category: null,
+    size_bytes: null,
+    other_account: false,
     ...over,
   };
 }
@@ -61,20 +74,108 @@ const ev = (track_id: number, owned: boolean | null, error: OwnedEvent["error"] 
 const stopErr = { code: "not_logged_in", text: "Вы не вошли в Apple ID. Войдите снова.", retryable: false };
 const softErr = { code: "apple_unavailable", text: "Серверы Apple сейчас не отвечают. Попробуйте через 10–15 минут.", retryable: true };
 
-describe("groupRows", () => {
-  it("catalog and link rows first in their order, the rest below, filtered", () => {
-    const g = groupRows(rows, "");
-    expect(g.removed.map((r) => r.track_id)).toEqual([1, 2, 3]);
-    expect(g.other.map((r) => r.track_id)).toEqual([10, 11, 12]);
+describe("visibleGroups", () => {
+  it("catalog and link rows, then the phone group, then purchases and copies", () => {
+    const all = [...rows, row(60, "Онлайн", { source: "phone", owned: null })];
+    const g = visibleGroups(all, "all", "");
+    expect(g.map((x) => [x.key, x.title, x.rows.map((r) => r.track_id)])).toEqual([
+      ["catalog", "Каталог", [1, 2, 3]],
+      ["phone", "С этого iPhone", [60]],
+      ["buy", "Мои покупки", [10, 11, 12]],
+    ]);
   });
-  it("search filters only the other purchases", () => {
-    const g = groupRows(rows, "  tele ");
-    expect(g.removed.map((r) => r.track_id)).toEqual([1, 2, 3]);
-    expect(g.other.map((r) => r.track_id)).toEqual([11]);
+  it("search applies to every group, the catalog too", () => {
+    const g = visibleGroups(rows, "all", "  tele ");
+    expect(g.map((x) => x.rows.map((r) => r.track_id))).toEqual([[], [], [11]]);
   });
-  it("link rows join the first group", () => {
+  it("link rows join the catalog group", () => {
     const withLink = addLinkRow(rows, row(50, "Новое", { source: "link" }));
-    expect(groupRows(withLink, "").removed.map((r) => r.track_id)).toEqual([50, 1, 2, 3]);
+    expect(visibleGroups(withLink, "all", "")[0].rows.map((r) => r.track_id)).toEqual([50, 1, 2, 3]);
+  });
+  it("a chip narrows every group", () => {
+    const list = [cat(1, "Сбер", { category: "bank" }), cat(2, "ВК", { category: "social" }), row(10, "Банк-покупка")];
+    expect(visibleGroups(list, "bank", "").map((x) => x.rows.map((r) => r.track_id))).toEqual([[1], [], []]);
+    expect(visibleGroups(list, "buy", "").map((x) => x.rows.map((r) => r.track_id))).toEqual([[], [], [10]]);
+  });
+});
+
+describe("matchesRow", () => {
+  const sbol = cat(2, "СБОЛ", { aliases: ["Сбер", "СберБанк Онлайн"] });
+  it("matches the name or any alias, ignoring case and ё", () => {
+    expect(matchesRow(sbol, "сбер")).toBe(true);
+    expect(matchesRow(sbol, "БАНК онл")).toBe(true);
+    expect(matchesRow(cat(3, "Ёлки", { aliases: ["Новогодние ёлки"] }), "новогодние елки")).toBe(true);
+    expect(matchesRow(sbol, "втб")).toBe(false);
+    expect(matchesRow(sbol, "   ")).toBe(true);
+  });
+});
+
+describe("chips", () => {
+  const list = [
+    cat(1, "СберБанк Онлайн", { category: "bank", aliases: ["СБОЛ"] }),
+    cat(2, "ВТБ Онлайн", { category: "bank", installed_version: "21.3", available_version: "22.1", install_state: "update_available" }),
+    cat(3, "ВКонтакте", { category: "social", installed_version: "8.90", available_version: "8.90", install_state: "installed" }),
+    cat(4, "РЖД Пассажирам", { category: "travel" }),
+    cat(5, "Маруся", { category: "other" }),
+    row(10, "Telegram", { installed_version: "12.1", available_version: null }),
+    row(11, "Amperfy", { installed_version: "1.4", available_version: "1.5", install_state: "update_available" }),
+    row(12, "copy", { source: "saved" }),
+    row(60, "Онлайн", { source: "phone", installed_version: "14.2" }),
+  ];
+  it("counts every chip; purchases without a category only count in the non-category chips", () => {
+    expect(chipCounts(list, "", true)).toEqual({ all: 9, bank: 2, social: 1, travel: 1, buy: 3, on: 5, new: 2 });
+  });
+  it("counts respect the search", () => {
+    expect(chipCounts(list, "сбол", true)).toEqual({ all: 1, bank: 1, social: 0, travel: 0, buy: 0, on: 0, new: 0 });
+    expect(chipCounts(list, "онлайн", true)).toEqual({ all: 3, bank: 2, social: 0, travel: 0, buy: 0, on: 2, new: 1 });
+  });
+  it("without a phone nothing is «on iPhone»", () => {
+    expect(chipCounts(list, "", false)).toMatchObject({ on: 0, new: 0 });
+    expect(chipList(false).map((c) => c.key)).toEqual(["all", "bank", "social", "travel", "buy"]);
+    expect(chipList(true).map((c) => c.label)).toEqual(["Все", "Банки", "Соцсети и почта", "Транспорт и покупки", "Мои покупки", "На iPhone", "Есть новее"]);
+  });
+});
+
+describe("hasNewer", () => {
+  const v = (have: string | null, avail: string | null, install_state: RowDto["install_state"] = "update_available") =>
+    row(1, "x", { installed_version: have, available_version: avail, install_state });
+  it("only when both versions are known and differ", () => {
+    expect(hasNewer(v("21.3", "22.1"))).toBe(true);
+    expect(hasNewer(v("2.1", "2.1", "installed"))).toBe(false);
+    expect(hasNewer(v(null, "2.1", "not_installed"))).toBe(false);
+    expect(hasNewer(v("2.1", null, "installed"))).toBe(false);
+    // не сравнить («50800» и «5.8.0»), но разные — показываем
+    expect(hasNewer(v("50800", "5.8.0", "unknown"))).toBe(true);
+    // на телефоне новее копии — это не «есть новее»
+    expect(hasNewer(v("3.0", "2.0", "installed"))).toBe(false);
+  });
+});
+
+describe("selection summary", () => {
+  const MB = 1024 * 1024;
+  it("sums known sizes, marks a partial sum with +, omits size when none is known", () => {
+    expect(selectionSummary([])).toEqual({ count: 0, size: null });
+    expect(selectionSummary([row(1, "a", { size_bytes: 410 * MB }), row(2, "b", { size_bytes: 390 * MB }), row(3, "c", { size_bytes: 350 * MB })])).toEqual({ count: 3, size: "≈ 1,1 ГБ" });
+    expect(selectionSummary([row(1, "a", { size_bytes: 410 * MB }), row(2, "b")])).toEqual({ count: 2, size: "≈ 410 МБ+" });
+    expect(selectionSummary([row(1, "a"), row(2, "b")])).toEqual({ count: 2, size: null });
+    expect(selectionSummary([row(1, "a", { size_bytes: 3 * 1024 * MB })])).toEqual({ count: 1, size: "≈ 3,0 ГБ" });
+    expect(selectionSummary([row(1, "a", { size_bytes: 1000 })])).toEqual({ count: 1, size: "≈ 1 МБ" });
+  });
+});
+
+describe("groupPick", () => {
+  it("offers to select every selectable row, then to clear them", () => {
+    const list = [row(1, "a"), row(2, "b"), row(3, "c", { ipad_only: true })];
+    const ok = (r: RowDto) => !r.ipad_only;
+    expect(groupPick(list, ok, new Set([1]))).toEqual({ ids: [1, 2], allOn: false });
+    expect(groupPick(list, ok, new Set([1, 2]))).toEqual({ ids: [1, 2], allOn: true });
+    expect(groupPick([row(3, "c", { ipad_only: true })], ok, new Set())).toEqual({ ids: [], allOn: false });
+  });
+});
+
+describe("emptySearchText", () => {
+  it("points to the App Store link", () => {
+    expect(emptySearchText(" Сбер ")).toBe("Ничего не нашлось по «Сбер». Попробуйте другое название или вставьте ссылку из App Store ниже.");
   });
 });
 
@@ -132,6 +233,13 @@ describe("owned states", () => {
     m = applyOwned(m, ev(1, null, softErr));
     expect(m.get(2)).toEqual({ kind: "checking" });
   });
+  it("after purchases arrive the waiting catalog rows go again together with the new phone rows", () => {
+    const list = [cat(1, "А"), cat(2, "Б", { owned: true }), row(60, "О", { source: "phone", owned: null }), row(61, "Ч", { source: "phone", owned: null, other_account: true }), row(10, "Покупка")];
+    let m = initialOwned(list);
+    expect(pendingChecks(list, m)).toEqual([1, 60]);
+    m = applyOwned(m, ev(1, true, null));
+    expect(pendingChecks(list, m)).toEqual([60]);
+  });
   it("recheck sends the row again together with the rows still waiting (a new call cancels the old one)", () => {
     let m = initialOwned([cat(1, "А"), cat(2, "Б"), cat(3, "В")]);
     m = applyOwned(m, ev(1, null, softErr));
@@ -139,12 +247,41 @@ describe("owned states", () => {
   });
 });
 
-describe("ownedView and canSelect", () => {
-  it("texts per state", () => {
-    expect(ownedView({ kind: "checking" })).toEqual({ text: "Проверяем…", spinner: true, recheck: false });
-    expect(ownedView({ kind: "yes" })).toEqual({ text: "Есть в ваших покупках", spinner: false, recheck: false });
-    expect(ownedView({ kind: "no" })).toEqual({ text: "Не скачивалось с этого Apple ID", spinner: false, recheck: false });
-    expect(ownedView({ kind: "error", error: softErr })).toEqual({ text: "Не удалось проверить", spinner: false, recheck: true });
+describe("tileLine and canSelect", () => {
+  const yes = { kind: "yes" } as const;
+  it("ownership state first for catalog and phone rows", () => {
+    expect(tileLine(cat(1, "А"), { kind: "checking" }, false, true)).toEqual({ text: "проверяем…", tone: "checking" });
+    expect(tileLine(cat(1, "А"), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
+    expect(tileLine(row(60, "А", { source: "phone" }), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
+    expect(tileLine(cat(1, "А"), { kind: "error", error: softErr }, false, true)).toEqual({ text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" });
+    // копия на компьютере: ставится и без подтверждения прав
+    expect(tileLine(cat(1, "А", { has_saved_copy: true, available_version: "16.4" }), { kind: "checking" }, false, true)).toEqual({ text: "доступно 16.4", tone: "plain" });
+  });
+  it("versions: newer, installed, available", () => {
+    const vtb = cat(2, "ВТБ", { installed_version: "21.3", available_version: "22.1", install_state: "update_available" });
+    expect(tileLine(vtb, yes, false, true)).toEqual({ text: "на iPhone 21.3 → ", up: "22.1", tone: "plain" });
+    expect(tileLine(vtb, yes, false, false)).toEqual({ text: "доступно 22.1", tone: "plain" });
+    expect(tileLine(cat(3, "А", { installed_version: "14.0", available_version: "14.0", install_state: "installed" }), yes, false, true)).toEqual({ text: "на iPhone 14.0", tone: "plain" });
+    expect(tileLine(row(60, "О", { source: "phone", installed_version: "14.2" }), yes, false, true)).toEqual({ text: "на iPhone 14.2", tone: "plain" });
+    expect(tileLine(row(10, "Т", { available_version: "7.12" }), undefined, false, true)).toEqual({ text: "доступно 7.12", tone: "plain" });
+  });
+  it("blocking reasons win", () => {
+    expect(tileLine(cat(1, "VK для iPad", { ipad_only: true }), yes, true, true)).toEqual({ text: "только для iPad", tone: "warn" });
+    expect(tileLine(row(60, "О", { source: "phone", other_account: true, installed_version: "1" }), undefined, false, true)).toEqual({ text: "Куплено на другом Apple ID", tone: "warn" });
+  });
+  it("fallbacks without versions", () => {
+    expect(tileLine(row(12, "c", { source: "saved", has_saved_copy: true }), undefined, false, true)).toEqual({ text: "копия на компьютере", tone: "plain" });
+    expect(tileLine(row(10, "c", { removed_from_ru: true }), yes, false, true)).toEqual({ text: "нет в российском App Store", tone: "muted" });
+    expect(tileLine(row(12, "c", { source: "saved", unknown_account: true, has_saved_copy: true }), undefined, false, true)).toEqual({ text: "Неизвестный Apple ID", tone: "muted" });
+    expect(tileLine(row(10, "c"), yes, false, true)).toEqual({ text: "в ваших покупках", tone: "muted" });
+  });
+  it("phone rows need a confirmed purchase and the same Apple ID", () => {
+    const p = row(60, "О", { source: "phone", owned: null });
+    expect(canSelect(p, { kind: "checking" })).toBe(false);
+    expect(canSelect(p, { kind: "yes" })).toBe(true);
+    expect(canSelect(p, { kind: "no" })).toBe(false);
+    expect(canSelect({ ...p, other_account: true }, { kind: "yes" })).toBe(false);
+    expect(idsToCheck([p, { ...p, track_id: 61, other_account: true }, { ...p, track_id: 62, owned: true }])).toEqual([60]);
   });
   it("catalog rows need a confirmed purchase or a saved copy", () => {
     expect(canSelect(cat(1, "А"), { kind: "checking" })).toBe(false);
@@ -176,6 +313,13 @@ describe("iconFor", () => {
     expect(a.letter).toBe("T");
     expect(a.color).toMatch(/^#[0-9A-F]{6}$/i);
     expect(iconFor(row(11, "telegram"))).toEqual(a);
+  });
+  it("light backgrounds get dark ink", () => {
+    expect(isLight("#ffdd2d")).toBe(true);
+    expect(isLight("#FFFFFF")).toBe(true);
+    expect(isLight("#21A038")).toBe(false);
+    expect(isLight("#0a2973")).toBe(false);
+    expect(isLight("oops")).toBe(false);
   });
   it("skips non-letters and handles an empty name", () => {
     expect(iconFor(row(11, "«2ГИС»")).letter).toBe("2");

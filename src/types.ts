@@ -13,7 +13,11 @@ export interface Account {
   name: string;
 }
 
-export type RowSource = "removed" | "purchase" | "link" | "saved";
+/** `phone` — «С этого iPhone»: стоит на телефоне, нет ни в каталоге, ни в покупках, ни в магазине RU. */
+export type RowSource = "removed" | "purchase" | "link" | "saved" | "phone";
+
+/** Фильтр каталога; у покупок категории нет. */
+export type Category = "bank" | "social" | "travel" | "other";
 
 export interface RowDto {
   track_id: number;
@@ -37,6 +41,13 @@ export interface RowDto {
   ipad_only: boolean;
   /** Копия без папки аккаунта и без покупателя: «Неизвестный Apple ID». */
   unknown_account: boolean;
+  /** Другие названия записи каталога: по ним тоже ищет поиск. */
+  aliases: string[];
+  category: Category | null;
+  /** Примерный размер в байтах; null — неизвестно. */
+  size_bytes: number | null;
+  /** «С этого iPhone», куплено на другом Apple ID: не выбрать. */
+  other_account: boolean;
 }
 
 export type InstallState = "not_installed" | "installed" | "update_available" | "unknown";
