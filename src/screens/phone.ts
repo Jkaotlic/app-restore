@@ -41,8 +41,15 @@ export async function refreshPhones(): Promise<void> {
   }
 }
 
-/** Что с телефоном: карточка, выбор из нескольких или «не подключён». Общая для «iPhone» и «Готово». */
-export function phoneStatus(onChange: () => void): { el: HTMLElement; render(): void } {
+/** Свой выбор телефона экрана вместо общего (`choose_phone`): «Все копии». */
+export interface PhonePick {
+  phones(): PhoneDto[];
+  choose(udid: string): void;
+}
+
+/** Что с телефоном: карточка, выбор из нескольких или «не подключён». Общая для «iPhone» и «Готово».
+ * С `pick` выбор остаётся у экрана и не меняет, куда ставит главный поток. */
+export function phoneStatus(onChange: () => void, pick?: PhonePick): { el: HTMLElement; render(): void } {
   const el = h("div", { attrs: { "aria-live": "polite" } });
 
   function deviceCard(p: PhoneDto): HTMLElement {
@@ -54,7 +61,8 @@ export function phoneStatus(onChange: () => void): { el: HTMLElement; render(): 
         attrs: { type: "button", "aria-pressed": p.target ? "true" : "false" },
         on: {
           click: safe(async () => {
-            await call("choose_phone", { udid: p.udid });
+            if (pick) pick.choose(p.udid);
+            else await call("choose_phone", { udid: p.udid });
             await refreshPhones();
             render();
             onChange();
@@ -68,7 +76,7 @@ export function phoneStatus(onChange: () => void): { el: HTMLElement; render(): 
   }
 
   function render() {
-    const phones = state.phones;
+    const phones = pick ? pick.phones() : state.phones;
     const err = state.phonesError;
     const parts: HTMLElement[] = [];
     const note = chooserNote(phones);

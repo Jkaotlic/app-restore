@@ -87,8 +87,8 @@ pub struct AppState {
     names: Mutex<HashMap<i64, String>>,
     /// Версия сохранённой копии, поставленной вместо скачивания (`fallback_copy`).
     from_saved: Mutex<HashMap<i64, String>>,
-    /// Задания «Все копии» (ключ `copy_job_id`) и их файлы: «Повторить» ставит файл снова.
-    copy_paths: Mutex<HashMap<i64, PathBuf>>,
+    /// Задания «Все копии» (ключ `copy_job_id`): файл и телефон. «Повторить» ставит туда же.
+    copy_paths: Mutex<HashMap<i64, (PathBuf, String)>>,
     /// trackId, которые сейчас скачиваются или ждут скачивания (`downloads_running`).
     downloads: Mutex<HashSet<i64>>,
     account: Mutex<Option<Account>>,
@@ -642,14 +642,17 @@ pub fn retry(app: AppHandle, state: State<'_, AppState>, track_id: i64) {
     let action = {
         let jobs = state.jobs.lock().unwrap();
         match &copy {
-            Some(p) => copy_retry(jobs.get(&track_id), p),
+            Some((p, _)) => copy_retry(jobs.get(&track_id), p),
             None => retry_action(jobs.get(&track_id)),
         }
     };
     match action {
         RetryAction::Install(path) => {
             state.record(&app, track_id, JobState::Queued);
-            state.queue.install_saved(track_id, path);
+            match copy {
+                Some((_, udid)) => state.queue.install_on(track_id, path, udid),
+                None => state.queue.install_saved(track_id, path),
+            }
         }
         RetryAction::Download => {
             let name = job_name(&state.names.lock().unwrap(), track_id);
@@ -764,8 +767,8 @@ pub async fn pick_ipa(app: AppHandle, state: State<'_, AppState>) -> Result<Opti
 }
 
 /// Поставить копию на телефон `udid`. Путь принимается, только если он внутри «Мои приложения»
-/// (после разворота ссылок). Ставит очередь (`install_saved`); прогресс — события `job` с
-/// возвращённым ключом.
+/// (после разворота ссылок). Ставит очередь (`install_on`) на этот телефон, не меняя выбранный
+/// для главного потока; прогресс — события `job` с возвращённым ключом.
 #[tauri::command]
 pub async fn install_copy(app: AppHandle, state: State<'_, AppState>, path: String, udid: String) -> Result<i64, UiError> {
     let lib = state.library.clone();
@@ -775,14 +778,14 @@ pub async fn install_copy(app: AppHandle, state: State<'_, AppState>, path: Stri
         .map_err(|e| ui("install_copy", AppError::Unknown { detail: format!("resolve: {e}") }))?;
     let real = real.map_err(|e| ui("install_copy", e))?;
     let info = info.ok_or_else(|| ui("install_copy", AppError::NotIpa))?;
-    if state.choose(&app, udid.clone()).as_deref() != Some(udid.as_str()) {
-        return Err(ui("install_copy", AppError::DeviceNotFound { drivers_missing: false }));
-    }
+    // Свой телефон у задания: выбор главного потока и его ждущие задания не трогаем.
+    let device = copy_device(&state.phones.lock().unwrap().last, &udid).map_err(|e| ui("install_copy", e))?;
     let id = copy_job_id(&real);
-    state.copy_paths.lock().unwrap().insert(id, real.clone());
+    state.copy_paths.lock().unwrap().insert(id, (real.clone(), device.clone()));
     state.names.lock().unwrap().insert(id, info.name);
     state.from_saved.lock().unwrap().remove(&id);
-    state.install_copy(&app, id, real);
+    state.record(&app, id, JobState::Queued);
+    state.queue.install_on(id, real, device);
     Ok(id)
 }
 

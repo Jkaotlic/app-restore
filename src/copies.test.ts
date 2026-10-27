@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, showCopiesLink, staysOnRefusal, copiesWord, copyInstallButton, copyNotes, copyWarning, groupCopies, stepIndex } from "./copies";
+import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, showCopiesLink, staysOnRefusal, copiesWord, copyInstallButton, copyNotes, copyPhone, markCopyPhone, copyWarning, groupCopies, stepIndex } from "./copies";
 import type { CopyDto, PhoneDto } from "./types";
 
 const c = (name: string, purchaser: string | null, extra: Partial<CopyDto> = {}): CopyDto => ({
@@ -131,5 +131,21 @@ describe("copy job ids", () => {
     expect(JSON.parse(JSON.stringify({ id })).id).toBe(id);
     // а 62-битное (как было) — уже нет
     expect(Number.isSafeInteger(-(2 ** 62))).toBe(false);
+  });
+});
+
+describe("copyPhone", () => {
+  const a = phone("A", "iPhone", true);
+  const b = phone("B", "iPhone", false);
+  it("starts from the main target, then keeps its own choice", () => {
+    expect(copyPhone([a, b], null)?.udid).toBe("A");
+    expect(copyPhone([a, b], "B")?.udid).toBe("B");
+  });
+  it("chosen phone unplugged → none, never silently another phone", () => {
+    expect(copyPhone([a], "B")).toBeUndefined();
+  });
+  it("marks only the screen's own phone as target", () => {
+    expect(markCopyPhone([a, b], "B").map((p) => p.target)).toEqual([false, true]);
+    expect(markCopyPhone([a, b], null).map((p) => p.target)).toEqual([true, false]);
   });
 });

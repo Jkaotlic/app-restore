@@ -38,6 +38,18 @@ export function copyInstallButton(c: CopyDto | null, target: PhoneDto | undefine
   return { text, disabled };
 }
 
+/** Телефон экрана «Все копии»: свой выбор (`chosen`), без него — цель главного потока.
+ * Выбранный, но отключённый — никакой: молча на другой телефон не ставим. */
+export function copyPhone(phones: PhoneDto[], chosen: string | null): PhoneDto | undefined {
+  return chosen === null ? phones.find((p) => p.target) : phones.find((p) => p.udid === chosen);
+}
+
+/** Список телефонов для карточек «Все копии»: «Ставим сюда» — у своего выбора, не у главного. */
+export function markCopyPhone(phones: PhoneDto[], chosen: string | null): PhoneDto[] {
+  const own = copyPhone(phones, chosen)?.udid;
+  return phones.map((p) => ({ ...p, target: p.udid === own }));
+}
+
 /** Строки под названием копии. */
 export function copyNotes(c: CopyDto): string[] {
   const out: string[] = [];

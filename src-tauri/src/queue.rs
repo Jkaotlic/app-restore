@@ -40,7 +40,8 @@ impl SpaceProbe for FsSpace {
 
 enum Job {
     Download(i64),
-    Install(i64, PathBuf),
+    /// Телефон задан явно («Все копии») — он главнее цели очереди и её не меняет.
+    Install(i64, PathBuf, Option<String>),
 }
 
 /// Задания, которые ждут в канале (ещё не взяты в работу): (номер постановки, trackId). Под одним
@@ -158,17 +159,17 @@ async fn process(
         Job::Download(id) => match run_job(id, &session, &library, space.as_ref(), emit.as_ref()).await {
             Ok(path) => {
                 emit(JobState::Saved { path: path.clone() });
-                (Some(path), false)
+                (Some((path, None)), false)
             }
             Err(error) => {
                 emit(JobState::Failed { error, saved: None });
                 (None, false)
             }
         },
-        Job::Install(_, path) => (Some(path), true),
+        Job::Install(_, path, device) => (Some((path, device)), true),
     };
-    if let Some(path) = saved {
-        let udid = tgt.lock().unwrap().clone();
+    if let Some((path, device)) = saved {
+        let udid = device.or_else(|| tgt.lock().unwrap().clone());
         // Без телефона скачанное остаётся в `Saved`; `install_saved` поставит позже.
         if udid.is_some() || explicit {
             emit(run_install(hub.as_ref(), udid, &path, emit.as_ref()).await);
@@ -193,7 +194,7 @@ impl Queue {
         tokio::spawn(async move {
             while let Some((seq, job)) = rx.recv().await {
                 let id = match &job {
-                    Job::Download(id) | Job::Install(id, _) => *id,
+                    Job::Download(id) | Job::Install(id, _, _) => *id,
                 };
                 {
                     let mut p = current.lock().unwrap();
@@ -233,7 +234,7 @@ impl Queue {
 
     fn send(&self, job: Job) {
         let id = match &job {
-            Job::Download(id) | Job::Install(id, _) => *id,
+            Job::Download(id) | Job::Install(id, _, _) => *id,
         };
         let mut p = self.pending.lock().unwrap();
         let seq = p.next;
@@ -254,7 +255,12 @@ impl Queue {
 
     /// Ставит уже сохранённую ipa (для случая, когда телефон подключили позже).
     pub fn install_saved(&self, track_id: i64, path: PathBuf) {
-        self.send(Job::Install(track_id, path));
+        self.send(Job::Install(track_id, path, None));
+    }
+
+    /// Ставит ipa на телефон `udid`, не трогая цель очереди («Все копии»).
+    pub fn install_on(&self, track_id: i64, path: PathBuf, udid: String) {
+        self.send(Job::Install(track_id, path, Some(udid)));
     }
 
     /// `(track_id, name)`: имя нужно экрану, очереди достаточно trackId. Ключ событий: `track_id`.
@@ -540,6 +546,27 @@ mod tests {
         let ev = collect_installs(&mut rx, 1).await;
         assert_eq!(of(&ev, 111).last().unwrap(), &&JobState::Installed);
         assert_eq!(hub.calls.lock().unwrap()[0], ("UDID-2".to_string(), path));
+    }
+
+    /// «Все копии» ставит на свой телефон: цель очереди (главный поток) не меняется и не мешает.
+    #[tokio::test]
+    async fn install_on_uses_its_own_phone_not_the_target() {
+        let (q, t, _, hub) = setup_hub(ok_runner(), 10 * GB, Behavior::Ok);
+        let copy = t.path().join("copy.ipa");
+        make_ipa(&copy, "com.example.c", "1.0");
+        q.set_target(Some("UDID-A".into()));
+        let mut rx = q.subscribe();
+        q.install_on(-5, copy.clone(), "UDID-B".into());
+        let ev = collect_installs(&mut rx, 1).await;
+        assert_eq!(of(&ev, -5).last().unwrap(), &&JobState::Installed);
+        assert_eq!(hub.calls.lock().unwrap()[0].0, "UDID-B");
+        assert_eq!(*q.target.lock().unwrap(), Some("UDID-A".to_string()));
+        // и без цели очереди тоже ставит на свой телефон
+        q.set_target(None);
+        q.install_on(-6, copy, "UDID-B".into());
+        let ev = collect_installs(&mut rx, 1).await;
+        assert_eq!(of(&ev, -6).last().unwrap(), &&JobState::Installed);
+        assert_eq!(hub.calls.lock().unwrap()[1].0, "UDID-B");
     }
 
     #[tokio::test]

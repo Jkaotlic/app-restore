@@ -1,7 +1,7 @@
 // «Все копии»: любая ipa из «Мои приложения» (всех Apple ID) или выбранный файл — на любой
 // подключённый телефон. Работает без входа. Диалог и файлы — только в Rust.
-import { asUiError, call, go, register, safe, state, targetPhone, type Job } from "../app";
-import { copyInstallButton, copyNotes, copyRow, copyWarning, groupCopies } from "../copies";
+import { asUiError, call, go, register, safe, state, type Job } from "../app";
+import { copyInstallButton, copyNotes, copyPhone, copyRow, copyWarning, groupCopies, markCopyPhone } from "../copies";
 import { h } from "../dom";
 import { jobView } from "../labels";
 import type { AccountMatchDto, CopyDto } from "../types";
@@ -23,7 +23,15 @@ register("copies", () => {
   const warning = h("div", { attrs: { "aria-live": "polite" } });
   const jobsBox = h("div");
   const installBtn = h("button", { class: "btn", on: { click: safe(install) } });
-  const status = phoneStatus(() => onPhones());
+  /** Свой телефон экрана: установка копии не меняет, куда ставит главный поток. */
+  let chosenPhone: string | null = null;
+  const targetPhone = () => copyPhone(state.phones, chosenPhone);
+  const status = phoneStatus(() => onPhones(), {
+    phones: () => markCopyPhone(state.phones, chosenPhone),
+    choose: (udid) => {
+      chosenPhone = udid;
+    },
+  });
 
   const search = h("input", {
     class: "input search",

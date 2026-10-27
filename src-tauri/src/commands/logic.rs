@@ -388,6 +388,16 @@ pub fn resolve_target(phones: &[PhoneInfo], chosen: Option<&str>) -> Option<Stri
     }
 }
 
+/// Телефон для установки из «Все копии»: тот, что выбран в диалоге, если он подключён.
+/// Выбор главного потока (`resolve_target`) не участвует и не меняется.
+pub fn copy_device(phones: &[PhoneInfo], udid: &str) -> Result<String, AppError> {
+    phones
+        .iter()
+        .any(|p| p.udid == udid)
+        .then(|| udid.to_string())
+        .ok_or(AppError::DeviceNotFound { drivers_missing: false })
+}
+
 /// Ошибки скачивания, при которых вместо свежей версии ставится сохранённая копия.
 fn copy_helps(e: &AppError) -> bool {
     matches!(e, AppError::AppleChangedLogin | AppError::AppleUnavailable { .. } | AppError::NotLoggedIn)
@@ -1029,6 +1039,14 @@ mod tests {
         let k = &d.rows[1];
         assert_eq!((k.source, k.name.as_str(), k.version.as_str(), k.has_saved_copy), ("saved", "com.example.k", "2.0", true));
         assert_eq!(rows_dto(crate::catalog::build_rows(&[], &HashMap::new(), vec![], None, &[]), false).purchases_error, None);
+    }
+
+    #[test]
+    fn copy_device_needs_connected_phone_and_ignores_choice() {
+        let phones = [ph("iPhone", "A"), ph("iPhone", "B")];
+        assert_eq!(copy_device(&phones, "B"), Ok("B".to_string()));
+        assert_eq!(copy_device(&phones, "C"), Err(AppError::DeviceNotFound { drivers_missing: false }));
+        assert_eq!(copy_device(&[], "A"), Err(AppError::DeviceNotFound { drivers_missing: false }));
     }
 
     fn ph(class: &str, udid: &str) -> PhoneInfo {
