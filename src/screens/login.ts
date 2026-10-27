@@ -2,7 +2,7 @@ import { asUiError, call, go, refreshSidebar, register, safe, state, targetPhone
 import { h } from "../dom";
 import { offersSkipSave, skipSaveNote } from "../copies";
 import { listen } from "@tauri-apps/api/event";
-import { CODE_HINT, LOGIN_SLOW_AFTER_S, afterLoginScreen, errorText, loginNote as waitText, sameFromMatch } from "../labels";
+import { CODE_HINT, LOGIN_SLOW_AFTER_S, RESEND_AFTER_S, resendLabel, afterLoginScreen, errorText, loginNote as waitText, sameFromMatch } from "../labels";
 import type { LoginDto } from "../types";
 import { resetForAccount } from "./accounts";
 import { checkAccount } from "./phone";
@@ -22,12 +22,59 @@ register("login", () => {
   const loginNote = state.loginNote;
   state.loginNote = null;
 
+  const emailField = h("label", { class: "field" }, h("span", { text: "Apple ID" }), email);
+  const passField = h("label", { class: "field" }, h("span", { text: "Пароль" }), password);
+
   const boxes = Array.from({ length: DIGITS }, (_, i) =>
     h("input", { attrs: { inputmode: "numeric", maxlength: "1", autocomplete: "one-time-code", "aria-label": `Цифра ${i + 1} из ${DIGITS}` } }),
   );
-  const codeLabel = h("span", { text: "Код с iPhone" });
-  const codeBlock = h("div", { class: "field" }, codeLabel, h("div", { class: "code" }, ...boxes), h("small", { class: "note", text: CODE_HINT }));
+  // шаг кода: куда входим (опечатка в адресе видна сразу), шесть клеток, «Подтвердить код»,
+  // отдельно «Отправить код ещё раз» не чаще раза в минуту и крупно — где взять код
+  const whoEmail = h("b");
+  const change = h("button", { class: "link", text: "Изменить", attrs: { type: "button" }, on: { click: () => setCodeStep(false, true) } });
+  const who = h("p", { class: "codewho" }, h("span", { text: "Вход в " }), whoEmail, change);
+  const resend = h("button", { class: "link", attrs: { type: "button" }, on: { click: (e: Event) => void submitWith(e, true) } });
+  const codeLabel = h("span", { text: "Код подтверждения" });
+  const codeBlock = h(
+    "div",
+    { class: "field codefield" },
+    codeLabel,
+    h("div", { class: "code" }, ...boxes),
+    resend,
+    h("div", { class: "codehelp" }, ...CODE_HINT.map((t) => h("p", { text: t }))),
+  );
   codeBlock.hidden = true;
+  who.hidden = true;
+  let codeStep = false;
+  let resendAt = 0;
+  let resendTimer: ReturnType<typeof setInterval> | undefined;
+  function tickResend() {
+    const left = Math.ceil((resendAt - Date.now()) / 1000);
+    resend.textContent = resendLabel(left);
+    resend.disabled = left > 0 || button.disabled;
+    if (left <= 0) clearInterval(resendTimer);
+  }
+  function startResend() {
+    resendAt = Date.now() + RESEND_AFTER_S * 1000;
+    clearInterval(resendTimer);
+    resendTimer = setInterval(tickResend, 1000);
+    tickResend();
+  }
+  /** Шаг кода вкл/выкл: поля адреса и пароля прячутся, кнопка — «Подтвердить код». */
+  function setCodeStep(on: boolean, focus = false) {
+    codeStep = on;
+    emailField.hidden = on;
+    passField.hidden = on;
+    who.hidden = !on;
+    codeBlock.hidden = !on;
+    whoEmail.textContent = email.value.trim();
+    button.textContent = on ? "Подтвердить код" : "Войти";
+    if (!on) {
+      clearInterval(resendTimer);
+      message.hidden = true;
+      if (focus) email.focus();
+    }
+  }
 
   const message = h("p", { class: "error", attrs: { role: "alert", "aria-live": "polite" } });
   message.hidden = true;
@@ -92,19 +139,24 @@ register("login", () => {
     message.hidden = false;
   }
 
-  async function submit(e: Event) {
+  const submit = (e: Event) => submitWith(e, false);
+
+  /** `resend` — «Отправить код ещё раз»: тот же вход без кода, Apple присылает новый. */
+  async function submitWith(e: Event, resendCode: boolean) {
     e.preventDefault();
+    if (button.disabled) return;
     if (!email.value.trim() || !password.value) {
       say("Введите Apple ID и пароль.", true);
       return;
     }
-    const withCode = !codeBlock.hidden;
+    const withCode = codeStep && !resendCode;
     if (withCode && code().length < DIGITS) {
       say("Введите все 6 цифр кода.", true);
       return;
     }
     button.disabled = true;
-    button.textContent = "Входим…";
+    button.textContent = resendCode ? "Просим новый код…" : codeStep ? "Проверяем код…" : "Входим…";
+    resend.disabled = true;
     const skip = skipSave;
     skipSave = false;
     skipBox.hidden = true;
@@ -148,9 +200,11 @@ register("login", () => {
       done();
       const ui = asUiError(err);
       if (ui.code === "auth_code_required") {
-        codeBlock.hidden = false;
+        setCodeStep(true);
         boxes.forEach((b) => (b.value = ""));
         say(errorText(ui), false);
+        // каждый вход без кода просит у Apple новый: следующий — не раньше чем через минуту
+        startResend();
         boxes[0].focus();
       } else {
         say(errorText(ui), true);
@@ -165,19 +219,22 @@ register("login", () => {
       }
     }
     button.disabled = false;
-    button.textContent = "Войти";
+    button.textContent = codeStep ? "Подтвердить код" : "Войти";
+    if (codeStep) tickResend();
   }
 
-  const form = h(
+  const form: HTMLFormElement = h(
     "form",
-    { class: "body", on: { submit: safe(submit) } },
+    { class: "body login", on: { submit: safe(submit) } },
     h("h2", { text: "Войдите в Apple ID" }),
     h("p", { class: "lead", text: "Тот, на котором вы раньше скачивали эти приложения." }),
     loginNote ? h("p", { class: "note", text: loginNote, attrs: { role: "status" } }) : null,
-    h("label", { class: "field" }, h("span", { text: "Apple ID" }), email),
-    h("label", { class: "field" }, h("span", { text: "Пароль" }), password),
-    codeBlock,
+    emailField,
+    passField,
+    who,
+    // на шаге кода сообщение — сразу под адресом, до клеток: сначала «что случилось», потом что делать
     message,
+    codeBlock,
     waitNote,
     skipBox,
     h(
@@ -188,5 +245,5 @@ register("login", () => {
       h("span", { class: "note", text: "Пароль не сохраняется на компьютере." }),
     ),
   );
-  return { el: form };
+  return { el: form, leave: () => clearInterval(resendTimer) };
 });

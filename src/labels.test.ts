@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { waitLeft, CODE_HINT, errorText, loginNote, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
+import { waitLeft, CODE_HINT, RESEND_AFTER_S, resendLabel, errorText, loginNote, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
 import type { JobDto, PhoneDto } from "./types";
 
 const err = { code: "device_locked", text: "Разблокируйте iPhone и нажмите «Доверять»", retryable: false };
@@ -224,10 +224,17 @@ describe("login waiting", () => {
     expect(loginWaitNote(3)).toBeNull();
     expect(loginWaitNote(10)).toBe("Apple иногда долго отвечает при первом входе — подождите до двух–трёх минут.");
   });
-  it("code hint tells where the code comes from", () => {
-    expect(CODE_HINT).toBe(
-      "Код приходит на iPhone или Mac с этим Apple ID, иногда с задержкой. Нет кода — на iPhone: Настройки → ваше имя → Вход и безопасность → Получить код проверки.",
-    );
+  it("code hint: where the code comes from, how to get it without the window, no SMS", () => {
+    expect(CODE_HINT).toEqual([
+      "Код приходит окном на iPhone, iPad или Mac, где выполнен вход в этот Apple ID. Нет окна? На iPhone включите Авиарежим и выключите Wi\u2011Fi, затем Настройки → ваше имя → Вход и безопасность → Получить код проверки (без сети кнопка появляется). На Mac: Системные настройки → ваше имя → Вход и безопасность.",
+      "Если у Apple ID нет ни одного такого устройства, а только номер телефона, программа не может запросить SMS — войдите с устройства Apple один раз.",
+    ]);
+  });
+  it("resend link waits 60 s after each request", () => {
+    expect(RESEND_AFTER_S).toBe(60);
+    expect(resendLabel(0)).toBe("Отправить код ещё раз");
+    expect(resendLabel(-3)).toBe("Отправить код ещё раз");
+    expect(resendLabel(42)).toBe("Отправить код ещё раз — через 42 с");
   });
 });
 

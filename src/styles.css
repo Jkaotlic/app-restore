@@ -1219,3 +1219,62 @@ label.app {
   font-weight: 500;
   color: var(--muted);
 }
+
+/* Вход: шаг кода 2FA — адрес, клетки кода, «Отправить код ещё раз», где взять код.
+   В низком окне (760×540) шаг кода выше окна — экран прокручивается, кнопка не обрезается */
+.body.login {
+  overflow-y: auto;
+}
+.body.login > .error,
+.body.login > .note {
+  margin: 0 0 10px;
+}
+.codewho {
+  margin: 0 0 6px;
+  font-size: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+}
+.codewho b {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.codewho .link {
+  margin-left: 6px;
+  font-size: 13px;
+}
+.codefield {
+  max-width: 520px;
+}
+.codefield .code input {
+  width: 44px;
+  height: 52px;
+  font-size: 22px;
+}
+.codefield > .link {
+  font-size: 13px;
+  margin-top: 2px;
+}
+.codefield > .link:disabled {
+  color: var(--muted);
+  text-decoration: none;
+  cursor: default;
+}
+.codehelp {
+  margin-top: 10px;
+  background: var(--soft);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--ink);
+}
+.codehelp p {
+  margin: 0;
+}
+.codehelp p + p {
+  margin-top: 8px;
+  color: var(--muted);
+}
