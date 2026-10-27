@@ -1,6 +1,6 @@
 [package]
 name = "app-restore"
-version = "0.2.3"
+version = "0.2.4"
 description = "Restores removed iPhone apps from your own Apple ID purchases"
 authors = ["Jkaotlic"]
 repository = "https://github.com/Jkaotlic/app-restore"
