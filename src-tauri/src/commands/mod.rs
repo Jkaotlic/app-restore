@@ -30,7 +30,7 @@ use logic::*;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
@@ -48,16 +48,13 @@ fn log_err(context: &str, e: &AppError) {
 }
 
 /// Подсказка про окно Связки ключей macOS — событие `keychain_note` (текст), видно на любом
-/// экране. Ожидание при этом идёт дальше; `keychain_done` убирает подсказку.
-fn keychain_hint<R: Runtime>(app: &AppHandle<R>) -> impl Fn() + Send + Sync + use<R> {
+/// экране. Ожидание при этом идёт дальше; `done` убирает подсказку, если её показал этот шаг.
+fn keychain_hint<R: Runtime>(app: &AppHandle<R>) -> HintScope<'static, impl Fn(Option<String>) + Send + Sync + use<R>> {
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
     let app = app.clone();
-    move || {
-        let _ = app.emit("keychain_note", Some(AppError::KeychainWaiting.user_text()));
-    }
-}
-
-fn keychain_done<R: Runtime>(app: &AppHandle<R>) {
-    let _ = app.emit("keychain_note", None::<String>);
+    HintScope::new(&ACTIVE, move |note: Option<String>| {
+        let _ = app.emit("keychain_note", note);
+    })
 }
 
 fn ui(context: &str, e: AppError) -> UiError {
@@ -458,8 +455,9 @@ pub async fn login(
         crate::log::write("login", &format!("{who}: saving previous session"));
     }
     // окно разрешения macOS: подсказка на экране, ожидание идёт дальше
-    let prepared = crate::accounts::prepare_login(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false), &keychain_hint(&app)).await;
-    keychain_done(&app);
+    let hint = keychain_hint(&app);
+    let prepared = crate::accounts::prepare_login(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false), &|| hint.on_slow()).await;
+    hint.done();
     prepared.map_err(|e| ui("login", e))?;
     crate::log::write("login", &format!("{who}: asking Apple"));
     // `password` уходит из памяти вместе с аргументами по выходу из функции (без затирания).
@@ -471,8 +469,9 @@ pub async fn login(
     // поэтому подсказка та же, что перед входом (на «Выборе» видна в боковой панели).
     let (session, sessions, saved_email, h) = (state.session.clone(), state.sessions.clone(), acc.email.clone(), app.clone());
     tauri::async_runtime::spawn(async move {
-        let r = crate::accounts::save_current_hinted(&session, &sessions, &saved_email, &keychain_hint(&h)).await;
-        keychain_done(&h);
+        let hint = keychain_hint(&h);
+        let r = crate::accounts::save_current_hinted(&session, &sessions, &saved_email, &|| hint.on_slow()).await;
+        hint.done();
         if let Err(e) = r {
             log_err("login: save new session", &e);
         }
@@ -550,8 +549,9 @@ pub async fn switch_account(app: AppHandle, state: State<'_, AppState>) -> Resul
     let gone = state.drop_waiting();
     // Прежний вход остаётся в списке «Apple ID» снимком (не вышло — «нужен вход»).
     if let Some(cur) = state.current_email() {
-        let r = crate::accounts::save_current_hinted(&state.session, &state.sessions, &cur, &keychain_hint(&app)).await;
-        keychain_done(&app);
+        let hint = keychain_hint(&app);
+        let r = crate::accounts::save_current_hinted(&state.session, &state.sessions, &cur, &|| hint.on_slow()).await;
+        hint.done();
         if let Err(e) = r {
             log_err("switch_account: save session", &e);
             state.sessions.mark_unsaved(&cur);
@@ -869,8 +869,9 @@ pub fn list_accounts(state: State<'_, AppState>) -> Vec<crate::accounts::Account
 pub async fn use_account(app: AppHandle, state: State<'_, AppState>, email: String, skip_save: Option<bool>) -> Result<UseAccountDto, UiError> {
     state.may_switch(&email).map_err(|e| ui("use_account", e))?;
     let before = state.current_email();
-    let out = crate::accounts::switch_to_with(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false), &keychain_hint(&app)).await;
-    keychain_done(&app);
+    let hint = keychain_hint(&app);
+    let out = crate::accounts::switch_to_with(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false), &|| hint.on_slow()).await;
+    hint.done();
     let error = out.error.clone().map(|e| ui("use_account", e));
     // Не вошли, но вход ipatool как был (`kept`) — программа остаётся в прежнем аккаунте.
     let now = if out.restored {

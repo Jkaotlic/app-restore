@@ -890,9 +890,66 @@ pub fn is_report_url(url: &str) -> bool {
         .is_some_and(|q| !q.is_empty() && q.chars().all(|c| c.is_ascii_alphanumeric() || "-_.~%=&".contains(c)))
 }
 
+/// Подсказка про окно Связки ключей на время одного шага. Показывает `on_slow` (если шаг
+/// затянулся), убирает `done` — только если этот шаг её показал и других показанных нет.
+/// `active` — общий счётчик показанных подсказок.
+pub struct HintScope<'a, F: Fn(Option<String>)> {
+    emit: F,
+    active: &'a std::sync::atomic::AtomicUsize,
+    fired: std::sync::atomic::AtomicBool,
+}
+
+impl<'a, F: Fn(Option<String>)> HintScope<'a, F> {
+    pub fn new(active: &'a std::sync::atomic::AtomicUsize, emit: F) -> Self {
+        Self { emit, active, fired: std::sync::atomic::AtomicBool::new(false) }
+    }
+
+    pub fn on_slow(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if !self.fired.swap(true, SeqCst) {
+            self.active.fetch_add(1, SeqCst);
+        }
+        (self.emit)(Some(AppError::KeychainWaiting.user_text()));
+    }
+
+    pub fn done(&self) {
+        use std::sync::atomic::Ordering::SeqCst;
+        if self.fired.swap(false, SeqCst) && self.active.fetch_sub(1, SeqCst) == 1 {
+            (self.emit)(None);
+        }
+    }
+}
+
+/// Шаг кончился как угодно (и паникой) — его подсказка не остаётся висеть.
+impl<F: Fn(Option<String>)> Drop for HintScope<'_, F> {
+    fn drop(&mut self) {
+        self.done();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hint_is_cleared_only_by_the_step_that_showed_it() {
+        let active = std::sync::atomic::AtomicUsize::new(0);
+        let log = std::sync::Mutex::new(Vec::<Option<String>>::new());
+        let emit = |v: Option<String>| log.lock().unwrap().push(v.map(|_| "hint".into()));
+        let slow = HintScope::new(&active, emit);
+        let quick = HintScope::new(&active, emit);
+        slow.on_slow();
+        quick.done(); // быстрый шаг (или Busy) подсказку не показывал — и не убирает
+        assert_eq!(*log.lock().unwrap(), [Some("hint".to_string())]);
+        let other = HintScope::new(&active, emit);
+        other.on_slow();
+        slow.done(); // второй ещё ждёт окна
+        assert_eq!(log.lock().unwrap().len(), 2);
+        other.done();
+        assert_eq!(log.lock().unwrap().last().unwrap(), &None);
+        other.done(); // повтор ничего не шлёт
+        assert_eq!(log.lock().unwrap().len(), 3);
+    }
 
     #[test]
     fn ui_error_text_and_code() {
