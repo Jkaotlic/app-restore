@@ -4,7 +4,8 @@
 //! Прогресс скачивания — опросом размера `.partial/<track_id>/`.
 //! «Пауза» (`pause`): новые задания не начинаются; идущее скачивание обрывается (ipatool
 //! останавливается, недокачанное удаляется) и после «Продолжить» (`resume`) начинается заново
-//! первым. Идущую установку на телефон пауза не прерывает.
+//! первым. Идущую установку на телефон пауза не прерывает, установку копии на явно выбранный
+//! телефон («Все копии») не держит.
 use crate::device::DeviceHub;
 use crate::errors::AppError;
 use crate::ipatool::session::Session;
@@ -72,6 +73,12 @@ enum Job {
     Download(i64, Place, Option<String>),
     /// Телефон задан явно («Все копии») — он главнее цели очереди и её не меняет.
     Install(i64, PathBuf, Option<String>),
+}
+
+/// Установка на явно выбранный телефон («Все копии») идёт и на «Паузе»: пауза держит очередь
+/// скачиваний, а не ручную установку копии.
+fn bypasses_pause(job: &Job) -> bool {
+    matches!(job, Job::Install(_, _, Some(_)))
 }
 
 /// Задания, которые ждут в канале (ещё не взяты в работу): (номер постановки, trackId). Под одним
@@ -294,23 +301,41 @@ impl Queue {
         let worker = Worker { session, library, space, hub, tgt: target.clone(), ios: ios.clone(), idle };
         let (pause, mut paused) = watch::channel(false);
         tokio::spawn(async move {
-            // прерванное «Паузой» — первым, раньше новых из канала
-            let mut back: Option<(u64, Job)> = None;
+            // На паузе задания ждут здесь по порядку (прерванное «Паузой» — первым) и остаются в
+            // `waiting`: `drop_pending` их видит. Установка на явный телефон паузу обходит.
+            let mut held: std::collections::VecDeque<(u64, Job)> = Default::default();
+            let mut closed = false;
+            // второй приёмник — только читать флаг, пока первый ждёт «Продолжить» в `select!`
+            let now_paused = paused.clone();
             loop {
-                let (seq, job) = match back.take() {
+                let is_paused = *paused.borrow();
+                let next = if is_paused { None } else { held.pop_front() };
+                let (seq, job) = match next {
                     Some(j) => j,
-                    None => match rx.recv().await {
-                        Some(j) => j,
-                        None => break,
+                    None if closed => {
+                        if held.is_empty() || paused.wait_for(|p| !*p).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    None => tokio::select! {
+                        r = rx.recv() => match r {
+                            Some(j) if !*now_paused.borrow() || bypasses_pause(&j.1) => j,
+                            Some(j) => {
+                                held.push_back(j);
+                                continue;
+                            }
+                            None => {
+                                closed = true;
+                                continue;
+                            }
+                        },
+                        Ok(_) = paused.wait_for(|p| !*p), if is_paused => continue,
                     },
                 };
                 let id = match &job {
                     Job::Download(id, _, _) | Job::Install(id, _, _) => *id,
                 };
-                // на паузе задание ждёт здесь и остаётся в `waiting`: `drop_pending` его видит
-                if paused.wait_for(|p| !*p).await.is_err() {
-                    break;
-                }
                 {
                     let mut p = current.lock().unwrap();
                     match p.waiting.iter().position(|(s, _)| *s == seq) {
@@ -330,7 +355,7 @@ impl Queue {
                     Ok(Some(job)) => {
                         // снова ждёт: до события, чтобы смена Apple ID уже видела его в `waiting`
                         current.lock().unwrap().waiting.push((seq, id));
-                        back = Some((seq, job));
+                        held.push_front((seq, job));
                         emit(JobState::Paused);
                     }
                     Ok(None) => {}
@@ -1089,6 +1114,28 @@ mod tests {
         let calls = hub.calls.lock().unwrap();
         assert_eq!(calls.len(), 1, "222 на чужой телефон не ставится");
         assert_eq!(calls[0].0, "UDID-MINE");
+    }
+
+    /// «Все копии» ставит на свой телефон и на паузе: пауза держит только очередь скачиваний.
+    #[tokio::test]
+    async fn copy_install_on_its_phone_bypasses_the_pause() {
+        let r = ok_runner();
+        let (q, t, _, hub) = setup_hub(r.clone(), 10 * GB, Behavior::Ok);
+        let copy = t.path().join("copy.ipa");
+        make_ipa(&copy, "com.example.c", "1.0");
+        let mut rx = q.subscribe();
+        q.pause();
+        q.enqueue(vec![(111, "A".into())]);
+        q.install_saved(333, copy.clone()); // без своего телефона — ждёт паузу, как все
+        q.install_on(-5, copy, "UDID-B".into());
+        let ev = collect_installs(&mut rx, 1).await;
+        assert_eq!(of(&ev, -5).last().unwrap(), &&JobState::Installed);
+        assert!(r.calls.lock().unwrap().is_empty(), "скачивание на паузе не начато");
+        assert_eq!(hub.calls.lock().unwrap().len(), 1, "333 ждёт «Продолжить»");
+        q.resume();
+        let ev = collect(&mut rx, 1).await;
+        assert!(matches!(of(&ev, 111).last().unwrap(), JobState::Saved { .. }));
+        assert_eq!(*r.calls.lock().unwrap(), [111]);
     }
 
     #[test]
