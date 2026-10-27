@@ -23,8 +23,11 @@ pub struct Limits {
     pub login_wait: Duration,
     /// Скачивание: страховка от вечного зависания; простой без роста ловит очередь (`queue`).
     pub download_run: Duration,
-    /// Шаг со связкой ключей (`exclusive`): дольше — значит, macOS спрашивает разрешение.
+    /// Шаг со связкой ключей (`exclusive`): дольше — сдаёмся (`KeychainWaiting`).
     pub keychain_run: Duration,
+    /// Дольше этого шаг со связкой ключей — скорее всего, macOS спрашивает разрешение: подсказка
+    /// человеку (`exclusive_cancelable`), ожидание продолжается.
+    pub keychain_hint: Duration,
     /// Очередь шага со связкой ключей.
     pub keychain_wait: Duration,
 }
@@ -35,7 +38,8 @@ pub const LIMITS: Limits = Limits {
     login_run: Duration::from_secs(180),
     login_wait: Duration::from_secs(30),
     download_run: Duration::from_secs(4 * 3600),
-    keychain_run: Duration::from_secs(20),
+    keychain_run: Duration::from_secs(180),
+    keychain_hint: Duration::from_secs(20),
     keychain_wait: Duration::from_secs(30),
 };
 
@@ -123,29 +127,49 @@ impl Session {
     /// показал окно разрешения, возможно за окном программы) — `KeychainWaiting`; `f` при этом
     /// доделывается в фоне и держит замок до конца: ipatool не читает вход посреди записи.
     pub async fn exclusive<T: Send + 'static>(&self, f: impl FnOnce() -> T + Send + 'static) -> Result<T, AppError> {
-        self.exclusive_inner(move |_| f(), false).await
+        self.exclusive_inner(move |_| f(), false, &|| {}).await
     }
 
     /// Как `exclusive`, но по истечении срока замок отпускается сразу, а `f` получает отмену
     /// (`true` во флаге): после неё `f` ничего не должен записывать. Для снимка перед входом:
-    /// вход тогда может идти дальше без него.
+    /// вход тогда может идти дальше без него. `on_slow` — один раз через `keychain_hint`, если
+    /// шаг ещё идёт (подсказка про окно macOS); ожидание при этом не прерывается.
     pub async fn exclusive_cancelable<T: Send + 'static>(
         &self,
         f: impl FnOnce(&AtomicBool) -> T + Send + 'static,
+        on_slow: &(dyn Fn() + Send + Sync),
     ) -> Result<T, AppError> {
-        self.exclusive_inner(f, true).await
+        self.exclusive_inner(f, true, on_slow).await
     }
 
     async fn exclusive_inner<T: Send + 'static>(
         &self,
         f: impl FnOnce(&AtomicBool) -> T + Send + 'static,
         release: bool,
+        on_slow: &(dyn Fn() + Send + Sync),
     ) -> Result<T, AppError> {
         let turn = self.turn(self.limits.keychain_wait).await?;
         let cancel = Arc::new(AtomicBool::new(false));
         let c = cancel.clone();
         let mut job = tokio::task::spawn_blocking(move || f(&c));
-        match tokio::time::timeout(self.limits.keychain_run, &mut job).await {
+        let deadline = tokio::time::Instant::now() + self.limits.keychain_run;
+        let early = if self.limits.keychain_hint < self.limits.keychain_run {
+            match tokio::time::timeout(self.limits.keychain_hint, &mut job).await {
+                Ok(done) => Some(done),
+                Err(_) => {
+                    crate::log::write("keychain", &format!("still waiting after {} s (macOS permission dialog?)", self.limits.keychain_hint.as_secs()));
+                    on_slow();
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        let outcome = match early {
+            Some(done) => Ok(done),
+            None => tokio::time::timeout_at(deadline, &mut job).await,
+        };
+        match outcome {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => std::panic::resume_unwind(e.into_panic()),
             Err(_) => {
@@ -425,7 +449,7 @@ mod tests {
 
     fn short() -> Limits {
         let ms = Duration::from_millis;
-        Limits { quick_run: ms(100), quick_wait: ms(100), login_run: ms(100), login_wait: ms(100), download_run: ms(300), keychain_run: ms(100), keychain_wait: ms(100) }
+        Limits { quick_run: ms(100), quick_wait: ms(100), login_run: ms(100), login_wait: ms(100), download_run: ms(300), keychain_run: ms(100), keychain_hint: ms(50), keychain_wait: ms(100) }
     }
 
     #[tokio::test]

@@ -364,6 +364,7 @@ async fn refresh(st: &AppState) {
 // Шаги входа пишутся в журнал (адрес маской): следующее зависание будет видно, на каком шаге.
 #[tauri::command]
 pub async fn login(
+    app: AppHandle,
     state: State<'_, AppState>,
     email: String,
     password: String,
@@ -379,7 +380,11 @@ pub async fn login(
     if before.is_some() {
         crate::log::write("login", &format!("{who}: saving previous session"));
     }
-    crate::accounts::prepare_login(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false))
+    // окно разрешения macOS: подсказка экрану входа, ожидание идёт дальше
+    let hint = || {
+        let _ = app.emit("login_note", AppError::KeychainWaiting.user_text());
+    };
+    crate::accounts::prepare_login(&state.session, &state.sessions, before.as_deref(), &email, skip_save.unwrap_or(false), &hint)
         .await
         .map_err(|e| ui("login", e))?;
     crate::log::write("login", &format!("{who}: asking Apple"));

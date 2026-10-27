@@ -136,3 +136,15 @@ export function unknownAccountNote(r: { unknown_account: boolean }): string | nu
 export function errorText(e: UiError): string {
   return e.ref_code ? `${e.text} Код ${e.ref_code} — подробности в журнале («Открыть журнал» внизу слева).` : e.text;
 }
+
+/** Через сколько секунд «Входим…» показать, что Apple бывает медленным. */
+export const LOGIN_SLOW_AFTER_S = 10;
+
+/** Подпись под «Входим…», когда ждём дольше `LOGIN_SLOW_AFTER_S`; раньше — ничего. */
+export function loginWaitNote(seconds: number): string | null {
+  return seconds >= LOGIN_SLOW_AFTER_S ? "Apple иногда долго отвечает при первом входе — подождите до минуты." : null;
+}
+
+/** Подсказка у поля кода 2FA. */
+export const CODE_HINT =
+  "Код приходит на iPhone или Mac с этим Apple ID, иногда с задержкой. Нет кода — на iPhone: Настройки → ваше имя → Вход и безопасность → Получить код проверки.";

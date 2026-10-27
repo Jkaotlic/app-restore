@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { errorText, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, unknownAccountNote, canProceed, chooserNote, installsToIphone, showSkip, doneText, installCaption, isFinished, jobView, otherIdText, phoneView, purchasesProgressText, versionLine } from "./labels";
+import { CODE_HINT, errorText, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, unknownAccountNote, canProceed, chooserNote, installsToIphone, showSkip, doneText, installCaption, isFinished, jobView, otherIdText, phoneView, purchasesProgressText, versionLine } from "./labels";
 import type { JobDto, PhoneDto } from "./types";
 
 const err = { code: "device_locked", text: "Разблокируйте iPhone и нажмите «Доверять»", retryable: false };
@@ -240,5 +240,17 @@ describe("errorText", () => {
     );
     expect(errorText({ code: "bad_link", text: "x", retryable: false, ref_code: null })).toBe("x");
     expect(errorText({ code: "unknown", text: "y", retryable: false })).toBe("y");
+  });
+});
+
+describe("login waiting", () => {
+  it("after ~10 s says Apple can be slow, before that nothing", () => {
+    expect(loginWaitNote(3)).toBeNull();
+    expect(loginWaitNote(10)).toBe("Apple иногда долго отвечает при первом входе — подождите до минуты.");
+  });
+  it("code hint tells where the code comes from", () => {
+    expect(CODE_HINT).toBe(
+      "Код приходит на iPhone или Mac с этим Apple ID, иногда с задержкой. Нет кода — на iPhone: Настройки → ваше имя → Вход и безопасность → Получить код проверки.",
+    );
   });
 });

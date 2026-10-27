@@ -1,7 +1,8 @@
 import { asUiError, call, go, refreshSidebar, register, safe, state, targetPhone } from "../app";
 import { h } from "../dom";
 import { offersSkipSave, skipSaveNote } from "../copies";
-import { afterLoginScreen, sameFromMatch, errorText } from "../labels";
+import { listen } from "@tauri-apps/api/event";
+import { CODE_HINT, LOGIN_SLOW_AFTER_S, afterLoginScreen, errorText, loginWaitNote, sameFromMatch } from "../labels";
 import type { LoginDto } from "../types";
 import { resetForAccount } from "./accounts";
 import { checkAccount } from "./phone";
@@ -22,7 +23,7 @@ register("login", () => {
     h("input", { attrs: { inputmode: "numeric", maxlength: "1", autocomplete: "one-time-code", "aria-label": `Цифра ${i + 1} из ${DIGITS}` } }),
   );
   const codeLabel = h("span", { text: "Код с iPhone" });
-  const codeBlock = h("div", { class: "field" }, codeLabel, h("div", { class: "code" }, ...boxes));
+  const codeBlock = h("div", { class: "field" }, codeLabel, h("div", { class: "code" }, ...boxes), h("small", { class: "note", text: CODE_HINT }));
   codeBlock.hidden = true;
 
   const message = h("p", { class: "error", attrs: { role: "alert", "aria-live": "polite" } });
@@ -44,6 +45,13 @@ register("login", () => {
   });
   const skipBox = h("div", {}, skipNote, skipBtn);
   skipBox.hidden = true;
+  /** Пока идёт вход: «Apple долго отвечает» и подсказка про окно Связки ключей (`login_note`). */
+  const waitNote = h("p", { class: "note", attrs: { "aria-live": "polite" } });
+  waitNote.hidden = true;
+  function note(text: string | null): void {
+    waitNote.textContent = text ?? "";
+    waitNote.hidden = !text;
+  }
 
   const code = () => boxes.map((b) => b.value).join("");
 
@@ -97,8 +105,17 @@ register("login", () => {
     const skip = skipSave;
     skipSave = false;
     skipBox.hidden = true;
+    note(null);
+    const slow = setTimeout(() => note(loginWaitNote(LOGIN_SLOW_AFTER_S)), LOGIN_SLOW_AFTER_S * 1000);
+    const unlisten = await listen<string>("login_note", ({ payload }) => note(payload)).catch(() => () => undefined);
+    const done = () => {
+      clearTimeout(slow);
+      unlisten();
+      note(null);
+    };
     try {
       const res = await call<LoginDto>("login", { email: email.value.trim(), password: password.value, code: withCode ? code() : null, skipSave: skip });
+      done();
       password.value = "";
       const acc = { email: res.email, name: res.name };
       for (const id of res.dropped) state.jobs.delete(id);
@@ -118,6 +135,7 @@ register("login", () => {
       go(afterLoginScreen(switched, m));
       return;
     } catch (err) {
+      done();
       const ui = asUiError(err);
       if (ui.code === "auth_code_required") {
         codeBlock.hidden = false;
@@ -149,6 +167,7 @@ register("login", () => {
     h("label", { class: "field" }, h("span", { text: "Пароль" }), password),
     codeBlock,
     message,
+    waitNote,
     skipBox,
     h(
       "div",

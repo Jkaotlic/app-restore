@@ -521,8 +521,13 @@ async fn quiet<T: Send + 'static>(session: &Session, f: impl FnOnce() -> T + Sen
 /// `SaveSessionFailed` — хранилище отказало (например, «Запретить» в окне macOS);
 /// `KeychainWaiting` — окно разрешения ждёт ответа, снимок отменён; `Busy` — очередь к ipatool.
 pub async fn save_current(session: &Session, sessions: &Arc<Sessions>, email: &str) -> Result<(), AppError> {
+    save_current_hinted(session, sessions, email, &|| {}).await
+}
+
+/// `save_current`; `on_slow` — подсказка про окно macOS, пока ждём связку ключей.
+pub async fn save_current_hinted(session: &Session, sessions: &Arc<Sessions>, email: &str, on_slow: &(dyn Fn() + Send + Sync)) -> Result<(), AppError> {
     let (s, e) = (sessions.clone(), email.to_string());
-    match session.exclusive_cancelable(move |cancel| s.save_unless(&e, cancel)).await {
+    match session.exclusive_cancelable(move |cancel| s.save_unless(&e, cancel), on_slow).await {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(err)) => {
             crate::log::write("save session", &err);
@@ -536,14 +541,22 @@ pub async fn save_current(session: &Session, sessions: &Arc<Sessions>, email: &s
 /// В другой Apple ID без снимка нельзя: ipatool его затрёт — ошибка, интерфейс предложит
 /// «Войти без сохранения» (`skip_save`): прежний адрес остаётся в списке «нужен вход».
 /// В тот же Apple ID сбой снимка не мешает.
-pub async fn prepare_login(session: &Session, sessions: &Arc<Sessions>, current: Option<&str>, target: &str, skip_save: bool) -> Result<(), AppError> {
+/// `on_slow` — связка ключей молчит дольше `keychain_hint`: подсказать про окно macOS.
+pub async fn prepare_login(
+    session: &Session,
+    sessions: &Arc<Sessions>,
+    current: Option<&str>,
+    target: &str,
+    skip_save: bool,
+    on_slow: &(dyn Fn() + Send + Sync),
+) -> Result<(), AppError> {
     let Some(cur) = current else { return Ok(()) };
     if skip_save {
         crate::log::write("login", &format!("previous session of {} not saved (user chose to go on)", crate::device::mask_email(cur)));
         sessions.mark_unsaved(cur);
         return Ok(());
     }
-    match save_current(session, sessions, cur).await {
+    match save_current_hinted(session, sessions, cur, on_slow).await {
         Err(e) if !same_id(cur, target) => Err(e),
         _ => Ok(()),
     }
@@ -582,7 +595,7 @@ pub async fn switch_to_with(session: &Session, sessions: &Arc<Sessions>, current
             {
                 return UseOutcome { restored: true, account: Some(acc), kept: false, error: None };
             }
-        } else if let Err(e) = prepare_login(session, sessions, Some(cur), email, skip_save).await {
+        } else if let Err(e) = prepare_login(session, sessions, Some(cur), email, skip_save, &|| {}).await {
             return kept(Some(e));
         }
     }
@@ -1107,6 +1120,7 @@ mod tests {
         let ms = std::time::Duration::from_millis;
         crate::ipatool::session::Limits {
             keychain_run: ms(100),
+            keychain_hint: ms(30),
             keychain_wait: ms(100),
             login_wait: ms(100),
             ..crate::ipatool::session::LIMITS
@@ -1118,21 +1132,21 @@ mod tests {
         let r = Arc::new(FakeRunner::new(vec![]));
         let e = env(None, CHUNK_MAC);
         e.ipatool_as(b"token-me", None);
-        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false).await, Ok(()));
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false, &|| {}).await, Ok(()));
         assert!(e.has_blob(ME));
         // сохранить не вышло: в другой Apple ID — отказ, в тот же — можно
         let e = env(None, CHUNK_MAC);
         e.ipatool_as(b"token-me", None);
         e.store.fail_sets.store(true, Ordering::SeqCst);
-        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false).await, Err(AppError::SaveSessionFailed));
-        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), "ME@example.com", false).await, Ok(()));
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false, &|| {}).await, Err(AppError::SaveSessionFailed));
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), "ME@example.com", false, &|| {}).await, Ok(()));
         // «Войти без сохранения»: ничего не пишем, прежний — «нужен вход»
         e.s.remember(ME);
-        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, true).await, Ok(()));
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, true, &|| {}).await, Ok(()));
         assert_eq!(e.s.known(), vec![(ME.to_string(), false)]);
         // у ipatool нет входа: сохранять нечего, не тупик
         let e = env(None, CHUNK_MAC);
-        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false).await, Ok(()));
+        assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false, &|| {}).await, Ok(()));
         assert!(r.calls().is_empty());
     }
 
@@ -1144,13 +1158,30 @@ mod tests {
         e.ipatool_as(b"token-me", None);
         *e.auth.read_hang.lock().unwrap() = Some(std::time::Duration::from_millis(400));
         let t = std::time::Instant::now();
-        assert_eq!(prepare_login(&s, &e.s, Some(ME), OTHER, false).await, Err(AppError::KeychainWaiting));
+        assert_eq!(prepare_login(&s, &e.s, Some(ME), OTHER, false, &|| {}).await, Err(AppError::KeychainWaiting));
         assert!(t.elapsed() < std::time::Duration::from_millis(350), "не ждём окно бесконечно");
         // замок отпущен сразу: ipatool идёт, а поздний ответ связки ключей ничего не запишет
         assert!(s.info().await.unwrap().is_some());
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         assert!(!e.has_blob(ME), "отменённый снимок не записан");
-        assert_eq!(prepare_login(&s, &e.s, Some(ME), OTHER, true).await, Ok(()));
+        assert_eq!(prepare_login(&s, &e.s, Some(ME), OTHER, true, &|| {}).await, Ok(()));
+    }
+
+    /// Окно macOS ответили не сразу: подсказка приходит, пока ждём, а снимок всё равно сохраняется.
+    #[tokio::test]
+    async fn slow_keychain_gets_a_hint_not_a_failure() {
+        let r = Arc::new(FakeRunner::new(vec![]));
+        let s = session(&r).with_limits(crate::ipatool::session::Limits { keychain_run: std::time::Duration::from_secs(5), ..fast_limits() });
+        let e = env(None, CHUNK_MAC);
+        e.ipatool_as(b"token-me", None);
+        *e.auth.read_hang.lock().unwrap() = Some(std::time::Duration::from_millis(200));
+        let hinted = std::sync::atomic::AtomicU32::new(0);
+        let hint = || {
+            hinted.fetch_add(1, Ordering::SeqCst);
+        };
+        assert_eq!(prepare_login(&s, &e.s, Some(ME), OTHER, false, &hint).await, Ok(()));
+        assert_eq!(hinted.load(Ordering::SeqCst), 1, "одна подсказка");
+        assert!(e.has_blob(ME));
     }
 
     #[tokio::test]
