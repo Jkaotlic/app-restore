@@ -1002,3 +1002,16 @@ label.app {
   line-height: 16px;
   vertical-align: 1px;
 }
+
+/* «Готово»: общий прогресс и «Пауза» */
+.overall {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.overall .eta {
+  font-size: 17px;
+  font-weight: 500;
+  color: var(--muted);
+}

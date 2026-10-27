@@ -1,5 +1,6 @@
 import { asUiError, call, go, refreshSidebar, register, safe, state, targetIsIphone, targetPhone, type Job } from "../app";
 import { h } from "../dom";
+import { resumeBanner } from "./resume";
 import { batchText, dropMessages, mergePending, runBatch } from "../drop";
 import { HELP_STEPS, type HelpAction } from "../help";
 import { purchasesProgressText, errorText } from "../labels";
@@ -1064,6 +1065,7 @@ register("choose", () => {
       "div",
       { class: "choose-top" },
       heading,
+      resumeBanner(),
       h("label", { class: "searchbox" }, searchIcon(), search),
       h("p", { class: "hint", text: "Ищет в каталоге, ваших покупках, на телефоне и в App Store, в том числе по прежним названиям." }),
       helpLink,

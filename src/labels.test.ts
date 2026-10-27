@@ -8,6 +8,12 @@ describe("jobView", () => {
   it("queued", () => {
     expect(jobView({ kind: "queued" }, null)).toEqual({ text: "В очереди", bar: 0, retry: false });
   });
+  it("Apple asks to wait, and paused", () => {
+    expect(jobView({ kind: "waiting", seconds: 10 }, null)).toEqual({ text: "Apple просит подождать, повтор через 10 с", bar: "indeterminate", retry: false });
+    expect(jobView({ kind: "paused" }, null)).toEqual({ text: "На паузе", bar: null, retry: false });
+    expect(isFinished({ kind: "paused" })).toBe(false);
+    expect(isFinished({ kind: "waiting", seconds: 2 })).toBe(false);
+  });
   it("downloading shows megabytes and an indeterminate bar", () => {
     expect(jobView({ kind: "downloading", bytes: 0 }, null)).toEqual({ text: "Скачано 0 МБ", bar: "indeterminate", retry: false });
     expect(jobView({ kind: "downloading", bytes: 157 * 1024 * 1024 + 300_000 }, null).text).toBe("Скачано 157 МБ");

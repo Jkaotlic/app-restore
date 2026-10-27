@@ -124,7 +124,24 @@ export type JobDto =
   | { kind: "saved" }
   | { kind: "installing"; percent: number }
   | { kind: "installed" }
-  | { kind: "failed"; error: UiError; saved: boolean };
+  | { kind: "failed"; error: UiError; saved: boolean }
+  /** Apple ответил 429/503: повтор скачивания через `seconds`. */
+  | { kind: "waiting"; seconds: number }
+  /** «Пауза» оборвала скачивание: после «Продолжить» начнётся заново. */
+  | { kind: "paused" };
+
+/** Незавершённое задание прошлого запуска (`pending_jobs`). */
+export interface PendingJobDto {
+  track_id: number;
+  name: string;
+  download_only: boolean;
+}
+
+/** Итог «Продолжить» (`resume_pending`). */
+export interface ResumeDto {
+  jobs: PendingJobDto[];
+  run: RunDto | null;
+}
 
 export interface JobEvent {
   track_id: number;

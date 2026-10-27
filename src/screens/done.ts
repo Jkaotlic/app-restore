@@ -1,6 +1,7 @@
-import { go, openLibraryButton, register, safe, state, targetPhone, type Job } from "../app";
+import { call, go, openLibraryButton, register, safe, state, targetPhone, type Job } from "../app";
 import { h } from "../dom";
 import { askAppleIdOnDone, doneText, isFinished } from "../labels";
+import { etaMinutes, overallText, remainingBytes, speedMeter } from "../queue";
 import { appleIdQuestion, jobRow, phoneStatus, retryJob } from "./phone";
 
 register("done", () => {
@@ -23,6 +24,20 @@ register("done", () => {
     },
   });
   const back = h("button", { class: "link", text: "Назад", attrs: { type: "button" }, on: { click: () => go("choose") } });
+  // «Пауза»: новые не начинаются, идущее скачивание обрывается и начнётся заново по «Продолжить»
+  const pauseBtn = h("button", {
+    class: "btn ghost small",
+    attrs: { type: "button" },
+    on: {
+      click: safe(async () => {
+        const next = !state.paused;
+        state.paused = next;
+        render();
+        await call(next ? "pause_queue" : "resume_queue");
+      }),
+    },
+  });
+  const overall = h("div", { class: "overall", attrs: { role: "status" } }, big, pauseBtn);
 
   function render() {
     const jobs = [...state.jobs.values()];
@@ -30,9 +45,14 @@ register("done", () => {
     const done = (j: Job) => j.state.kind === "installed" || (!!j.downloadOnly && j.state.kind === "saved");
     const n = jobs.filter(done).length;
     const finished = jobs.length > 0 && jobs.every((j) => isFinished(j.state, j.downloadOnly));
-    big.textContent = `${n} из ${jobs.length}`;
+    // «3 из 12 · осталось ≈ 4 мин»: оценка — по средней скорости скачивания, неизвестна — не показываем
+    const eta = etaMinutes(remainingBytes(jobs), speedMeter.bps);
+    const [count, rest] = overallText(n, jobs.length, eta, state.paused && !finished).split(" · ");
+    big.replaceChildren(count, ...(rest ? [h("span", { class: "eta", text: ` · ${rest}` })] : []));
     big.className = n === jobs.length && finished ? "big-ok" : "big-ok partial";
     again.hidden = !finished;
+    pauseBtn.hidden = finished;
+    pauseBtn.textContent = state.paused ? "Продолжить" : "Пауза";
     // Телефон показываем, пока есть что ставить и ставить некуда (или выбор не сделан).
     const waiting = jobs.some((j) => !isFinished(j.state, j.downloadOnly));
     phoneBox.replaceChildren(...(waiting && !targetPhone() ? [status.el] : []));
@@ -67,10 +87,17 @@ register("done", () => {
   }
 
   render();
+  // пауза могла остаться с прошлого захода на «Готово»
+  void call<boolean>("queue_paused")
+    .then((p) => {
+      state.paused = p;
+      render();
+    })
+    .catch(() => undefined);
   const el = h(
     "div",
     { class: "body" },
-    big,
+    overall,
     h("h2", { text: "Приложения на iPhone" }),
     phoneBox,
     questionBox,

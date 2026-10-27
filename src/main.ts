@@ -4,6 +4,7 @@ import { call, currentScreen, go, refreshSidebar, sessionChecked, startScreen, s
 import { dropMessages, mergePending } from "./drop";
 import { h } from "./dom";
 import { jobInbox } from "./jobs";
+import { speedMeter } from "./queue";
 import "./screens/accounts";
 import "./screens/allcopies";
 import "./screens/choose";
@@ -29,8 +30,15 @@ function dropElsewhere(d: DropDto): void {
 
 async function wire(): Promise<void> {
   await listen<JobEvent>("job", ({ payload }) => {
+    // скорость для «осталось ≈ N мин» — по всем скачиваниям, и до регистрации задания
+    if (payload.state.kind === "downloading") speedMeter.sample(payload.track_id, payload.state.bytes, Date.now());
+    else speedMeter.stop(payload.track_id);
     // неизвестный номер: задание ещё регистрируется (или прошлого захода) — ждёт в jobInbox
     if (jobInbox.apply(state.jobs, payload)) currentScreen()?.onJob?.();
+  });
+  await listen<boolean>("queue_paused", ({ payload }) => {
+    state.paused = payload;
+    currentScreen()?.onJob?.();
   });
   await listen<OwnedEvent>("owned", ({ payload }) => currentScreen()?.onOwned?.(payload));
   await listen<SweepDto>("catalog_check", ({ payload }) => currentScreen()?.onCatalogCheck?.(payload));

@@ -58,6 +58,8 @@ export interface State {
   pickCopy: string | null;
   /** «Другая версия…»: выбранная версия строки по trackId; нет — последняя. */
   versions: Map<number, ChosenVersion>;
+  /** Очередь на «Паузе» (событие `queue_paused`): новые задания не начинаются. */
+  paused: boolean;
 }
 
 let markReady: () => void = () => undefined;
@@ -90,6 +92,7 @@ export const state: State = {
   dropNote: null,
   pickCopy: null,
   versions: new Map(),
+  paused: false,
 };
 
 /** Что экран хочет знать о событиях, пока он на виду. */
