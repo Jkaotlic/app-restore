@@ -1,4 +1,4 @@
-import type { AccountMatchDto, InstallState, JobDto, PhoneDto, PurchasesProgress, RowDto, UiError } from "./types";
+import type { AccountMatchDto, JobDto, PhoneDto, PurchasesProgress, UiError } from "./types";
 
 export interface JobView {
   text: string;
@@ -44,22 +44,6 @@ export function phoneView(p: PhoneDto): { title: string; subtitle: string; isIpa
   const os = p.ios_version ? `${isIpad ? "iPadOS" : "iOS"} ${p.ios_version}` : "";
   const head = isIpad ? "iPad" : "Подключён";
   return { title: p.name, subtitle: os ? `${head}, ${os}` : head, isIpad };
-}
-
-/** «На iPhone: X · Доступно: Y». Без телефона только «Доступно». */
-export function versionLine(r: Pick<RowDto, "installed_version" | "available_version">, withPhone: boolean): string | null {
-  const parts: string[] = [];
-  if (withPhone && r.installed_version !== null) parts.push(`На iPhone: ${r.installed_version || "есть"}`);
-  if (r.available_version) parts.push(`Доступно: ${r.available_version}`);
-  return parts.length ? parts.join(" · ") : null;
-}
-
-/** Подпись состояния на телефоне. */
-export function installCaption(s: InstallState, withPhone: boolean): string | null {
-  if (!withPhone) return null;
-  if (s === "installed") return "Уже стоит на iPhone";
-  if (s === "update_available") return "Есть версия новее";
-  return null;
 }
 
 export function purchasesProgressText(p: PurchasesProgress | null): string {
@@ -125,11 +109,6 @@ export function sameFromMatch(m: AccountMatchDto): boolean | null {
 /** Куда после входа. После «Войти в Apple ID этого iPhone» — сразу на «Выбор», если аккаунт совпал. */
 export function afterLoginScreen(switched: boolean, m: AccountMatchDto | null): "choose" | "phone" {
   return switched && m?.kind === "same" ? "choose" : "phone";
-}
-
-/** Подпись копии, чей Apple ID неизвестен (лежит в «Мои приложения» без папки аккаунта). */
-export function unknownAccountNote(r: { unknown_account: boolean }): string | null {
-  return r.unknown_account ? "Неизвестный Apple ID" : null;
 }
 
 /** Текст ошибки для человека; у неизвестной — код строки журнала и где его открыть. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CODE_HINT, errorText, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, unknownAccountNote, canProceed, chooserNote, installsToIphone, showSkip, doneText, installCaption, isFinished, jobView, otherIdText, phoneView, purchasesProgressText, versionLine } from "./labels";
+import { CODE_HINT, errorText, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
 import type { JobDto, PhoneDto } from "./types";
 
 const err = { code: "device_locked", text: "Разблокируйте iPhone и нажмите «Доверять»", retryable: false };
@@ -82,37 +82,6 @@ describe("phoneView", () => {
   });
   it("missing version", () => {
     expect(phoneView({ ...p, ios_version: "" }).subtitle).toBe("Подключён");
-  });
-});
-
-describe("versionLine", () => {
-  const v = (installed: string | null, available: string | null) => ({ installed_version: installed, available_version: available });
-  it("with a phone: both versions", () => {
-    expect(versionLine(v("12.14.0", "12.15.0"), true)).toBe("На iPhone: 12.14.0 · Доступно: 12.15.0");
-  });
-  it("installed, available not known yet", () => {
-    expect(versionLine(v("12.14.0", null), true)).toBe("На iPhone: 12.14.0");
-  });
-  it("installed without a version string", () => {
-    expect(versionLine(v("", "1.0"), true)).toBe("На iPhone: есть · Доступно: 1.0");
-  });
-  it("not on the phone: only what is available", () => {
-    expect(versionLine(v(null, "12.15.0"), true)).toBe("Доступно: 12.15.0");
-    expect(versionLine(v(null, null), true)).toBeNull();
-  });
-  it("without a phone there is no «На iPhone» part", () => {
-    expect(versionLine(v("12.14.0", "12.15.0"), false)).toBe("Доступно: 12.15.0");
-    expect(versionLine(v("12.14.0", null), false)).toBeNull();
-  });
-});
-
-describe("installCaption", () => {
-  it("installed and update available, only with a phone", () => {
-    expect(installCaption("installed", true)).toBe("Уже стоит на iPhone");
-    expect(installCaption("update_available", true)).toBe("Есть версия новее");
-    expect(installCaption("not_installed", true)).toBeNull();
-    expect(installCaption("unknown", true)).toBeNull();
-    expect(installCaption("installed", false)).toBeNull();
   });
 });
 
@@ -223,13 +192,6 @@ describe("afterLoginScreen", () => {
     expect(afterLoginScreen(true, { kind: "unknown" })).toBe("phone");
     expect(afterLoginScreen(true, null)).toBe("phone");
     expect(afterLoginScreen(false, { kind: "same" })).toBe("phone");
-  });
-});
-
-describe("unknownAccountNote", () => {
-  it("only for copies without a known Apple ID", () => {
-    expect(unknownAccountNote({ unknown_account: true })).toBe("Неизвестный Apple ID");
-    expect(unknownAccountNote({ unknown_account: false })).toBe(null);
   });
 });
 
