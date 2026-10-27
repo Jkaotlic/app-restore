@@ -6,6 +6,7 @@ mod device;
 mod dropped;
 mod errors;
 mod ios_compat;
+mod history;
 mod ipatool;
 mod library;
 mod log;
@@ -35,6 +36,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         // уведомления шлёт только Rust (`commands::notify`): в capabilities интерфейса их нет
         .plugin(tauri_plugin_notification::init())
+        // «История покупок Apple»: единственная команда, доступная странице reportaproblem.apple.com
+        // (capabilities/history.json), — в отдельном плагине, чтобы остальные команды ей были закрыты
+        .plugin(
+            tauri::plugin::Builder::<tauri::Wry>::new("history")
+                .invoke_handler(tauri::generate_handler![commands::history::items])
+                .build(),
+        )
+        .manage(commands::history::HistoryRun::default())
         .setup(|app| {
             // macOS: ~/Library/Logs/<identifier>/, Windows: %LOCALAPPDATA%\<identifier>\logs
             if let Ok(dir) = app.path().app_log_dir() {
@@ -94,6 +103,7 @@ pub fn run() {
             commands::copy_account_match,
             commands::set_source_phone,
             commands::report_to_catalog,
+            commands::history::open_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -13,7 +13,7 @@ import "./screens/login";
 import "./screens/phone";
 import { warningSeen } from "./screens/warning";
 import "./styles.css";
-import type { Account, DropDto, JobEvent, OwnedEvent, PhonesEvent, PurchasesProgress, RowsDto, SweepDto } from "./types";
+import type { Account, DropDto, HistoryOutcome, HistoryProgress, JobEvent, OwnedEvent, PhonesEvent, PurchasesProgress, RowsDto, SweepDto } from "./types";
 
 /** Перетаскивание, когда экран сам его не принимает: копия — на «Все копии» (не с первого
  * экрана-предупреждения), номера ждут «Выбора», ошибки — в боковой панели. */
@@ -53,6 +53,8 @@ async function wire(): Promise<void> {
   });
   await listen<PurchasesProgress>("purchases_progress", ({ payload }) => currentScreen()?.onPurchasesProgress?.(payload));
   await listen<RowsDto>("purchases", ({ payload }) => currentScreen()?.onPurchases?.(payload));
+  await listen<HistoryProgress>("history_progress", ({ payload }) => currentScreen()?.onHistoryProgress?.(payload));
+  await listen<HistoryOutcome>("history", ({ payload }) => currentScreen()?.onHistory?.(payload));
   // окно Связки ключей macOS ждёт ответа (вход, снимок после входа, смена Apple ID); null — всё
   await listen<string | null>("keychain_note", ({ payload }) => {
     state.keychainNote = payload;

@@ -6,7 +6,7 @@ import { showCopiesLink, stepIndex } from "./copies";
 import { pendingNote } from "./drop";
 import { errorText, installsToIphone } from "./labels";
 import type { ChosenVersion } from "./versions";
-import type { AccountEntry, AccountMatchDto, Account, DropDto, JobDto, OwnedEvent, PhoneDto, PurchasesProgress, RowDto, RowsDto, RunDto, SweepDto, UiError } from "./types";
+import type { AccountEntry, AccountMatchDto, Account, DropDto, HistoryOutcome, HistoryProgress, JobDto, OwnedEvent, PhoneDto, PurchasesProgress, RowDto, RowsDto, RunDto, SweepDto, UiError } from "./types";
 
 export type Screen = "warning" | "accounts" | "login" | "choose" | "phone" | "done" | "copies";
 
@@ -105,6 +105,9 @@ export interface Mounted {
   onPhones?(): void;
   onPurchasesProgress?(p: PurchasesProgress): void;
   onPurchases?(rows: RowsDto): void;
+  /** Окно истории покупок Apple: прогресс (`history_progress`) и итог (`history`). */
+  onHistoryProgress?(p: HistoryProgress): void;
+  onHistory?(o: HistoryOutcome): void;
   /** Вход программы сменился сам (событие `account`). */
   onAccount?(): void;
   /** «Проверить весь каталог»: прогресс (событие `catalog_check`). */

@@ -1,8 +1,8 @@
 // «Не нашли приложение?» на «Выборе»: шаги для того, чего нет в списке. Только текст и кнопки-
 // переходы; что делает каждая кнопка, решает экран (`screens/choose.ts`).
 
-/** Куда ведёт кнопка шага: перечитать покупки, список Apple ID, поле ссылки, шаг iPhone. */
-export type HelpAction = { kind: "refresh" | "accounts" | "link" | "phone"; label: string };
+/** Куда ведёт кнопка шага: история покупок Apple, перечитать покупки, список Apple ID, поле ссылки, шаг iPhone. */
+export type HelpAction = { kind: "history" | "refresh" | "accounts" | "link" | "phone"; label: string };
 
 export interface HelpStep {
   title: string;
@@ -11,6 +11,11 @@ export interface HelpStep {
 }
 
 export const HELP_STEPS: HelpStep[] = [
+  {
+    title: "История покупок Apple",
+    text: "Там есть всё, что вы когда-либо скачивали, в том числе скрытое и пропавшее из списка покупок. Войдите своим Apple ID на странице Apple — программа соберёт номера приложений.",
+    action: { kind: "history", label: "Найти всё, что вы скачивали" },
+  },
   {
     title: "Скрытые покупки",
     text: "Скрытое приложение не видно в покупках. На iPhone: App Store → аватар → ваше имя → Скрытые покупки → Показать. Потом обновите покупки здесь.",
