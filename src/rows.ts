@@ -1,5 +1,6 @@
 // Строки экрана «Выбор»: группы, поиск, проверка покупок. Чистые функции, без DOM.
 import type { OwnedEvent, PhoneDto, RowDto, SweepDto, UiError } from "./types";
+import { DOWNLOAD_ONLY_NOTE, tooOldNote, type ChosenVersion } from "./versions";
 
 /** `gone` — Apple больше не отдаёт приложение (`app_gone`): окончательный ответ, как «нет». */
 export type OwnedState = { kind: "checking" } | { kind: "yes" } | { kind: "no" } | { kind: "gone" } | { kind: "error"; error: UiError };
@@ -277,8 +278,16 @@ export type TileTone = "plain" | "muted" | "warn" | "checking" | "retry";
 export type TileLine = { text: string; tone: TileTone; up?: string; note?: string };
 
 /** Вторая строка плитки. `up` — новая версия, её выделяем: «на iPhone 21.3 → 22.1». `retry` — плитка
- * по нажатию повторяет проверку прав. `note` — третья строка рядом с версией («Неизвестный Apple ID», «Есть копия на компьютере»). */
-export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean, withPhone: boolean): TileLine {
+ * по нажатию повторяет проверку прав. `note` — третья строка рядом с версией («Неизвестный Apple ID», «Есть копия на компьютере»).
+ * `phoneIos` — iOS телефона-цели: последней версии нужна новее — «Нужна iOS X, на iPhone Y» (скачать можно).
+ * `chosen` — выбрана другая версия («Другая версия…»). */
+export function tileLine(
+  r: RowDto,
+  s: OwnedState | undefined,
+  toIphone: boolean,
+  withPhone: boolean,
+  opts: { phoneIos?: string | null; chosen?: ChosenVersion | null } = {},
+): TileLine {
   if (r.ipad_only && toIphone) return { text: "только для iPad", tone: "warn" };
   if (r.other_account) return { text: r.purchaser_masked ? `Куплено на другом Apple ID (${r.purchaser_masked})` : "Куплено на другом Apple ID", tone: "warn" };
   if ((r.source === "removed" || r.source === "phone" || r.source === "store") && !r.has_saved_copy) {
@@ -287,6 +296,9 @@ export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean
     if (s.kind === "no") return r.source === "store" ? { text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE } : { text: "Нет на вашем Apple ID", tone: "muted" };
     if (s.kind === "error") return { text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" };
   }
+  if (opts.chosen) return { text: opts.chosen.display ? `версия ${opts.chosen.display} (выбрана)` : "выбрана другая версия", tone: "plain" };
+  const tooOld = toIphone ? tooOldNote(r.min_ios, opts.phoneIos ?? null) : null;
+  if (tooOld) return { text: tooOld, tone: "warn", note: DOWNLOAD_ONLY_NOTE };
   const note = r.unknown_account ? "Неизвестный Apple ID" : r.has_saved_copy ? "Есть копия на компьютере" : undefined;
   const withNote = (l: TileLine): TileLine => (note ? { ...l, note } : l);
   if (withPhone && r.installed_version !== null) {

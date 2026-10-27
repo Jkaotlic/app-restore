@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DOWNLOAD_ONLY_NOTE } from "./versions";
 import {
   addLinkRow,
   applyOwnedRow,
@@ -71,6 +72,7 @@ function row(id: number, name: string, over: Partial<RowDto> = {}): RowDto {
     size_bytes: null,
     other_account: false,
     purchaser_masked: null,
+    min_ios: null,
     ...over,
   };
 }
@@ -338,6 +340,19 @@ describe("tileLine and canSelect", () => {
     expect(tileLine(row(70, "Сила звука", { source: "store" }), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE });
     // копия на компьютере: ставится и без подтверждения прав
     expect(tileLine(cat(1, "А", { has_saved_copy: true, available_version: "16.4" }), { kind: "checking" }, false, true)).toEqual({ text: "доступно 16.4", tone: "plain", note: "Есть копия на компьютере" });
+  });
+  it("too new for the phone iOS: says so, still selectable; chosen version wins", () => {
+    const tb = row(80, "Т-Банк", { min_ios: "17.0", available_version: "7.1" });
+    expect(tileLine(tb, yes, true, true, { phoneIos: "16.1" })).toEqual({ text: "Нужна iOS 17.0, на iPhone 16.1", tone: "warn", note: DOWNLOAD_ONLY_NOTE });
+    expect(canSelect(tb, yes, true)).toBe(true);
+    // не на iPhone (iPad или без телефона) и подходящая iOS — как обычно
+    expect(tileLine(tb, yes, false, true, { phoneIos: "16.1" })).toEqual({ text: "доступно 7.1", tone: "plain" });
+    expect(tileLine(tb, yes, true, true, { phoneIos: "17.2" })).toEqual({ text: "доступно 7.1", tone: "plain" });
+    // права ещё проверяются — сначала они
+    expect(tileLine(cat(81, "К", { min_ios: "17.0" }), { kind: "checking" }, true, true, { phoneIos: "16.1" }).tone).toBe("checking");
+    // выбрана другая версия: минимальная iOS последней к ней не относится
+    expect(tileLine(tb, yes, true, true, { phoneIos: "16.1", chosen: { id: "9", display: "6.0" } })).toEqual({ text: "версия 6.0 (выбрана)", tone: "plain" });
+    expect(tileLine(tb, yes, true, true, { chosen: { id: "9", display: null } })).toEqual({ text: "выбрана другая версия", tone: "plain" });
   });
   it("versions: newer, installed, available", () => {
     const vtb = cat(2, "ВТБ", { installed_version: "21.3", available_version: "22.1", install_state: "update_available" });

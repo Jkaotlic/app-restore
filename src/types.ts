@@ -51,8 +51,33 @@ export interface RowDto {
   other_account: boolean;
   /** Маска покупателя у `other_account` («ma***@example.com»); полного адреса нет. */
   purchaser_masked: string | null;
+  /** Минимальная iOS того, что поставим (последняя версия, App Store); null — неизвестно. */
+  min_ios: string | null;
   /** Только у `store`, ставит интерфейс: запрос, на который App Store вернул строку. */
   store_term?: string;
+}
+
+/** Версия в «Другая версия…» (`app_versions`). `display` null — Apple не успел ответить. */
+export interface VersionDto {
+  id: string;
+  display: string | null;
+  /** «ГГГГ-ММ-ДД». */
+  released: string | null;
+}
+
+/** Страница версий от новой к старой; `more` — есть старше; `error` — Apple перестал отвечать. */
+export interface VersionsDto {
+  versions: VersionDto[];
+  more: boolean;
+  error: UiError | null;
+}
+
+/** Итог `find_version`: самая новая версия, вышедшая до следующей iOS после телефона. */
+export interface FoundVersionDto {
+  version: VersionDto | null;
+  next_ios: number | null;
+  none_older: boolean;
+  error: UiError | null;
 }
 
 export type InstallState = "not_installed" | "installed" | "update_available" | "unknown";

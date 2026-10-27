@@ -48,7 +48,8 @@ import {
   type OwnedMap,
   type TileLine,
 } from "../rows";
-import type { DropDto, InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, SweepDto, UiError } from "../types";
+import type { DropDto, FoundVersionDto, InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, SweepDto, UiError, VersionDto, VersionsDto } from "../types";
+import { canPickVersion, foundMessage, splitStart, startVersions, tooOldNote, versionLabel } from "../versions";
 
 export function appIcon(r: RowDto): HTMLElement {
   const { letter, color } = iconFor(r);
@@ -125,6 +126,14 @@ register("choose", () => {
 
   /** Плитки на экране по trackId и кнопки «Выбрать все в группе»: выбор меняется на месте. */
   const tiles = new Map<number, HTMLButtonElement>();
+  /** «Другая версия…» под плитками: видна у выбранных строк, которые скачиваются по номеру. */
+  const versionLinks = new Map<number, HTMLButtonElement>();
+  /** Открытые списки версий по trackId: переживают перерисовку списка. */
+  type Panel = { loading: boolean; versions: VersionDto[]; more: boolean; error: string | null; found: string | null };
+  const panels = new Map<number, Panel>();
+  const panelEls = new Map<number, HTMLElement>();
+  /** iOS телефона-цели, если ставим на iPhone: «Нужна iOS X, на iPhone Y». */
+  const phoneIos = () => (toIphone() ? (targetPhone()?.ios_version ?? null) : null);
   const groupLinks: { key: GroupKey; rows: RowDto[]; btn: HTMLButtonElement }[] = [];
   /** Строки «Загружаем покупки: страница N из M» на экране: прогресс меняет только их текст. */
   const progressEls: HTMLElement[] = [];
@@ -265,8 +274,10 @@ register("choose", () => {
     }
   }
 
+  const lineOf = (r: RowDto) => tileLine(r, owned.get(r.track_id), toIphone(), withPhone, { phoneIos: phoneIos(), chosen: state.versions.get(r.track_id) ?? null });
+
   function tileEl(r: RowDto): HTMLButtonElement {
-    const line = tileLine(r, owned.get(r.track_id), toIphone(), withPhone);
+    const line = lineOf(r);
     const enabled = selectable(r);
     const ver = h("span", { class: `ver ${line.tone}`, text: line.text });
     if (line.up) ver.append(h("span", { class: "up", text: line.up }));
@@ -456,7 +467,11 @@ register("choose", () => {
     const byId = new Map(rows.map((r) => [r.track_id, r]));
     for (const [id, tile] of tiles) {
       const r = byId.get(id);
-      if (r) applyA11y(tile, r, tileLine(r, owned.get(id), toIphone(), withPhone), selectable(r));
+      if (r) applyA11y(tile, r, lineOf(r), selectable(r));
+    }
+    for (const [id, link] of versionLinks) {
+      const r = byId.get(id);
+      link.hidden = !r || !selected.has(id) || !canPickVersion(r, owned.get(id));
     }
     for (const g of groupLinks) {
       const pick = groupPick(g.rows, selectable, selected);
@@ -510,7 +525,9 @@ register("choose", () => {
     for (const r of items) {
       const t = tileEl(r);
       tiles.set(r.track_id, t);
-      grid.append(r.source === "phone" ? phoneTile(r, t) : isNewRow(r, state.newIds) ? newTile(r, t) : t);
+      const cell = r.source === "phone" ? phoneTile(r, t) : isNewRow(r, state.newIds) ? newTile(r, t) : t;
+      grid.append(withVersionLink(r, cell));
+      if (panels.has(r.track_id)) grid.append(panelEl(r));
     }
     return h(
       "section",
@@ -539,8 +556,137 @@ register("choose", () => {
     return parts;
   }
 
+  /** «Другая версия…» под плиткой (у плитки-кнопки — своя обёртка: кнопку в кнопку нельзя). */
+  function withVersionLink(r: RowDto, cell: HTMLElement): HTMLElement {
+    if (r.track_id <= 0 || r.other_account || r.source === "saved") return cell;
+    const link = h("button", {
+      class: "link",
+      text: "Другая версия…",
+      attrs: { type: "button", title: `Выбрать, какую версию «${r.name}» скачать` },
+      on: { click: safe(() => openVersions(r)) },
+    });
+    link.hidden = true;
+    versionLinks.set(r.track_id, link);
+    if (cell.classList.contains("tilewrap")) {
+      cell.querySelector(".tile-actions")?.prepend(link);
+      return cell;
+    }
+    return h("div", { class: "tilewrap" }, cell, h("div", { class: "tile-actions" }, link));
+  }
+
+  /** Список версий под плиткой: «Последняя», версии от новой к старой, «Ещё» и «Найти подходящую». */
+  function panelEl(r: RowDto): HTMLElement {
+    const id = r.track_id;
+    const p = panels.get(id)!;
+    const chosenId = state.versions.get(id)?.id ?? null;
+    const pick = (v: VersionDto | null) => {
+      if (v) state.versions.set(id, { id: v.id, display: v.display });
+      else state.versions.delete(id);
+      if (!selected.has(id) && selectable(r)) setSelected(id, true);
+      renderTile(id);
+      refreshPanel(id);
+      syncSelection();
+    };
+    const option = (text: string, v: VersionDto | null) =>
+      h("button", { class: "veropt", text, attrs: { type: "button", "aria-pressed": String((v?.id ?? null) === chosenId) }, on: { click: () => pick(v) } });
+    const parts: HTMLElement[] = [h("p", { class: "note", text: `Какую версию «${r.name}» скачать` })];
+    const list = h("div", { class: "veropts", attrs: { role: "group", "aria-label": `Версии ${r.name}` } }, option("Последняя (по умолчанию)", null), ...p.versions.map((v) => option(versionLabel(v), v)));
+    parts.push(list);
+    if (p.loading) parts.push(h("p", { class: "loading" }, "Спрашиваем Apple…", h("span", { class: "spin", attrs: { "aria-hidden": "true" } })));
+    if (p.error) parts.push(h("p", { class: "error", text: p.error, attrs: { role: "alert" } }));
+    if (p.found) parts.push(h("p", { class: "note", text: p.found, attrs: { role: "status" } }));
+    const actions = h("div", { class: "tile-actions" });
+    if (p.more && !p.loading) actions.append(h("button", { class: "link", text: "Ещё старше", attrs: { type: "button" }, on: { click: safe(() => loadVersions(r, p.versions[p.versions.length - 1]?.id ?? null)) } }));
+    const ios = phoneIos();
+    if (ios && !p.loading) actions.append(h("button", { class: "link", text: `Найти подходящую для iOS ${ios}`, attrs: { type: "button" }, on: { click: safe(() => findVersion(r, ios)) } }));
+    actions.append(
+      h("button", {
+        class: "link",
+        text: "Закрыть",
+        attrs: { type: "button" },
+        on: {
+          click: () => {
+            panels.delete(id);
+            panelEls.get(id)?.remove();
+            panelEls.delete(id);
+            versionLinks.get(id)?.focus();
+          },
+        },
+      }),
+    );
+    parts.push(actions);
+    const el = h("div", { class: "verpanel" }, ...parts);
+    panelEls.set(id, el);
+    return el;
+  }
+
+  function refreshPanel(id: number) {
+    const old = panelEls.get(id);
+    const r = rows.find((x) => x.track_id === id);
+    if (!old || !r || !panels.has(id)) return;
+    const focused = old.contains(document.activeElement) ? (document.activeElement as HTMLElement).textContent : null;
+    const el = panelEl(r);
+    old.replaceWith(el);
+    if (focused) [...el.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === focused)?.focus();
+  }
+
+  async function openVersions(r: RowDto) {
+    if (panels.has(r.track_id)) return;
+    panels.set(r.track_id, { loading: true, versions: [], more: false, error: null, found: null });
+    renderList();
+    panelEls.get(r.track_id)?.querySelector<HTMLButtonElement>(".veropt")?.focus();
+    await loadVersions(r, null);
+  }
+
+  /** Страница версий у Apple (не больше 10 запросов за раз; 429 — остановка и объяснение). */
+  async function loadVersions(r: RowDto, before: string | null) {
+    const p = panels.get(r.track_id);
+    if (!p) return;
+    p.loading = true;
+    p.error = null;
+    refreshPanel(r.track_id);
+    try {
+      const d = await call<VersionsDto>("app_versions", { trackId: r.track_id, before });
+      p.versions = [...p.versions, ...d.versions.filter((v) => !p.versions.some((x) => x.id === v.id))];
+      p.more = d.more;
+      p.error = d.error ? errorText(d.error) : null;
+    } catch (e) {
+      p.error = errorText(asUiError(e));
+    }
+    p.loading = false;
+    refreshPanel(r.track_id);
+  }
+
+  /** «Найти подходящую»: самая новая версия, вышедшая до следующей iOS; найденная сразу выбрана. */
+  async function findVersion(r: RowDto, ios: string) {
+    const p = panels.get(r.track_id);
+    if (!p) return;
+    p.loading = true;
+    p.found = null;
+    p.error = null;
+    refreshPanel(r.track_id);
+    try {
+      const f = await call<FoundVersionDto>("find_version", { trackId: r.track_id });
+      p.found = foundMessage(f, ios);
+      if (f.version) {
+        const v = f.version;
+        if (!p.versions.some((x) => x.id === v.id)) p.versions = [...p.versions, v];
+        state.versions.set(r.track_id, { id: v.id, display: v.display });
+        if (!selected.has(r.track_id) && selectable(r)) setSelected(r.track_id, true);
+        renderTile(r.track_id);
+      }
+    } catch (e) {
+      p.error = errorText(asUiError(e));
+    }
+    p.loading = false;
+    refreshPanel(r.track_id);
+    syncSelection();
+  }
+
   function renderList() {
     tiles.clear();
+    versionLinks.clear();
+    panelEls.clear();
     groupLinks.length = 0;
     progressEls.length = 0;
     if (!loaded) {
@@ -835,7 +981,8 @@ register("choose", () => {
     takePending();
   }
 
-  /** «Вернуть» или «Только скачать» (`downloadOnly`: в «Мои приложения», на телефон не ставить). */
+  /** «Вернуть» или «Только скачать» (`downloadOnly`: в «Мои приложения», на телефон не ставить).
+   * «Вернуть»: последняя версия, которой нужна iOS новее телефона, только скачивается. */
   async function start(downloadOnly: boolean) {
     const items = chosen();
     if (items.length === 0) return;
@@ -844,14 +991,27 @@ register("choose", () => {
     onlyBtn.disabled = true;
     started = true;
     state.choice = null;
-    for (const r of items) {
-      state.jobs.set(r.track_id, { track_id: r.track_id, name: r.name, row: r, state: { kind: "queued" }, fromSaved: null, downloadOnly } as Job);
+    const ios = phoneIos();
+    const tooOld = (r: RowDto) => !state.versions.has(r.track_id) && tooOldNote(r.min_ios, ios) !== null;
+    const split = downloadOnly ? { install: [], downloadOnly: items } : splitStart(items, tooOld);
+    const batches: [RowDto[], boolean][] = [
+      [split.install, false],
+      [split.downloadOnly, true],
+    ];
+    for (const [batch, only] of batches) {
+      if (!batch.length) continue;
+      for (const r of batch) {
+        state.jobs.set(r.track_id, { track_id: r.track_id, name: r.name, row: r, state: { kind: "queued" }, fromSaved: null, downloadOnly: only } as Job);
+      }
+      const ids = batch.map((r) => r.track_id);
+      try {
+        state.run = await call<RunDto>("start", { items: batch.map((r) => [r.track_id, r.name]), sameAppleId: state.sameAppleId ?? true, downloadOnly: only, versions: startVersions(ids, state.versions) });
+      } catch {
+        // start в Rust не падает; на всякий случай строки остаются «В очереди»
+      }
     }
-    try {
-      state.run = await call<RunDto>("start", { items: items.map((r) => [r.track_id, r.name]), sameAppleId: state.sameAppleId ?? true, downloadOnly });
-    } catch {
-      // start в Rust не падает; на всякий случай строки остаются «В очереди»
-    }
+    // выбор версии — на один запуск: Rust помнит его для «Повторить»
+    for (const r of items) state.versions.delete(r.track_id);
     go("done");
   }
 

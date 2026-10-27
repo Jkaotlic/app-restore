@@ -9,6 +9,7 @@ import type { AccountEntry, ForgetDto, UseAccountDto } from "../types";
 export function resetForAccount(dropped: number[]): void {
   for (const id of dropped) state.jobs.delete(id);
   state.choice = null;
+  state.versions = new Map();
   state.accountMatch = null;
   state.sameAppleId = null;
   state.run = null;

@@ -105,6 +105,7 @@ export function copyRow(c: CopyDto): RowDto {
     size_bytes: null,
     other_account: false,
     purchaser_masked: null,
+    min_ios: null,
   };
 }
 

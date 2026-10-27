@@ -181,6 +181,7 @@ async function switchAccount(onRefused: (text: string) => void): Promise<void> {
   state.run = null;
   state.account = null;
   state.choice = null;
+  state.versions = new Map();
   state.accountMatch = null;
   state.sameAppleId = null;
   state.loginPrefill = prefill;

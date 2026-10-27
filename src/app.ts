@@ -5,6 +5,7 @@ import { h } from "./dom";
 import { showCopiesLink, stepIndex } from "./copies";
 import { pendingNote } from "./drop";
 import { errorText, installsToIphone } from "./labels";
+import type { ChosenVersion } from "./versions";
 import type { AccountEntry, AccountMatchDto, Account, DropDto, JobDto, OwnedEvent, PhoneDto, PurchasesProgress, RowDto, RowsDto, RunDto, SweepDto, UiError } from "./types";
 
 export type Screen = "warning" | "accounts" | "login" | "choose" | "phone" | "done" | "copies";
@@ -55,6 +56,8 @@ export interface State {
   dropNote: string | null;
   /** Копия, перетащенная в окно: «Все копии» откроются с ней. */
   pickCopy: string | null;
+  /** «Другая версия…»: выбранная версия строки по trackId; нет — последняя. */
+  versions: Map<number, ChosenVersion>;
 }
 
 let markReady: () => void = () => undefined;
@@ -86,6 +89,7 @@ export const state: State = {
   pendingLinks: [],
   dropNote: null,
   pickCopy: null,
+  versions: new Map(),
 };
 
 /** Что экран хочет знать о событиях, пока он на виду. */

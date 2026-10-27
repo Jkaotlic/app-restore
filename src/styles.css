@@ -903,6 +903,45 @@ label.app {
 .group-hint {
   margin: 8px 0 4px;
 }
+/* «Другая версия…»: список версий во всю ширину сетки под плиткой */
+.verpanel {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1.5px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  padding: 10px 12px;
+}
+.verpanel .note,
+.verpanel .error,
+.verpanel .loading {
+  margin: 0;
+}
+.veropts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.veropt {
+  font-size: 12.5px;
+  border: 1.5px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.veropt[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+.veropt:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
 /* «Куплено на другом Apple ID (ma***@…)»: маска адреса видна целиком */
 .tile .ver.warn {
   white-space: normal;
