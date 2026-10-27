@@ -198,6 +198,16 @@ describe("groupPick", () => {
     expect(groupPick(list, ok, new Set([1, 2]))).toEqual({ ids: [1, 2], allOn: true });
     expect(groupPick([row(3, "c", { ipad_only: true })], ok, new Set())).toEqual({ ids: [], allOn: false });
   });
+  it("skips apps already installed at the same version, keeps ones with a newer version", () => {
+    const list = [
+      row(1, "стоит", { installed_version: "2.0", available_version: "2.0", install_state: "installed" }),
+      row(2, "новее", { installed_version: "1.0", available_version: "2.0", install_state: "update_available" }),
+      row(3, "нет", {}),
+      row(4, "с телефона", { source: "phone", installed_version: "14.2", install_state: "installed" }),
+    ];
+    expect(groupPick(list, () => true, new Set())).toEqual({ ids: [2, 3], allOn: false });
+    expect(groupPick(list, () => true, new Set([2, 3]))).toEqual({ ids: [2, 3], allOn: true });
+  });
 });
 
 describe("emptySearchText", () => {

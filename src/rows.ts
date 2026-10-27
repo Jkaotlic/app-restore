@@ -110,9 +110,10 @@ export function foundText(rows: RowDto[], chip: Chip, query: string, withPhone =
   return `Найдено ${visibleGroups(rows, chip, query, withPhone).reduce((n, g) => n + g.rows.length, 0)}`;
 }
 
-/** «Выбрать все в группе»: что выбирается и выбрано ли уже всё. */
+/** «Выбрать все в группе»: что выбирается и выбрано ли уже всё. Уже стоящие той же версии пропускаются. */
 export function groupPick(rows: RowDto[], selectable: (r: RowDto) => boolean, selected: Set<number>): { ids: number[]; allOn: boolean } {
-  const ids = rows.filter(selectable).map((r) => r.track_id);
+  // уже стоит та же (или новее) версия — переставлять незачем, как и при отметке по умолчанию
+  const ids = rows.filter((r) => selectable(r) && r.install_state !== "installed").map((r) => r.track_id);
   return { ids, allOn: ids.length > 0 && ids.every((id) => selected.has(id)) };
 }
 
