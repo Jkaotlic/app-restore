@@ -101,6 +101,8 @@ pub struct RowDto {
     /// Строка «С этого iPhone», купленная на другом Apple ID: не выбрать, «Куплено на другом Apple ID».
     /// Самого адреса в строке нет.
     pub other_account: bool,
+    /// Маска покупателя (`ma***@example.com`) у строки `other_account`; полного адреса нигде нет.
+    pub purchaser_masked: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -109,6 +111,8 @@ pub struct RowsDto {
     pub ru_check_failed: bool,
     /// Покупки не загрузились (например, сломан вход): в списке каталог и сохранённые копии.
     pub purchases_error: Option<UiError>,
+    /// udid телефона-источника группы «С этого iPhone»; `null` — источника нет (или ещё не выбран).
+    pub source_udid: Option<String>,
 }
 
 /// `target_iphone`: ставим на iPhone — строки «только для iPad» не отмечаются.
@@ -119,6 +123,7 @@ pub fn row_dto(r: AppRow, target_iphone: bool) -> RowDto {
         aliases: r.aliases,
         category: r.category,
         other_account: false,
+        purchaser_masked: None,
         ipad_only: r.ipad_only,
         installed_version: r.installed_version,
         available_version: r.available_version,
@@ -142,7 +147,7 @@ pub fn row_dto(r: AppRow, target_iphone: bool) -> RowDto {
 }
 
 pub fn rows_dto(r: Rows, target_iphone: bool) -> RowsDto {
-    RowsDto { rows: r.rows.into_iter().map(|x| row_dto(x, target_iphone)).collect(), ru_check_failed: r.ru_check_failed, purchases_error: None }
+    RowsDto { rows: r.rows.into_iter().map(|x| row_dto(x, target_iphone)).collect(), ru_check_failed: r.ru_check_failed, purchases_error: None, source_udid: None }
 }
 
 /// Приложение на телефоне для интерфейса: {bundle_id, name, version, item_id}.
@@ -166,6 +171,9 @@ pub struct RowCtx<'a> {
     pub sizes: &'a HashMap<i64, u64>,
     /// Apple ID программы: с ним сравнивается покупатель строк «С этого iPhone».
     pub account: Option<&'a str>,
+    /// Что стоит на телефоне-источнике группы «С этого iPhone» (любой подключённый, не только цель);
+    /// `None` — группы нет. Версия «на iPhone» и состояние строк группы — по цели (`installed`).
+    pub source: Option<&'a [InstalledApp]>,
 }
 
 /// Размер для строки: у записей каталога главнее копия (её и поставим), у прочих — Lookup.
@@ -208,7 +216,7 @@ pub fn catalog_rows(ctx: &RowCtx) -> RowsDto {
             d
         })
         .collect();
-    RowsDto { rows: with_sizes(with_unknown(rows, ctx), ctx), ru_check_failed: false, purchases_error: None }
+    RowsDto { rows: with_sizes(with_unknown(rows, ctx), ctx), ru_check_failed: false, purchases_error: None, source_udid: None }
 }
 
 /// Дописывает строки копий неизвестного Apple ID: только с trackId, которого нет ни в строках,
@@ -270,7 +278,7 @@ pub fn phone_candidates(installed: &[InstalledApp], taken: &HashSet<i64>) -> Vec
 /// Иначе права проверяет `check_owned`, а ставится она скачиванием по trackId, как каталог.
 /// Сами не отмечаются: приложение уже стоит.
 pub fn phone_rows(ctx: &RowCtx, taken: &HashSet<i64>, present_ru: &HashSet<i64>) -> Vec<RowDto> {
-    let Some(installed) = ctx.installed else { return vec![] };
+    let Some(installed) = ctx.source else { return vec![] };
     let mut rows: Vec<RowDto> = phone_candidates(installed, taken)
         .into_iter()
         .filter(|id| !present_ru.contains(id))
@@ -280,13 +288,29 @@ pub fn phone_rows(ctx: &RowCtx, taken: &HashSet<i64>, present_ru: &HashSet<i64>)
     rows
 }
 
+/// Группа «С этого iPhone» для выбранного источника (`set_source_phone`): `phone_rows` с размерами.
+pub fn source_rows(ctx: &RowCtx, taken: &HashSet<i64>, present_ru: &HashSet<i64>) -> Vec<RowDto> {
+    with_sizes(phone_rows(ctx, taken, present_ru), ctx)
+}
+
+/// Версия приложения строки «С этого iPhone» на цели установки; `None` — не стоит или цели нет.
+fn target_version(ctx: &RowCtx, track_id: i64, bundle_id: &str) -> Option<String> {
+    ctx.installed.and_then(|l| crate::catalog::find_installed(l, track_id, bundle_id)).map(|a| a.version.clone())
+}
+
+/// Покупатель приложения с телефона — не Apple ID программы: его маска. Сравнение без регистра и
+/// пробелов по краям; покупатель неизвестен (или пуст) или программа без входа — `None`.
+pub fn other_purchaser(purchaser: Option<&str>, account: Option<&str>) -> Option<String> {
+    let p = purchaser?.trim();
+    let me = account?;
+    (!p.is_empty() && !crate::accounts::same_id(p, me)).then(|| mask_email(p))
+}
+
 fn phone_row(track_id: i64, a: &InstalledApp, ctx: &RowCtx) -> RowDto {
-    let other_account = match (a.purchaser.as_deref(), ctx.account) {
-        (Some(p), Some(me)) => !crate::accounts::same_id(p, me),
-        _ => false,
-    };
+    let purchaser_masked = other_purchaser(a.purchaser.as_deref(), ctx.account);
+    let other_account = purchaser_masked.is_some();
     let available_version = ctx.latest.get(&track_id).cloned();
-    let installed_version = Some(a.version.clone());
+    let installed_version = target_version(ctx, track_id, &a.bundle_id);
     let name = if a.name.trim().is_empty() { a.bundle_id.clone() } else { a.name.clone() };
     RowDto {
         track_id,
@@ -309,6 +333,7 @@ fn phone_row(track_id: i64, a: &InstalledApp, ctx: &RowCtx) -> RowDto {
         category: None,
         size_bytes: None,
         other_account,
+        purchaser_masked,
     }
 }
 
@@ -355,6 +380,7 @@ pub fn link_row(track_id: i64, ctx: &RowCtx, looked_up: Option<(String, String)>
         category: None,
         size_bytes: ctx.sizes.get(&track_id).copied(),
         other_account: false,
+        purchaser_masked: None,
     }
 }
 
@@ -387,10 +413,10 @@ pub fn owned_event(track_id: i64, r: &Result<(bool, Option<String>), AppError>, 
     };
     // строка «С этого iPhone»: уже стоит, сама не отмечается
     if row.is_none()
-        && let Some(a) = ctx.installed.and_then(|l| l.iter().find(|a| a.item_id == Some(track_id)))
+        && let Some(a) = ctx.source.and_then(|l| l.iter().find(|a| a.item_id == Some(track_id)))
     {
         let available_version = ctx.latest.get(&track_id).cloned().or_else(|| r.as_ref().ok().and_then(|x| x.1.clone()));
-        let install_state = crate::catalog::install_state(Some(&a.version), available_version.as_deref());
+        let install_state = crate::catalog::install_state(target_version(ctx, track_id, &a.bundle_id).as_deref(), available_version.as_deref());
         return OwnedEvent { track_id, owned, error, available_version, install_state, checked: false };
     }
     let available_version = row.as_ref().and_then(|x| x.available_version.clone()).or_else(|| r.as_ref().ok().and_then(|x| x.1.clone()));
@@ -776,6 +802,72 @@ pub fn use_account_dto(out: crate::accounts::UseOutcome, email: &str) -> UseAcco
     UseAccountDto { restored: out.restored, account: out.account, prefill, dropped: vec![], error: None, can_skip_save: out.save_failed }
 }
 
+/// Сколько строк «С этого iPhone» дал бы каждый телефон: кандидаты, которых нет в магазине RU.
+pub fn source_counts(lists: &[(String, Vec<InstalledApp>)], taken: &HashSet<i64>, present_ru: &HashSet<i64>) -> HashMap<String, usize> {
+    lists.iter().map(|(udid, apps)| (udid.clone(), phone_candidates(apps, taken).iter().filter(|id| !present_ru.contains(id)).count())).collect()
+}
+
+/// Телефон-источник по умолчанию из подключённых (`phones`, порядок опроса): цель, если у неё есть
+/// строки группы; иначе первый другой с ними, иначе первый другой; цели нет — первый подключённый.
+pub fn default_source(phones: &[String], target: Option<&str>, counts: &HashMap<String, usize>) -> Option<String> {
+    let has = |u: &str| counts.get(u).is_some_and(|n| *n > 0);
+    let Some(t) = target.filter(|t| phones.iter().any(|p| p == t)) else { return phones.first().cloned() };
+    if has(t) {
+        return Some(t.to_string());
+    }
+    let others = || phones.iter().filter(|p| p.as_str() != t);
+    others().find(|p| has(p)).or_else(|| others().next()).cloned().or_else(|| Some(t.to_string()))
+}
+
+/// Выбор человека (`set_source_phone`) главнее, пока этот телефон подключён.
+pub fn resolve_source(chosen: Option<&str>, phones: &[String], default: Option<String>) -> Option<String> {
+    chosen.filter(|c| phones.iter().any(|p| p == c)).map(String::from).or(default)
+}
+
+/// Начало адреса «Сообщить в каталог». Открывается только адрес, который начинается ровно с него.
+pub const REPORT_PREFIX: &str = "https://github.com/Jkaotlic/app-restore/issues/new?";
+
+/// Значение параметра адреса: всё, кроме `A-Z a-z 0-9 - _ . ~`, — `%XX` по байтам UTF-8.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// Текст с телефона для issue: без управляющих символов, пробелы сжаты, не длиннее `max` символов.
+fn issue_text(s: &str, max: usize) -> String {
+    let clean: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    clean.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(max).collect()
+}
+
+/// «Сообщить в каталог»: заполненный issue на GitHub. Только номер, имя, версия и bundle id
+/// приложения — ни Apple ID, ни имени человека, ни udid, ни путей.
+pub fn report_url(track_id: i64, name: &str, version: &str, bundle_id: &str) -> String {
+    let name = issue_text(name, 120);
+    let (version, bundle_id) = (issue_text(version, 40), issue_text(bundle_id, 160));
+    let title = format!("Каталог: {name} (id{track_id})");
+    let body = format!(
+        "Приложение стоит на телефоне, но его нет в каталоге и в российском App Store.\n\n\
+         - Номер (trackId): {track_id}\n\
+         - Название: {name}\n\
+         - Версия на телефоне: {version}\n\
+         - Bundle ID: {bundle_id}\n\
+         - Ссылка: https://apps.apple.com/ru/app/id{track_id}\n"
+    );
+    format!("{REPORT_PREFIX}title={}&body={}", url_encode(&title), url_encode(&body))
+}
+
+/// Можно ли открыть `url` для «Сообщить в каталог»: ровно наш префикс и без пробелов и управляющих.
+pub fn is_report_url(url: &str) -> bool {
+    url.starts_with(REPORT_PREFIX) && url.len() > REPORT_PREFIX.len() && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -902,6 +994,7 @@ mod tests {
                 category: Some("other"),
                 size_bytes: None,
                 other_account: false,
+                purchaser_masked: None,
             }
         );
         assert_eq!(
@@ -923,6 +1016,8 @@ mod tests {
         target_iphone: bool,
         sizes: HashMap<i64, u64>,
         account: Option<String>,
+        /// Телефон-источник «С этого iPhone»; `None` — тот же, что цель (`installed`).
+        source: Option<Vec<InstalledApp>>,
     }
     impl Ctx {
         fn new(catalog: Vec<RemovedApp>) -> Self {
@@ -936,6 +1031,7 @@ mod tests {
                 target_iphone: false,
                 sizes: HashMap::new(),
                 account: None,
+                source: None,
             }
         }
         fn get(&self) -> RowCtx<'_> {
@@ -949,6 +1045,7 @@ mod tests {
                 target_iphone: self.target_iphone,
                 sizes: &self.sizes,
                 account: self.account.as_deref(),
+                source: self.source.as_deref().or(self.installed.as_deref()),
             }
         }
     }
@@ -1588,5 +1685,156 @@ mod tests {
         assert!(err.can_skip_save);
         let waiting = use_account_dto(UseOutcome { error: Some(AppError::KeychainWaiting), unsettled: true, ..Default::default() }, "other@example.com");
         assert!(!waiting.can_skip_save, "повисла запись снимка, не сохранение — «без сохранения» не поможет");
+    }
+
+    #[test]
+    fn other_purchaser_is_case_insensitive_trimmed_and_masked() {
+        assert_eq!(other_purchaser(Some(" User@Example.COM "), Some("user@example.com")), None);
+        assert_eq!(other_purchaser(Some("other@example.com"), Some("user@example.com")).as_deref(), Some("ot***@example.com"));
+        assert_eq!(other_purchaser(Some("  "), Some("user@example.com")), None, "пустой покупатель — неизвестен");
+        assert_eq!(other_purchaser(None, Some("user@example.com")), None);
+        assert_eq!(other_purchaser(Some("other@example.com"), None), None, "без входа сравнивать не с чем");
+    }
+
+    #[test]
+    fn foreign_phone_row_carries_only_the_mask() {
+        let mut c = Ctx::new(vec![]);
+        c.account = Some("user@example.com".into());
+        c.installed = Some(vec![bought_by("com.example.foreign", "3.0", 90, Some("other@example.com")), bought_by("com.example.mine", "1.0", 91, Some(" USER@example.com "))]);
+        let d = purchase_rows(&c.get(), vec![], Some(&HashSet::new()));
+        let foreign = d.rows.iter().find(|r| r.track_id == 90).unwrap();
+        assert!(foreign.other_account);
+        assert_eq!(foreign.purchaser_masked.as_deref(), Some("ot***@example.com"));
+        let json = serde_json::to_string(foreign).unwrap();
+        assert!(!json.contains("other@"), "{json}");
+        let mine = d.rows.iter().find(|r| r.track_id == 91).unwrap();
+        assert_eq!((mine.other_account, mine.purchaser_masked.as_deref()), (false, None));
+    }
+
+    #[test]
+    fn source_phone_rows_show_target_state() {
+        // источник — старый телефон, цель — новый: версия «на iPhone» и состояние по цели
+        let mut c = Ctx::new(vec![]);
+        c.installed = Some(vec![inst("com.example.both", "2.0", Some(61))]);
+        c.source = Some(vec![bought_by("com.example.gone", "1.0", 60, None), bought_by("com.example.both", "1.5", 61, None)]);
+        c.latest = [(60, "1.1".to_string())].into();
+        let d = purchase_rows(&c.get(), vec![], Some(&HashSet::new()));
+        let phone: Vec<&RowDto> = d.rows.iter().filter(|r| r.source == "phone").collect();
+        assert_eq!(phone.len(), 2);
+        let gone = phone.iter().find(|r| r.track_id == 60).unwrap();
+        assert_eq!((gone.version.as_str(), gone.installed_version.as_deref(), gone.install_state), ("1.0", None, InstallState::NotInstalled));
+        let both = phone.iter().find(|r| r.track_id == 61).unwrap();
+        assert_eq!((both.version.as_str(), both.installed_version.as_deref()), ("1.5", Some("2.0")));
+        // без цели (без iPhone) группа строится по источнику
+        c.installed = None;
+        let d = purchase_rows(&c.get(), vec![], Some(&HashSet::new()));
+        assert_eq!(d.rows.iter().filter(|r| r.source == "phone").count(), 2);
+        // событие `owned` строки источника: не отмечается, состояние по цели
+        c.installed = Some(vec![]);
+        let e = owned_event(60, &Ok((true, Some("1.1".into()))), &c.get());
+        assert_eq!((e.install_state, e.checked), (InstallState::NotInstalled, false));
+    }
+
+    #[test]
+    fn source_rows_apply_sizes() {
+        let mut c = Ctx::new(vec![]);
+        c.source = Some(vec![bought_by("com.example.gone", "1.0", 60, None), bought_by("com.example.live", "1.0", 61, None)]);
+        c.sizes = [(60, 5_000_000)].into();
+        let rows = source_rows(&c.get(), &HashSet::new(), &[61].into());
+        assert_eq!(rows.iter().map(|r| (r.track_id, r.size_bytes)).collect::<Vec<_>>(), [(60, Some(5_000_000))]);
+    }
+
+    #[test]
+    fn source_counts_per_phone() {
+        let lists = vec![
+            ("NEW".to_string(), vec![inst("a", "1", Some(1)), inst("b", "1", Some(2))]),
+            ("OLD".to_string(), vec![inst("c", "1", Some(3)), inst("d", "1", Some(4)), inst("e", "1", None)]),
+        ];
+        // 1 — в каталоге, 2 и 4 — есть в магазине RU
+        let counts = source_counts(&lists, &[1].into(), &[2, 4].into());
+        assert_eq!(counts, [("NEW".to_string(), 0), ("OLD".to_string(), 1)].into());
+    }
+
+    #[test]
+    fn source_default_target_first_if_it_has_candidates() {
+        let phones = ["NEW".to_string(), "OLD".to_string(), "PAD".to_string()];
+        let counts = |n: usize, o: usize, p: usize| -> HashMap<String, usize> { [("NEW".into(), n), ("OLD".into(), o), ("PAD".into(), p)].into() };
+        assert_eq!(default_source(&phones, Some("NEW"), &counts(2, 5, 0)).as_deref(), Some("NEW"));
+        assert_eq!(default_source(&phones, Some("NEW"), &counts(0, 5, 0)).as_deref(), Some("OLD"));
+        // у цели пусто — первый другой с кандидатами, а нет таких — просто первый другой
+        assert_eq!(default_source(&phones, Some("NEW"), &counts(0, 0, 3)).as_deref(), Some("PAD"));
+        assert_eq!(default_source(&phones, Some("NEW"), &counts(0, 0, 0)).as_deref(), Some("OLD"));
+        assert_eq!(default_source(&phones[..1], Some("NEW"), &counts(0, 0, 0)).as_deref(), Some("NEW"));
+        // цель не выбрана или отключена — первый подключённый
+        assert_eq!(default_source(&phones, None, &counts(0, 0, 0)).as_deref(), Some("NEW"));
+        assert_eq!(default_source(&phones[1..], Some("NEW"), &HashMap::new()).as_deref(), Some("OLD"));
+        assert_eq!(default_source(&[], Some("NEW"), &HashMap::new()), None);
+    }
+
+    #[test]
+    fn source_choice_wins_while_connected() {
+        let phones = ["NEW".to_string(), "OLD".to_string()];
+        assert_eq!(resolve_source(Some("OLD"), &phones, Some("NEW".into())).as_deref(), Some("OLD"));
+        assert_eq!(resolve_source(Some("GONE"), &phones, Some("NEW".into())).as_deref(), Some("NEW"));
+        assert_eq!(resolve_source(None, &phones, Some("NEW".into())).as_deref(), Some("NEW"));
+    }
+
+    fn decode(s: &str) -> String {
+        let b = s.as_bytes();
+        let mut out = vec![];
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'%' {
+                out.push(u8::from_str_radix(&s[i + 1..i + 3], 16).unwrap());
+                i += 3;
+            } else {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn report_url_has_only_app_fields() {
+        let url = report_url(1234567890, "Сбер Онлайн & Ко", "15.2.1", "ru.example.app");
+        assert!(url.starts_with(REPORT_PREFIX) && is_report_url(&url), "{url}");
+        let query = &url[REPORT_PREFIX.len()..];
+        let params: Vec<(&str, String)> = query.split('&').map(|kv| kv.split_once('=').map(|(k, v)| (k, decode(v))).unwrap()).collect();
+        assert_eq!(params.iter().map(|(k, _)| *k).collect::<Vec<_>>(), ["title", "body"]);
+        let (title, body) = (&params[0].1, &params[1].1);
+        assert!(title.contains("Сбер Онлайн & Ко") && title.contains("1234567890"), "{title}");
+        for part in ["1234567890", "Сбер Онлайн & Ко", "15.2.1", "ru.example.app", "https://apps.apple.com/ru/app/id1234567890"] {
+            assert!(body.contains(part), "{part} в {body}");
+        }
+        assert!(!body.contains('@') && !body.to_lowercase().contains("apple id") && !body.contains("udid"), "{body}");
+        // всё, кроме безопасных символов, закодировано: ни пробелов, ни & внутри значений
+        assert!(query.chars().all(|c| c.is_ascii_alphanumeric() || "-_.~%=&".contains(c)), "{query}");
+        assert_eq!(query.matches('&').count(), 1);
+    }
+
+    #[test]
+    fn report_url_cleans_name() {
+        let long = "Я".repeat(300);
+        let url = report_url(1, &format!(" {long}\n\u{7}x "), "", "");
+        let title = decode(url[REPORT_PREFIX.len()..].split('&').next().unwrap().trim_start_matches("title="));
+        assert!(!title.contains('\n') && !title.contains('\u{7}'), "{title}");
+        assert!(title.chars().count() < 200, "{}", title.chars().count());
+    }
+
+    #[test]
+    fn report_url_check_is_strict() {
+        assert!(is_report_url("https://github.com/Jkaotlic/app-restore/issues/new?title=a&body=b"));
+        for bad in [
+            "https://github.com/Jkaotlic/app-restore/issues/new",
+            "https://github.com/Jkaotlic/app-restore/issues/newx?title=a",
+            "https://github.com/Jkaotlic/app-restore/issues/new/../../../evil?a",
+            "http://github.com/Jkaotlic/app-restore/issues/new?title=a",
+            "https://github.com/Jkaotlic/app-restore/issues/new?title=a b",
+            "https://github.com.evil.example.com/Jkaotlic/app-restore/issues/new?x",
+            "https://github.com/Jkaotlic/other/issues/new?title=a",
+        ] {
+            assert!(!is_report_url(bad), "{bad}");
+        }
     }
 }

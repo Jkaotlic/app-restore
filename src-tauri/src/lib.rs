@@ -65,6 +65,8 @@ pub fn run() {
             commands::pick_ipa,
             commands::install_copy,
             commands::copy_account_match,
+            commands::set_source_phone,
+            commands::report_to_catalog,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

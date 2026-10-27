@@ -11,6 +11,10 @@
 //! Аккаунты (`list_accounts`, `use_account`, `forget_account`): снимки сессий ipatool в
 //! Keychain / Credential Manager (`accounts`). Копии (`all_copies`, `pick_ipa`, `install_copy`,
 //! `copy_account_match`): любая ipa из «Мои приложения» на любой телефон, без входа тоже.
+//!
+//! «С этого iPhone» строится по телефону-источнику — любому подключённому (`set_source_phone`),
+//! цель установки та же. «Сообщить в каталог» (`report_to_catalog`): issue на GitHub, адрес
+//! строит и проверяет Rust.
 pub mod logic;
 
 use crate::accounts::{Sessions, account_list, same_id};
@@ -61,6 +65,13 @@ fn ui(context: &str, e: AppError) -> UiError {
     e.into()
 }
 
+/// Телефон-источник «С этого iPhone»: выбор человека и тот, по которому построена группа.
+#[derive(Default)]
+struct SourcePick {
+    chosen: Option<String>,
+    current: Option<String>,
+}
+
 #[derive(Default)]
 struct Phones {
     /// Выбран человеком (`choose_phone`); главнее автоматического выбора.
@@ -96,6 +107,14 @@ pub struct AppState {
     sizes: Mutex<HashMap<i64, u64>>,
     /// Что стоит на телефоне (udid, список) из `installed_apps`; `None` — без телефона.
     installed: Mutex<Option<(String, Vec<InstalledApp>)>>,
+    /// Что стоит на каждом прочитанном телефоне (udid → список): источник группы «С этого iPhone»
+    /// может быть любым подключённым, не только целью.
+    phone_lists: Mutex<HashMap<String, Vec<InstalledApp>>>,
+    /// Телефон-источник «С этого iPhone».
+    source: Mutex<SourcePick>,
+    /// trackId строк «Выбора» вне группы «С этого iPhone» после последней загрузки покупок:
+    /// по ним `set_source_phone` отбирает строки другого источника. `None` — покупки не загружены.
+    phone_taken: Mutex<Option<HashSet<i64>>>,
     /// Последний итог `phone_account` (udid, сравнение): для подстановки адреса в `switch_account`.
     phone_match: Mutex<Option<(String, AccountMatch)>>,
     /// Последнее состояние каждого задания: для «Повторить» и установки после подключения телефона.
@@ -154,6 +173,9 @@ impl AppState {
             latest: Mutex::new(HashMap::new()),
             sizes: Mutex::new(HashMap::new()),
             installed: Mutex::new(None),
+            phone_lists: Mutex::new(HashMap::new()),
+            source: Mutex::new(SourcePick::default()),
+            phone_taken: Mutex::new(None),
             phone_match: Mutex::new(None),
             jobs: Mutex::new(HashMap::new()),
             names: Mutex::new(HashMap::new()),
@@ -176,13 +198,15 @@ impl AppState {
         let sizes = self.sizes.lock().unwrap().clone();
         let account = self.current_email();
         let installed = self.installed.lock().unwrap().clone().map(|(_, apps)| apps);
+        let source = self.source.lock().unwrap().current.clone();
+        let source = source.and_then(|u| self.phone_lists.lock().unwrap().get(&u).cloned());
         let saved = self.library.list();
         let unknown = self.library.list_unknown();
         let target_iphone = {
             let p = self.phones.lock().unwrap();
             p.target.as_deref().is_some_and(|t| p.last.iter().any(|d| d.udid == t && d.device_class == "iPhone"))
         };
-        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, target_iphone, sizes: &sizes, account: account.as_deref() })
+        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, target_iphone, sizes: &sizes, account: account.as_deref(), source: source.as_deref() })
     }
 
     /// Что стоит на телефоне, с запоминанием. Во время установки телефон не трогаем — прошлый список.
@@ -192,7 +216,33 @@ impl AppState {
         }
         let apps = self.hub.installed(udid).await?;
         *self.installed.lock().unwrap() = Some((udid.to_string(), apps.clone()));
+        self.phone_lists.lock().unwrap().insert(udid.to_string(), apps.clone());
         Ok(apps)
+    }
+
+    /// Что стоит на любом телефоне (источник «С этого iPhone»): цель установки (`installed`) не
+    /// меняется. Во время установки телефон не трогаем — прошлый список.
+    async fn installed_any(&self, udid: &str) -> Result<Vec<InstalledApp>, AppError> {
+        if !should_probe(&self.jobs.lock().unwrap()) {
+            let cached = self.phone_lists.lock().unwrap().get(udid).cloned();
+            return Ok(cached.unwrap_or_else(|| cached_installed(self.installed.lock().unwrap().as_ref(), udid)));
+        }
+        let apps = self.hub.installed(udid).await?;
+        self.phone_lists.lock().unwrap().insert(udid.to_string(), apps.clone());
+        Ok(apps)
+    }
+
+    /// Списки приложений всех подключённых телефонов (порядок опроса). Не прочитался — без него.
+    async fn connected_lists(&self) -> Vec<(String, Vec<InstalledApp>)> {
+        let udids: Vec<String> = self.phones.lock().unwrap().last.iter().map(|p| p.udid.clone()).collect();
+        let mut out = vec![];
+        for u in udids {
+            match self.installed_any(&u).await {
+                Ok(apps) => out.push((u, apps)),
+                Err(e) => log_err("source phone", &e),
+            }
+        }
+        out
     }
 
     /// Выход из Apple ID: отменить идущие проверки и забыть права и версии прошлого аккаунта.
@@ -209,6 +259,7 @@ impl AppState {
         self.purchases_gen.fetch_add(1, Ordering::SeqCst);
         self.owned.lock().unwrap().clear();
         self.latest.lock().unwrap().clear();
+        *self.phone_taken.lock().unwrap() = None;
     }
 
     /// Смена аккаунта: убрать ждущие задания (`Saved` и `Queued`, которые очередь ещё не взяла;
@@ -541,8 +592,12 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
                 // одним Lookup и покупки, и кандидаты «С этого iPhone» (нет в каталоге и покупках)
                 let mut ids: Vec<i64> = purchases.iter().map(|a| a.id).collect();
                 let taken: HashSet<i64> = st.catalog.read().await.iter().map(|r| r.track_id).chain(ids.iter().copied()).collect();
-                let installed = st.installed.lock().unwrap().clone().map(|(_, apps)| apps).unwrap_or_default();
-                ids.extend(phone_candidates(&installed, &taken));
+                // источник группы — любой подключённый телефон: кандидаты всех в том же Lookup
+                let lists = st.connected_lists().await;
+                let mut seen: HashSet<i64> = ids.iter().copied().collect();
+                for (_, apps) in &lists {
+                    ids.extend(phone_candidates(apps, &taken).into_iter().filter(|id| seen.insert(*id)));
+                }
                 let present = match st.lookup.present_in(&ids, "ru").await {
                     Ok(p) => {
                         st.sizes.lock().unwrap().extend(p.sizes.iter().map(|(k, v)| (*k, *v)));
@@ -553,7 +608,21 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
                         None
                     }
                 };
-                st.with_ctx(|ctx| purchase_rows(ctx, purchases, present.as_ref().map(|p| &p.ids))).await
+                let udids: Vec<String> = lists.iter().map(|(u, _)| u.clone()).collect();
+                let target = st.phones.lock().unwrap().target.clone();
+                // без Lookup группы нет, и считать строки по телефонам не по чему: цель или первый
+                let default = match &present {
+                    Some(p) => default_source(&udids, target.as_deref(), &source_counts(&lists, &taken, &p.ids)),
+                    None => target.filter(|t| udids.contains(t)).or_else(|| udids.first().cloned()),
+                };
+                {
+                    let mut s = st.source.lock().unwrap();
+                    s.current = resolve_source(s.chosen.as_deref(), &udids, default);
+                }
+                let mut rows = st.with_ctx(|ctx| purchase_rows(ctx, purchases, present.as_ref().map(|p| &p.ids))).await;
+                rows.source_udid = st.source.lock().unwrap().current.clone();
+                *st.phone_taken.lock().unwrap() = Some(rows.rows.iter().filter(|r| r.source != "phone").map(|r| r.track_id).collect());
+                rows
             }
             Err(e) => {
                 // Без покупок список всё равно нужен: каталог и сохранённые копии ставятся и без входа.
@@ -591,6 +660,37 @@ pub async fn phone_account(state: State<'_, AppState>, udid: String) -> Result<A
     let dto = account_match_dto(&m);
     *state.phone_match.lock().unwrap() = Some((udid, m));
     Ok(dto)
+}
+
+/// «Телефон-источник»: группа «С этого iPhone» по другому подключённому телефону. Цель установки
+/// не меняется. Отдаёт новые строки группы (после загрузки покупок; до неё — ошибка).
+#[tauri::command]
+pub async fn set_source_phone(state: State<'_, AppState>, udid: String) -> Result<Vec<RowDto>, UiError> {
+    let udid = copy_device(&state.phones.lock().unwrap().last, &udid).map_err(|e| ui("set_source_phone", e))?;
+    let taken = state.phone_taken.lock().unwrap().clone();
+    let taken = taken.ok_or_else(|| ui("set_source_phone", AppError::Unknown { detail: "purchases not loaded".into() }))?;
+    let apps = state.installed_any(&udid).await.map_err(|e| ui("set_source_phone", e))?;
+    let present = state.lookup.present_in(&phone_candidates(&apps, &taken), "ru").await.map_err(|e| ui("set_source_phone", e))?;
+    state.sizes.lock().unwrap().extend(present.sizes.iter().map(|(k, v)| (*k, *v)));
+    {
+        let mut s = state.source.lock().unwrap();
+        (s.chosen, s.current) = (Some(udid.clone()), Some(udid));
+    }
+    Ok(state.with_ctx(|ctx| source_rows(ctx, &taken, &present.ids)).await)
+}
+
+/// «Сообщить в каталог»: заполненный issue на GitHub в браузере. Адрес строит и проверяет Rust
+/// (`report_url`, `is_report_url`): разрешения opener у интерфейса не расширяются.
+#[tauri::command]
+pub fn report_to_catalog(app: AppHandle, track_id: i64, name: String, version: String, bundle_id: String) -> Result<(), UiError> {
+    use tauri_plugin_opener::OpenerExt;
+    let url = report_url(track_id, &name, &version, &bundle_id);
+    if !is_report_url(&url) {
+        return Err(ui("report_to_catalog", AppError::Unknown { detail: "report url rejected".into() }));
+    }
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| ui("report_to_catalog", AppError::Unknown { detail: format!("open url: {e}") }))
 }
 
 /// «Продолжить без iPhone»: строки без колонки «На iPhone».
