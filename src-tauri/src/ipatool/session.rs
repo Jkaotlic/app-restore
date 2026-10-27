@@ -43,6 +43,14 @@ pub const LIMITS: Limits = Limits {
     keychain_wait: Duration::from_secs(30),
 };
 
+/// Ответ ipatool не того вида: в подробности только вид (`LoggedIn`, `Purchases`…). Поля не
+/// пишутся — в `LoggedIn` настоящие имя и адрес человека.
+fn unexpected(o: &IpaOutcome) -> AppError {
+    let full = format!("{o:?}");
+    let kind = full.split([' ', '{', '(']).next().unwrap_or_default();
+    AppError::Unknown { detail: format!("неожиданный ответ ipatool: {kind}") }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct Account {
     pub email: String,
@@ -95,7 +103,12 @@ impl Session {
         self.call_as(Kind::Quick, args).await
     }
 
-    async fn call_as(&self, kind: Kind, mut args: Vec<String>) -> Result<IpaOutcome, AppError> {
+    async fn call_as(&self, kind: Kind, args: Vec<String>) -> Result<IpaOutcome, AppError> {
+        self.call_marked(kind, args, None).await
+    }
+
+    /// `call_as`; `started` ставится в `true`, когда очередь к ipatool дошла и он запущен.
+    async fn call_marked(&self, kind: Kind, mut args: Vec<String>, started: Option<&AtomicBool>) -> Result<IpaOutcome, AppError> {
         args.extend(["--non-interactive", "--format", "json"].map(String::from));
         args.extend(self.extra_args.iter().cloned());
         let args = Args(args);
@@ -107,6 +120,9 @@ impl Session {
         };
         let res = {
             let _turn = self.turn(wait).await?;
+            if let Some(f) = started {
+                f.store(true, Ordering::SeqCst);
+            }
             match tokio::time::timeout(run, self.runner.run(&args.0)).await {
                 Ok(r) => r,
                 Err(_) => {
@@ -195,7 +211,7 @@ impl Session {
     fn account(outcome: IpaOutcome) -> Result<Account, AppError> {
         match outcome {
             IpaOutcome::LoggedIn { email, name } => Ok(Account { email, name }),
-            o => Err(AppError::Unknown { detail: format!("неожиданный ответ ipatool: {o:?}") }),
+            o => Err(unexpected(&o)),
         }
     }
 
@@ -249,7 +265,7 @@ impl Session {
                         break;
                     }
                 }
-                o => return Err(AppError::Unknown { detail: format!("неожиданный ответ ipatool: {o:?}") }),
+                o => return Err(unexpected(&o)),
             }
         }
         Err(AppError::Unknown { detail: format!("purchases incomplete: got {} of {}", all.len(), total_seen) })
@@ -264,7 +280,7 @@ impl Session {
         let id = track_id.to_string();
         let ids = match self.call_retry(["list-versions", "-i", &id].map(String::from).to_vec()).await? {
             IpaOutcome::Versions { ids } => ids,
-            o => return Err(AppError::Unknown { detail: format!("неожиданный ответ ipatool: {o:?}") }),
+            o => return Err(unexpected(&o)),
         };
         let Some(last) = ids.last() else { return Ok(None) };
         let args = ["get-version-metadata", "-i", &id, "--external-version-id", last].map(String::from).to_vec();
@@ -272,7 +288,7 @@ impl Session {
             Ok(IpaOutcome::VersionMetadata { display_version }) => Ok(Some(display_version).filter(|v| !v.trim().is_empty())),
             Err(e @ (AppError::NotLoggedIn | AppError::AccountDisabled | AppError::AppleChangedLogin)) => Err(e),
             Ok(o) => {
-                crate::log::write(&format!("version {track_id}"), &format!("неожиданный ответ ipatool: {o:?}"));
+                crate::log::write(&format!("version {track_id}"), &unexpected(&o).to_string());
                 Ok(None)
             }
             Err(e) => {
@@ -284,14 +300,21 @@ impl Session {
     }
 
     /// Скачивание по trackId (`-i`): `-b` не работает для удалённых из магазина приложений.
+    #[cfg(test)]
     pub async fn download(&self, track_id: i64, out_dir: &Path) -> Result<PathBuf, AppError> {
+        self.download_marked(track_id, out_dir, &AtomicBool::new(false)).await
+    }
+
+    /// `download`; `started` — ipatool запущен (своя очередь дошла). До этого скачивание не
+    /// идёт, и простоем ожидание очереди не считается (`queue`).
+    pub async fn download_marked(&self, track_id: i64, out_dir: &Path, started: &AtomicBool) -> Result<PathBuf, AppError> {
         let out = out_dir
             .to_str()
             .ok_or_else(|| AppError::Unknown { detail: "output path is not valid UTF-8".into() })?;
         let args = ["download", "-i", &track_id.to_string(), "-o", out].map(String::from).to_vec();
-        match with_retry(&self.delays, || self.call_as(Kind::Download, args.clone())).await? {
+        match with_retry(&self.delays, || self.call_marked(Kind::Download, args.clone(), Some(started))).await? {
             IpaOutcome::Downloaded { path } => Ok(path),
-            o => Err(AppError::Unknown { detail: format!("неожиданный ответ ipatool: {o:?}") }),
+            o => Err(unexpected(&o)),
         }
     }
 
@@ -485,6 +508,16 @@ mod tests {
         let t = std::time::Instant::now();
         s.info().await.unwrap();
         assert!(t.elapsed() >= Duration::from_millis(150), "ipatool ждал конца записи");
+    }
+
+    /// В журнал уходит только вид ответа: в `LoggedIn` настоящие имя и адрес человека.
+    #[test]
+    fn unexpected_answer_names_only_the_kind() {
+        let e = unexpected(&IpaOutcome::LoggedIn { email: "user@example.com".into(), name: "Real Person".into() });
+        let AppError::Unknown { detail } = e else { panic!() };
+        assert_eq!(detail, "неожиданный ответ ipatool: LoggedIn");
+        let AppError::Unknown { detail } = unexpected(&IpaOutcome::Ok) else { panic!() };
+        assert_eq!(detail, "неожиданный ответ ipatool: Ok");
     }
 
     #[tokio::test]

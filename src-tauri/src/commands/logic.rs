@@ -417,7 +417,7 @@ pub fn copy_device(phones: &[PhoneInfo], udid: &str) -> Result<String, AppError>
 
 /// Ошибки скачивания, при которых вместо свежей версии ставится сохранённая копия.
 fn copy_helps(e: &AppError) -> bool {
-    matches!(e, AppError::AppleChangedLogin | AppError::AppleUnavailable { .. } | AppError::NotLoggedIn)
+    matches!(e, AppError::AppleChangedLogin | AppError::AppleUnavailable { .. } | AppError::NotLoggedIn | AppError::Timeout)
 }
 
 /// Запасной путь для покупки: скачать не вышло из-за входа или серверов Apple, а копия есть.
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn fallback_copy_only_for_login_and_server_errors() {
         let lib = [SavedIpa { version: "9.1".into(), ..saved(5, "/x/5_b_9.1.ipa") }];
-        for e in [AppError::AppleChangedLogin, AppError::AppleUnavailable { status: Some(503) }, AppError::NotLoggedIn] {
+        for e in [AppError::AppleChangedLogin, AppError::AppleUnavailable { status: Some(503) }, AppError::NotLoggedIn, AppError::Timeout] {
             assert_eq!(fallback_copy(&e, 5, &lib), Some((PathBuf::from("/x/5_b_9.1.ipa"), "9.1".into())), "{e:?}");
         }
         assert_eq!(fallback_copy(&AppError::NotLoggedIn, 6, &lib), None, "копии нет");

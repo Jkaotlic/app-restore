@@ -121,18 +121,22 @@ async fn run_job(
 ) -> Result<PathBuf, AppError> {
     let _ = std::fs::create_dir_all(library.base());
     // Если свободное место определить не вышло, не блокируем скачивание.
-    if let Ok(avail) = space.available_bytes(library.base()) {
-        let avail_mb = avail / (1024 * 1024);
-        if avail_mb < MIN_FREE_MB {
-            return Err(AppError::NoDiskSpace { need_mb: (MIN_FREE_MB - avail_mb).max(1) });
+    match space.available_bytes(library.base()) {
+        Ok(avail) => {
+            let avail_mb = avail / (1024 * 1024);
+            if avail_mb < MIN_FREE_MB {
+                return Err(AppError::NoDiskSpace { need_mb: (MIN_FREE_MB - avail_mb).max(1) });
+            }
         }
+        Err(e) => crate::log::write(&format!("job {id}"), &format!("free space unknown ({e}), downloading anyway")),
     }
     let partial = library.partial_dir(id)?;
     let _ = std::fs::remove_dir_all(&partial);
     std::fs::create_dir_all(&partial).map_err(|e| AppError::Unknown { detail: format!("partial: {e}") })?;
     emit(JobState::Downloading { bytes: 0 });
     let result = {
-        let download = session.download(id, &partial);
+        let started = std::sync::atomic::AtomicBool::new(false);
+        let download = session.download_marked(id, &partial, &started);
         tokio::pin!(download);
         let mut tick = tokio::time::interval(POLL);
         tick.tick().await; // первый тик срабатывает сразу
@@ -142,7 +146,10 @@ async fn run_job(
                 r = &mut download => break r,
                 _ = tick.tick() => {
                     let bytes = dir_size(&partial);
-                    if bytes != last {
+                    // пока ждём очереди к ipatool, часы простоя стоят
+                    if !started.load(std::sync::atomic::Ordering::SeqCst) {
+                        grew = tokio::time::Instant::now();
+                    } else if bytes != last {
                         (last, grew) = (bytes, tokio::time::Instant::now());
                     } else if grew.elapsed() >= idle {
                         // `download` бросается ниже: ipatool убивается, замок ipatool свободен
@@ -504,6 +511,26 @@ mod tests {
         assert_eq!(of(&ev, 111).last().unwrap(), &&JobState::Failed { error: AppError::Timeout, saved: None });
         assert!(dropped.load(std::sync::atomic::Ordering::SeqCst), "ipatool остановлен");
         assert!(!lib.root().unwrap().join(".partial/111").exists());
+    }
+
+    /// Ожидание своей очереди к ipatool — не простой скачивания.
+    #[tokio::test]
+    async fn waiting_for_the_ipatool_lock_is_not_a_stall() {
+        let t = tempfile::tempdir().unwrap();
+        let lib = Arc::new(Library::new(t.path().join("lib")));
+        lib.set_account(Some("me@example.com")).unwrap();
+        let session = Arc::new(Session::new(ok_runner(), vec![]));
+        let hub = Arc::new(FakeHub::new(Behavior::Ok));
+        let q = Queue::with_idle(session.clone(), lib, Arc::new(Space(10 * GB)), hub, Duration::from_millis(600));
+        let mut rx = q.subscribe();
+        // кто-то держит ipatool 2 с (например, шаг со связкой ключей)
+        let s2 = session.clone();
+        let hold = tokio::spawn(async move { s2.exclusive(|| std::thread::sleep(Duration::from_millis(2000))).await });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        q.enqueue(vec![(111, "A".into())]);
+        let ev = collect(&mut rx, 1).await;
+        assert!(matches!(of(&ev, 111).last().unwrap(), JobState::Saved { .. }), "{:?}", of(&ev, 111));
+        hold.await.unwrap().unwrap();
     }
 
     #[tokio::test]
