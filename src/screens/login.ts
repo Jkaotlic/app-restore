@@ -2,7 +2,7 @@ import { asUiError, call, go, refreshSidebar, register, safe, state, targetPhone
 import { h } from "../dom";
 import { offersSkipSave, skipSaveNote } from "../copies";
 import { listen } from "@tauri-apps/api/event";
-import { CODE_HINT, LOGIN_SLOW_AFTER_S, afterLoginScreen, errorText, loginWaitNote, sameFromMatch } from "../labels";
+import { CODE_HINT, LOGIN_SLOW_AFTER_S, afterLoginScreen, errorText, loginNote as waitText, sameFromMatch } from "../labels";
 import type { LoginDto } from "../types";
 import { resetForAccount } from "./accounts";
 import { checkAccount } from "./phone";
@@ -109,8 +109,15 @@ register("login", () => {
     skipSave = false;
     skipBox.hidden = true;
     note(null);
-    const slow = setTimeout(() => note(loginWaitNote(LOGIN_SLOW_AFTER_S)), LOGIN_SLOW_AFTER_S * 1000);
-    const unlisten = await listen<string | null>("keychain_note", ({ payload }) => note(payload)).catch(() => () => undefined);
+    // подсказка про Связку ключей главнее «Apple долго отвечает»; её уход ту не стирает
+    const since = Date.now();
+    let keychain: string | null = null;
+    const show = () => note(waitText(keychain, (Date.now() - since) / 1000));
+    const slow = setTimeout(show, LOGIN_SLOW_AFTER_S * 1000);
+    const unlisten = await listen<string | null>("keychain_note", ({ payload }) => {
+      keychain = payload;
+      show();
+    }).catch(() => () => undefined);
     const done = () => {
       clearTimeout(slow);
       unlisten();

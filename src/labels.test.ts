@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CODE_HINT, errorText, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
+import { CODE_HINT, errorText, loginNote, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
 import type { JobDto, PhoneDto } from "./types";
 
 const err = { code: "device_locked", text: "Разблокируйте iPhone и нажмите «Доверять»", retryable: false };
@@ -214,5 +214,13 @@ describe("login waiting", () => {
     expect(CODE_HINT).toBe(
       "Код приходит на iPhone или Mac с этим Apple ID, иногда с задержкой. Нет кода — на iPhone: Настройки → ваше имя → Вход и безопасность → Получить код проверки.",
     );
+  });
+});
+
+describe("loginNote", () => {
+  it("Keychain hint wins; when it clears, the slow-Apple note comes back after 10 s", () => {
+    expect(loginNote("окно", 3)).toBe("окно");
+    expect(loginNote(null, 3)).toBeNull();
+    expect(loginNote(null, 12)).toBe(loginWaitNote(12));
   });
 });

@@ -127,3 +127,9 @@ export function loginWaitNote(seconds: number): string | null {
 /** Подсказка у поля кода 2FA. */
 export const CODE_HINT =
   "Код приходит на iPhone или Mac с этим Apple ID, иногда с задержкой. Нет кода — на iPhone: Настройки → ваше имя → Вход и безопасность → Получить код проверки.";
+
+/** Подпись под «Входим…»: подсказка про Связку ключей главнее; без неё — «Apple долго отвечает»
+ * после `LOGIN_SLOW_AFTER_S`. Убранная подсказка не стирает уже показанную «медленную». */
+export function loginNote(keychain: string | null, seconds: number): string | null {
+  return keychain ?? loginWaitNote(seconds);
+}
