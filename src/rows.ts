@@ -85,6 +85,17 @@ export function visibleGroups(rows: RowDto[], chip: Chip, query: string, withPho
   return (["catalog", "phone", "buy"] as const).map((key) => ({ key, title: TITLES[key], rows: shown.filter((r) => groupOf(r) === key) }));
 }
 
+/** Сколько выбранных строк не видно из-за чипа или поиска: «Снять всё» и «Вернуть» их тоже касаются. */
+export function hiddenCount(chosen: RowDto[], chip: Chip, query: string, withPhone: boolean): number {
+  return chosen.filter((r) => !(inChip(r, chip, withPhone) && matchesRow(r, query))).length;
+}
+
+/** Надпись нижней панели без размера. */
+export function selectionLabel(count: number, hidden: number): string {
+  if (!count) return "Ничего не выбрано";
+  return hidden ? `Выбрано ${count} · ${hidden} скрыто фильтром` : `Выбрано ${count}`;
+}
+
 /** «Выбрать все в группе»: что выбирается и выбрано ли уже всё. */
 export function groupPick(rows: RowDto[], selectable: (r: RowDto) => boolean, selected: Set<number>): { ids: number[]; allOn: boolean } {
   const ids = rows.filter(selectable).map((r) => r.track_id);

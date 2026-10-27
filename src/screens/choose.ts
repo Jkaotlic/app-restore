@@ -17,6 +17,8 @@ import {
   mergePurchases,
   pendingChecks,
   recheckIds,
+  hiddenCount,
+  selectionLabel,
   selectionSummary,
   tileLine,
   visibleGroups,
@@ -312,9 +314,10 @@ register("choose", () => {
   }
 
   function renderBar() {
-    const { count, size } = selectionSummary(chosen());
-    if (count) countEl.replaceChildren(`Выбрано ${count}`, ...(size ? [h("small", { text: size })] : []));
-    else countEl.replaceChildren("Ничего не выбрано");
+    const items = chosen();
+    const { count, size } = selectionSummary(items);
+    const label = selectionLabel(count, hiddenCount(items, chip, query, withPhone));
+    countEl.replaceChildren(label, ...(count && size ? [h("small", { text: size })] : []));
     clearBtn.hidden = count === 0;
     startBtn.disabled = count === 0;
     startBtn.textContent = count ? `Вернуть ${count}` : "Вернуть";

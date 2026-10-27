@@ -10,6 +10,7 @@ import {
   emptySearchText,
   groupPick,
   hasNewer,
+  hiddenCount,
   iconFor,
   idsToCheck,
   initialOwned,
@@ -18,6 +19,7 @@ import {
   matchesRow,
   pendingChecks,
   recheckIds,
+  selectionLabel,
   selectionSummary,
   tileLine,
   visibleGroups,
@@ -160,6 +162,20 @@ describe("selection summary", () => {
     expect(selectionSummary([row(1, "a"), row(2, "b")])).toEqual({ count: 2, size: null });
     expect(selectionSummary([row(1, "a", { size_bytes: 3 * 1024 * MB })])).toEqual({ count: 1, size: "≈ 3,0 ГБ" });
     expect(selectionSummary([row(1, "a", { size_bytes: 1000 })])).toEqual({ count: 1, size: "≈ 1 МБ" });
+  });
+});
+
+describe("hidden selection", () => {
+  it("counts chosen rows the chip or the search hides", () => {
+    const chosen = [cat(1, "Сбер", { category: "bank" }), cat(2, "ВК", { category: "social" }), row(10, "Telegram")];
+    expect(hiddenCount(chosen, "all", "", true)).toBe(0);
+    expect(hiddenCount(chosen, "bank", "", true)).toBe(2);
+    expect(hiddenCount(chosen, "all", "сбер", true)).toBe(2);
+  });
+  it("bar label", () => {
+    expect(selectionLabel(0, 0)).toBe("Ничего не выбрано");
+    expect(selectionLabel(5, 0)).toBe("Выбрано 5");
+    expect(selectionLabel(5, 3)).toBe("Выбрано 5 · 3 скрыто фильтром");
   });
 });
 
