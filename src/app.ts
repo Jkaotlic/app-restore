@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { h } from "./dom";
 import { showCopiesLink, stepIndex } from "./copies";
 import { errorText, installsToIphone } from "./labels";
-import type { AccountEntry, AccountMatchDto, Account, JobDto, OwnedEvent, PhoneDto, PurchasesProgress, RowDto, RowsDto, RunDto, UiError } from "./types";
+import type { AccountEntry, AccountMatchDto, Account, HistoryOutcome, HistoryProgress, JobDto, OwnedEvent, PhoneDto, PurchasesProgress, RowDto, RowsDto, RunDto, UiError } from "./types";
 
 export type Screen = "warning" | "accounts" | "login" | "choose" | "phone" | "done" | "copies";
 
@@ -83,6 +83,9 @@ export interface Mounted {
   onPhones?(): void;
   onPurchasesProgress?(p: PurchasesProgress): void;
   onPurchases?(rows: RowsDto): void;
+  /** Окно истории покупок Apple: прогресс (`history_progress`) и итог (`history`). */
+  onHistoryProgress?(p: HistoryProgress): void;
+  onHistory?(o: HistoryOutcome): void;
   /** Вход программы сменился сам (событие `account`). */
   onAccount?(): void;
   /** Вызывается при уходе с экрана. */

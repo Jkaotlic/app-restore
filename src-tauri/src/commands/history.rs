@@ -7,7 +7,7 @@
 //!
 //! События: `history_progress` {found}, `history` {rows, found, error}.
 use super::AppState;
-use super::logic::{RowCtx, RowDto};
+use super::logic::{RowCtx, RowDto, UiError};
 use crate::history::{Collected, Found, PageItem, Problem, fresh, timed_out};
 use serde::Serialize;
 use std::sync::Mutex;
@@ -77,7 +77,7 @@ fn history_row(f: &Found, ctx: &RowCtx) -> RowDto {
 
 /// Открыть окно истории (или показать уже открытое).
 #[tauri::command]
-pub async fn open_history(app: AppHandle) -> Result<(), String> {
+pub async fn open_history(app: AppHandle) -> Result<(), UiError> {
     if let Some(w) = app.get_webview_window(LABEL) {
         let _ = w.set_focus();
         return Ok(());
@@ -89,19 +89,22 @@ pub async fn open_history(app: AppHandle) -> Result<(), String> {
         *g
     };
     *hr.run.lock().unwrap() = Some(Run { round, collected: Collected::default(), opened: Instant::now(), last_batch: None });
-    let url = URL.parse().map_err(|_| "bad url".to_string())?;
-    let built = WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::External(url))
-        .title("История покупок Apple — войдите своим Apple ID")
-        .inner_size(960.0, 720.0)
-        .incognito(true)
-        .initialization_script(SCRIPT)
-        .build();
+    // хранилище окна не сохраняется (nonPersistent на macOS): закрыли — сессии сайта нет
+    let built = URL.parse().map_err(|e| format!("{e}")).and_then(|url| {
+        WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::External(url))
+            .title("История покупок Apple — войдите своим Apple ID")
+            .inner_size(960.0, 720.0)
+            .incognito(true)
+            .initialization_script(SCRIPT)
+            .build()
+            .map_err(|e| format!("{e}"))
+    });
     let window = match built {
         Ok(w) => w,
         Err(e) => {
             *hr.run.lock().unwrap() = None;
             crate::log::write("history", &format!("окно не открылось: {e}"));
-            return Err("Не удалось открыть окно истории покупок".into());
+            return Err(UiError { code: "history_window".into(), text: "Не удалось открыть окно истории покупок. Попробуйте ещё раз.".into(), retryable: true, ref_code: None });
         }
     };
     crate::log::write("history", "окно открыто");

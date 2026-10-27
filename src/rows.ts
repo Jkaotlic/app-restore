@@ -72,11 +72,12 @@ export function rovingIndex(key: string, current: number, n: number): number | n
   return null;
 }
 
-export type GroupKey = "catalog" | "phone" | "buy" | "store";
+export type GroupKey = "catalog" | "phone" | "buy" | "history" | "store";
 
 function groupOf(r: RowDto): GroupKey {
   if (isFirstGroup(r)) return "catalog";
   if (r.source === "store") return "store";
+  if (r.source === "history") return "history";
   return r.source === "phone" ? "phone" : "buy";
 }
 
@@ -105,13 +106,16 @@ export function chipCounts(rows: RowDto[], query: string, withPhone: boolean): R
   return out;
 }
 
-const TITLES: Record<GroupKey, string> = { catalog: "Каталог", phone: "С этого iPhone", buy: "Мои покупки", store: "В App Store" };
+const TITLES: Record<GroupKey, string> = { catalog: "Каталог", phone: "С этого iPhone", buy: "Мои покупки", history: "Из истории покупок", store: "В App Store" };
 
 /** Группы «Выбора» после чипа и поиска, всегда первые три и в этом порядке (пустые тоже);
  * «В App Store» — четвёртой, только при запросе от трёх букв. */
 export function visibleGroups(rows: RowDto[], chip: Chip, query: string, withPhone = true): { key: GroupKey; title: string; rows: RowDto[] }[] {
   const shown = rows.filter((r) => inChip(r, chip, withPhone) && shownFor(r, query));
-  const keys: GroupKey[] = storeTerm(query) === null ? ["catalog", "phone", "buy"] : ["catalog", "phone", "buy", "store"];
+  const keys: GroupKey[] = ["catalog", "phone", "buy"];
+  // «Из истории покупок» — только после поиска по истории (`open_history`)
+  if (rows.some((r) => r.source === "history")) keys.push("history");
+  if (storeTerm(query) !== null) keys.push("store");
   return keys.map((key) => ({ key, title: TITLES[key], rows: shown.filter((r) => groupOf(r) === key) }));
 }
 
@@ -162,7 +166,7 @@ export function mergePurchases(current: RowDto[], incoming: RowDto[]): RowDto[] 
   const rest = incoming.filter((r) => !isFirstGroup(r) && !ids.has(r.track_id));
   for (const r of rest) ids.add(r.track_id);
   // копии и строки App Store, которых нет среди покупок, не пропадают с экрана (и их галочки тоже)
-  const kept = current.filter((r) => (r.source === "saved" || r.source === "store") && !ids.has(r.track_id));
+  const kept = current.filter((r) => (r.source === "saved" || r.source === "store" || r.source === "history") && !ids.has(r.track_id));
   return [...first, ...rest, ...kept];
 }
 
@@ -182,12 +186,12 @@ export function dropStoreRows(rows: RowDto[], selected: Set<number>): RowDto[] {
 
 /** Отметка по умолчанию из `owned` (Rust `checked`): строку App Store человек отмечает сам. */
 export function autoChecks(r: RowDto): boolean {
-  return r.source !== "store";
+  return r.source !== "store" && r.source !== "history";
 }
 
 /** Права проверяет `check_owned`: каталог, App Store и «С этого iPhone» (кроме чужого Apple ID). */
 function needsCheck(r: RowDto): boolean {
-  return r.source === "removed" || r.source === "store" || (r.source === "phone" && !r.other_account);
+  return r.source === "removed" || r.source === "store" || r.source === "history" || (r.source === "phone" && !r.other_account);
 }
 
 /** Подсказка у нижней панели, когда телефона нет. */
@@ -281,7 +285,7 @@ export type TileLine = { text: string; tone: TileTone; up?: string; note?: strin
 export function tileLine(r: RowDto, s: OwnedState | undefined, toIphone: boolean, withPhone: boolean): TileLine {
   if (r.ipad_only && toIphone) return { text: "только для iPad", tone: "warn" };
   if (r.other_account) return { text: r.purchaser_masked ? `Куплено на другом Apple ID (${r.purchaser_masked})` : "Куплено на другом Apple ID", tone: "warn" };
-  if ((r.source === "removed" || r.source === "phone" || r.source === "store") && !r.has_saved_copy) {
+  if ((r.source === "removed" || r.source === "phone" || r.source === "store" || r.source === "history") && !r.has_saved_copy) {
     if (!s || s.kind === "checking") return { text: "проверяем…", tone: "checking" };
     if (s.kind === "gone") return { text: "Apple больше не отдаёт", tone: "muted" };
     if (s.kind === "no") return r.source === "store" ? { text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE } : { text: "Нет на вашем Apple ID", tone: "muted" };
@@ -316,7 +320,7 @@ export function tileA11y(name: string, line: TileLine, enabled: boolean, isSelec
 export function canSelect(r: RowDto, s: OwnedState | undefined, targetIphone = false): boolean {
   if (r.ipad_only && targetIphone) return false;
   if (r.other_account) return false;
-  if (r.source !== "removed" && r.source !== "phone" && r.source !== "store") return true;
+  if (r.source !== "removed" && r.source !== "phone" && r.source !== "store" && r.source !== "history") return true;
   return s?.kind === "yes" || r.has_saved_copy;
 }
 

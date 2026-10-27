@@ -42,7 +42,8 @@ import {
   type OwnedMap,
   type TileLine,
 } from "../rows";
-import type { InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, UiError } from "../types";
+import { HISTORY_HINT, historyProgressText, historyResultText, mergeHistoryRows } from "../history";
+import type { HistoryOutcome, HistoryProgress, InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, UiError } from "../types";
 
 export function appIcon(r: RowDto): HTMLElement {
   const { letter, color } = iconFor(r);
@@ -175,6 +176,57 @@ register("choose", () => {
     h("div", { class: "addlink" }, linkInput, linkBtn),
     linkMsg,
   );
+
+  // «Найти всё, что вы скачивали»: окно Apple, вход — сам человек; сюда приходят только номера и названия
+  const historyBtn = h("button", {
+    class: "btn ghost small",
+    text: "Найти всё, что вы скачивали",
+    attrs: { type: "button", title: "Откроет страницу Apple «Сообщить о проблеме»: войдите своим Apple ID, и программа соберёт приложения из истории покупок. Пароль программа не видит и не хранит" },
+    on: { click: safe(openHistory) },
+  });
+  const historyMsg = h("p", { class: "note", attrs: { role: "status", "aria-live": "polite" } });
+  historyMsg.hidden = true;
+  const historyBox = h(
+    "div",
+    { class: "linkform" },
+    h("p", { class: "note", text: "Нет в покупках? Скрытые и пропавшие из списка приложения есть в истории покупок Apple" }),
+    h("div", { class: "addlink" }, historyBtn),
+    historyMsg,
+  );
+
+  function historyStatus(text: string, error = false) {
+    historyMsg.textContent = text;
+    historyMsg.className = error ? "error" : "note";
+    historyMsg.hidden = false;
+  }
+
+  async function openHistory() {
+    historyBtn.disabled = true;
+    historyStatus(historyProgressText(0));
+    try {
+      await call("open_history");
+    } catch (e) {
+      historyBtn.disabled = false;
+      historyStatus(errorText(asUiError(e)), true);
+    }
+  }
+
+  function onHistoryProgress(p: HistoryProgress) {
+    historyStatus(historyProgressText(p.found));
+  }
+
+  function onHistory(o: HistoryOutcome) {
+    historyBtn.disabled = false;
+    rows = mergeHistoryRows(rows, o.rows);
+    for (const r of o.rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
+    historyStatus(o.error ?? historyResultText(o.found, o.rows.length), o.error !== null);
+    if (loaded) {
+      renderChips();
+      renderList();
+    }
+    // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки
+    if (o.rows.length) void call("check_owned", { trackIds: pendingChecks(rows, owned) }).catch(() => undefined);
+  }
 
   const switchId = h("button", {
     class: "link",
@@ -485,13 +537,14 @@ register("choose", () => {
         if (choices && plain && !g.rows.length) extra.push(h("p", { class: "empty", text: "На этом телефоне нет приложений, которых нет в каталоге и в российском App Store." }));
         if (g.rows.length) after.push(h("p", { class: "note group-hint", text: SOURCE_HINT }));
       }
+      if (g.key === "history" && g.rows.length) after.push(h("p", { class: "note group-hint", text: HISTORY_HINT }));
       if (g.rows.length || extra.length) parts.push(groupSection(g.key, g.title, g.rows, extra, after));
     }
     if (groups.every((g) => !g.rows.length) && !plain) {
       parts.push(h("p", { class: "empty", text: query.trim() ? emptySearchText(query) : "В этом фильтре пусто." }));
       if (purchasesLoading) parts.push(progressEl());
     }
-    parts.push(linkForm);
+    parts.push(historyBox, linkForm);
     list.replaceChildren(...parts);
     if (focusedId) tiles.get(Number(focusedId))?.focus();
     syncSelection();
@@ -735,6 +788,8 @@ register("choose", () => {
     onPhones,
     onPurchasesProgress,
     onPurchases,
+    onHistoryProgress,
+    onHistory,
     // Уход с «Выбора» останавливает проверку прав: пустой список отменяет идущую.
     leave: () => {
       clearTimeout(visibleTimer);

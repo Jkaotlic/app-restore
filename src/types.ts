@@ -14,8 +14,21 @@ export interface Account {
 }
 
 /** `phone` — «С этого iPhone»: стоит на телефоне, нет ни в каталоге, ни в покупках, ни в магазине RU.
- * `store` — «В App Store»: найдено поиском по магазину (`search_store`). */
-export type RowSource = "removed" | "purchase" | "link" | "saved" | "phone" | "store";
+ * `store` — «В App Store»: найдено поиском по магазину (`search_store`).
+ * `history` — «Из истории покупок»: нашлось на reportaproblem.apple.com, нет на «Выборе». */
+export type RowSource = "removed" | "purchase" | "link" | "saved" | "phone" | "store" | "history";
+
+/** Событие `history_progress`: сколько разных приложений iPhone уже нашлось. */
+export interface HistoryProgress {
+  found: number;
+}
+
+/** Событие `history`: окно закрыто; `rows` — новые строки «Из истории покупок». */
+export interface HistoryOutcome {
+  rows: RowDto[];
+  found: number;
+  error: string | null;
+}
 
 /** Фильтр каталога; у покупок категории нет. */
 export type Category = "bank" | "social" | "travel" | "other";
