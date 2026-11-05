@@ -1,7 +1,9 @@
-//! Есть ли новая версия программы: последний релиз на GitHub. Автообновления нет, только подсказка.
+//! Есть ли новая версия программы: выпуски на GitHub. Автообновления нет, только подсказка.
+//! Не `/releases/latest`: он не видит выпусков с пометкой pre-release и отвечает 404,
+//! а выпуски 0.3.x опубликованы именно так.
 use crate::lookup::Fetch;
 
-pub const RELEASES_URL: &str = "https://api.github.com/repos/Jkaotlic/app-restore/releases/latest";
+pub const RELEASES_URL: &str = "https://api.github.com/repos/Jkaotlic/app-restore/releases?per_page=20";
 
 /// `MAJOR.MINOR.PATCH` с необязательной `v` впереди. Предрелизы и мусор дают `None`.
 fn parse(v: &str) -> Option<(u64, u64, u64)> {
@@ -17,11 +19,19 @@ pub fn is_newer(tag: &str, current: &str) -> bool {
     matches!((parse(tag), parse(current)), (Some(t), Some(c)) if t > c)
 }
 
-/// Тег нового релиза или `None`; любая ошибка сети или ответа даёт `None` молча.
+/// Тег самой новой опубликованной версии, если она новее текущей, иначе `None`. Черновики
+/// и непонятные теги пропускаются; любая ошибка сети или ответа даёт `None` молча.
 pub async fn check(fetch: &dyn Fetch, current: &str) -> Option<String> {
     let body = fetch.get(RELEASES_URL).await.ok()?;
     let v: serde_json::Value = serde_json::from_str(&body).ok()?;
-    let tag = v.get("tag_name")?.as_str()?;
+    let tag = v
+        .as_array()?
+        .iter()
+        .filter(|r| r.get("draft").and_then(|d| d.as_bool()) != Some(true))
+        .filter_map(|r| r.get("tag_name")?.as_str())
+        .filter_map(|t| parse(t).map(|n| (n, t)))
+        .max_by_key(|(n, _)| *n)?
+        .1;
     is_newer(tag, current).then(|| tag.to_string())
 }
 
@@ -56,11 +66,26 @@ mod tests {
 
     #[tokio::test]
     async fn check_returns_tag_only_when_newer() {
-        let body = |t: &str| Ok(format!(r#"{{"tag_name":"{t}","name":"x","draft":false}}"#));
-        assert_eq!(check(&F(body("v0.2.0")), "0.1.0").await, Some("v0.2.0".into()));
-        assert_eq!(check(&F(body("v0.1.0")), "0.1.0").await, None);
+        let one = |t: &str| Ok(format!(r#"[{{"tag_name":"{t}","name":"x","draft":false,"prerelease":true}}]"#));
+        assert_eq!(check(&F(one("v0.2.0")), "0.1.0").await, Some("v0.2.0".into()), "предрелиз GitHub — наш обычный выпуск");
+        assert_eq!(check(&F(one("v0.1.0")), "0.1.0").await, None);
+        assert_eq!(check(&F(Ok("[]".into())), "0.1.0").await, None);
         assert_eq!(check(&F(Ok("<html>".into())), "0.1.0").await, None);
         assert_eq!(check(&F(Ok("{}".into())), "0.1.0").await, None);
         assert_eq!(check(&F(Err(AppError::AppleUnavailable { status: None })), "0.1.0").await, None);
+    }
+
+    #[tokio::test]
+    async fn check_takes_highest_published_version() {
+        // GitHub сортирует по дате создания, не по версии; черновик не опубликован
+        let body = r#"[
+            {"tag_name":"v0.4.0","draft":true,"prerelease":false},
+            {"tag_name":"v0.3.1","draft":false,"prerelease":true},
+            {"tag_name":"v0.3.10-beta.1","draft":false,"prerelease":true},
+            {"tag_name":"v0.3.2","draft":false,"prerelease":false},
+            {"tag_name":"nightly","draft":false,"prerelease":true}
+        ]"#;
+        assert_eq!(check(&F(Ok(body.into())), "0.3.0").await, Some("v0.3.2".into()));
+        assert_eq!(check(&F(Ok(body.into())), "0.3.2").await, None);
     }
 }
