@@ -687,7 +687,10 @@ describe("row cells", () => {
     expect(ownedCell(c, { kind: "error", error: softErr }, false)).toEqual({ text: "Не удалось проверить · повторить", tone: "retry" });
     expect(ownedCell(c, { kind: "yes" }, false)).toEqual({ text: "Куплено", tone: "ok" });
     expect(ownedCell(cat(1, "Сбер", { has_saved_copy: true }), no, false)).toEqual({ text: "Есть копия на компьютере", tone: "plain" });
-    expect(ownedCell(row(1, "A", { unknown_account: true }), undefined, false)).toEqual({ text: "Неизвестный Apple ID", tone: "muted" });
+    expect(ownedCell(row(1, "A", { source: "saved", has_saved_copy: true, unknown_account: true }), undefined, false)).toEqual({ text: "Неизвестный Apple ID", tone: "muted" });
+    expect(ownedCell(row(1, "A", { source: "saved" }), undefined, false)).toEqual({ text: "", tone: "muted" });
+    expect(ownedCell(cat(1, "A", { other_account: true }), { kind: "checking" }, false).text).toBe("Куплено на другом Apple ID");
+    expect(ownedCell(row(1, "A", { ipad_only: true }), undefined, false).text).toBe("Куплено");
     expect(ownedCell(row(1, "A"), undefined, false)).toEqual({ text: "Куплено", tone: "ok" });
     expect(ownedCell(row(1, "A", { source: "link" }), { kind: "yes" }, false)).toEqual({ text: "Куплено", tone: "ok" });
     expect(ownedCell(row(1, "A", { source: "link" }), no, false)).toEqual({ text: "добавлено по ссылке", tone: "muted" });
@@ -697,6 +700,18 @@ describe("row cells", () => {
     expect(phoneCell(row(1, "A", { installed_version: "21.3", available_version: "22.1" }), true)).toEqual({ have: "21.3", newer: "22.1" });
     expect(phoneCell(row(1, "A", { installed_version: "" }), true)).toEqual({ have: "есть", newer: null });
     expect(phoneCell(row(1, "A"), true)).toEqual({ have: "не установлено", newer: null });
+  });
+  it("phoneCell: equal versions are not newer", () => {
+    expect(phoneCell(row(1, "A", { installed_version: "2.0", available_version: "2.0" }), true)).toEqual({ have: "2.0", newer: null });
+  });
+  it("subLine: available suffix and precedence", () => {
+    const o = {};
+    expect(subLine(cat(1, "A", { available_version: "16.2" }), undefined, false, o).text).toBe("удалено из российского App Store · доступно 16.2");
+    expect(subLine(row(1, "A", { available_version: "3.0", installed_version: "2.0" }), undefined, false, o).text).toBe("в ваших покупках");
+    expect(subLine(row(1, "A", { source: "store", available_version: "12.1" }), undefined, false, o).text).toBe("доступно 12.1");
+    const old = row(1, "A", { min_ios: "17.0" });
+    expect(subLine(old, undefined, true, { phoneIos: "15.0", chosen: { id: "1", display: null } }).tone).toBe("plain");
+    expect(subLine(old, undefined, false, { phoneIos: "15.0" }).tone).toBe("muted");
   });
   it("subLine", () => {
     const o = {};

@@ -353,11 +353,12 @@ export function ownedCell(r: RowDto, s: OwnedState | undefined, toIphone: boolea
     if (s.kind === "error") return { text: "Не удалось проверить · повторить", tone: "retry" };
     return { text: "Куплено", tone: "ok" };
   }
-  if (r.has_saved_copy) return { text: "Есть копия на компьютере", tone: "plain" };
+  // у копии с неизвестным Apple ID всегда есть и has_saved_copy — сначала он
   if (r.unknown_account) return { text: "Неизвестный Apple ID", tone: "muted" };
+  if (r.has_saved_copy) return { text: "Есть копия на компьютере", tone: "plain" };
   if (r.source === "purchase") return { text: "Куплено", tone: "ok" };
-  if (r.source === "link" && s?.kind === "yes") return { text: "Куплено", tone: "ok" };
-  return { text: "добавлено по ссылке", tone: "muted" };
+  if (r.source === "link") return s?.kind === "yes" ? { text: "Куплено", tone: "ok" } : { text: "добавлено по ссылке", tone: "muted" };
+  return { text: "", tone: "muted" };
 }
 
 /** Ячейка «На iPhone»: что стоит и какая версия новее. */
@@ -377,6 +378,13 @@ export function subLine(
   if (opts.chosen) return { text: opts.chosen.display ? `версия ${opts.chosen.display} (выбрана)` : "выбрана другая версия", tone: "plain" };
   const tooOld = toIphone ? tooOldNote(r.min_ios, opts.phoneIos ?? null) : null;
   if (tooOld) return { text: tooOld, tone: "warn", note: downloadOnlyNote(opts.phoneIos ?? "") };
+  const base = subBase(r, s);
+  // «доступно X» для строк не из магазина, которых нет на телефоне (магазин говорит это сам)
+  if (r.source !== "store" && r.installed_version === null && r.available_version) return { ...base, text: `${base.text} · доступно ${r.available_version}` };
+  return base;
+}
+
+function subBase(r: RowDto, s: OwnedState | undefined): { text: string; tone: CellTone; note?: string } {
   switch (r.source) {
     case "removed":
       return { text: "удалено из российского App Store", tone: "muted" };
