@@ -608,7 +608,7 @@ describe("row cells", () => {
   const no: OwnedState = { kind: "no" };
   it("ownedCell: rules in order", () => {
     expect(ownedCell(row(1, "A", { ipad_only: true }), undefined, true)).toEqual({ text: "только для iPad", tone: "warn" });
-    expect(ownedCell(row(1, "A", { other_account: true, purchaser_masked: "ma***@x.ru" }), undefined, false)).toEqual({ text: "Куплено на другом Apple ID (ma***@x.ru)", tone: "warn" });
+    expect(ownedCell(row(1, "A", { other_account: true, purchaser_masked: "ma***@example.com" }), undefined, false)).toEqual({ text: "Куплено на другом Apple ID (ma***@example.com)", tone: "warn" });
     expect(ownedCell(row(1, "A", { other_account: true }), undefined, false)).toEqual({ text: "Куплено на другом Apple ID", tone: "warn" });
     const c = cat(1, "Сбер");
     expect(ownedCell(c, undefined, false)).toEqual({ text: "Проверяем…", tone: "checking" });

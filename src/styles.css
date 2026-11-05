@@ -709,6 +709,11 @@ label.app {
 .hintrow .find-link {
   font-weight: 600;
 }
+/* подсказка к поиску — под полем справа */
+.hintrow .search-hint {
+  margin: 0 0 0 auto;
+  font-size: 12px;
+}
 /* список и карточка: карточка прижата к правому краю окна */
 .choose-main {
   flex: 1;

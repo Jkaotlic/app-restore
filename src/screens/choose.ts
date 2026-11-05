@@ -55,19 +55,23 @@ import type { DropDto, FoundVersionDto, HistoryOutcome, HistoryProgress, Install
 import { canPickVersion, findOffered, foundMessage, recheckFrom, splitStart, startVersions, tooOldNote, versionLabel, waitText } from "../versions";
 import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, keptHistory, mergeHistoryRows, takeHistory } from "../history";
 
-/** Значок: буква на цвете; `url` — иконка App Store поверх буквы (не загрузилась — снова буква). */
-export function appIcon(r: RowDto, url?: string | null): HTMLElement {
+/** Значок: буква на цвете; `img` — иконка App Store поверх буквы (не загрузилась — снова буква). */
+export function appIcon(r: RowDto, img?: HTMLImageElement | null): HTMLElement {
   const { letter, color } = iconFor(r);
   const cls = ["ico", [...letter].length > 2 ? "tight" : "", isLight(color) ? "light" : ""].filter(Boolean).join(" ");
   const ico = h("span", { class: cls, text: letter, style: { background: color }, attrs: { "aria-hidden": "true" } });
-  if (url) addIconImg(ico, url);
+  if (img) ico.append(img);
   return ico;
 }
 
-function addIconImg(ico: Element, url: string) {
-  const img = h("img", { attrs: { src: url, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" } });
-  img.addEventListener("error", () => img.remove());
-  ico.append(img);
+/** `img` иконки; не загрузилась — убирается сам, `failed` — забыть адрес. */
+function iconImgEl(url: string, failed: () => void): HTMLImageElement {
+  const img = h("img", { attrs: { src: url, alt: "", loading: "lazy", referrerpolicy: "no-referrer" } });
+  img.addEventListener("error", () => {
+    img.remove();
+    failed();
+  });
+  return img;
 }
 
 /** Телефон в карточке боковой панели. */
@@ -197,17 +201,18 @@ register("choose", () => {
   });
   setSidebarExtra(h("div", { class: "side-choose" }, phoneCard, chips));
 
-  /** Карточка телефона-цели: имя и iOS; без телефона — «iPhone не подключён». */
+  /** Карточка телефона-цели: имя и iOS; «подключён» — только когда список с него прочитан (`withPhone`):
+   * продолжили без iPhone или чтение не удалось — имя и iOS без «подключён». Без телефона — «iPhone не подключён». */
   function renderPhoneCard() {
     const p = targetPhone();
-    phoneCard.classList.toggle("off", !p);
+    phoneCard.classList.toggle("off", !p || !withPhone);
     phoneCard.replaceChildren(
       sidePhoneIcon(),
       h(
         "div",
         { class: "sp-t" },
         h("b", { text: p ? p.name : "iPhone не подключён" }),
-        p ? h("span", { class: "sp-ios" }, h("i", { attrs: { "aria-hidden": "true" } }), `iOS ${p.ios_version} · подключён`) : null,
+        p ? h("span", { class: "sp-ios" }, withPhone ? h("i", { attrs: { "aria-hidden": "true" } }) : null, withPhone ? `iOS ${p.ios_version} · подключён` : `iOS ${p.ios_version}`) : null,
       ),
     );
   }
@@ -451,6 +456,25 @@ register("choose", () => {
    * помнит ответы Apple и на известные пустые отвечает без сети. `iconsAsked` — номера в идущем вызове. */
   const icons = new Map<number, string>();
   const iconsAsked = new Set<number>();
+  /** Узлы `img` по месту («row»/«big») и trackId: перерисовка переносит тот же узел — без мигания. */
+  const imgs = new Map<string, HTMLImageElement>();
+  function iconImg(id: number, slot: "row" | "big"): HTMLImageElement | null {
+    const url = icons.get(id);
+    if (!url) return null;
+    const key = `${slot}:${id}`;
+    let img = imgs.get(key);
+    if (!img) {
+      img = iconImgEl(url, () => {
+        imgs.delete(key);
+        // адрес не грузится — дальше буква, второй раз не спрашиваем
+        icons.set(id, "");
+      });
+      imgs.set(key, img);
+    }
+    return img;
+  }
+  /** «На iPhone» или «На iPad» — куда ставим (заголовок колонки и карточка). */
+  const deviceCol = () => (targetPhone()?.device_class === "iPad" ? "На iPad" : "На iPhone");
   /** Карточка справа: последняя строка, по которой кликнули или на которую перешёл фокус. */
   let curId: number | null = null;
 
@@ -480,7 +504,7 @@ register("choose", () => {
       h(
         "span",
         { class: "c-app" },
-        appIcon(r, icons.get(r.track_id)),
+        appIcon(r, iconImg(r.track_id, "row")),
         h(
           "span",
           { class: "tt" },
@@ -715,7 +739,7 @@ register("choose", () => {
     const own = cellOf(r);
     const sub = subOf(r);
     const ph = phoneCell(r, withPhone);
-    const big = appIcon(r, icons.get(r.track_id));
+    const big = appIcon(r, iconImg(r.track_id, "big"));
     big.classList.add("big");
     const fact = (k: string, v: string) => [h("dt", { text: k }), h("dd", { text: v })];
     const parts: HTMLElement[] = [
@@ -725,7 +749,7 @@ register("choose", () => {
         { class: "insp-facts" },
         ...fact("Apple ID", own.text || "—"),
         ...fact("Доступно", r.available_version || "—"),
-        ...fact("На iPhone", ph.newer ? `${ph.have} → ${ph.newer}` : ph.have),
+        ...fact(deviceCol(), ph.newer ? `${ph.have} → ${ph.newer}` : ph.have),
         ...fact("Размер", sizeText(r.size_bytes)),
         ...fact("Нужна iOS", r.min_ios || "—"),
       ),
@@ -742,9 +766,10 @@ register("choose", () => {
    * Сбой — молча, буквы; следующая отрисовка спросит снова. */
   async function fetchIcons() {
     const all = [...tiles.keys()].filter((id) => id > 0 && !icons.has(id) && !iconsAsked.has(id));
+    // все сразу: следующая отрисовка, пока идут пачки, не пошлёт их второй раз
+    for (const id of all) iconsAsked.add(id);
     for (let i = 0; i < all.length; i += 1000) {
       const ids = all.slice(i, i + 1000);
-      for (const id of ids) iconsAsked.add(id);
       let got: Record<string, string> = {};
       try {
         got = await call<Record<string, string>>("app_icons", { trackIds: ids });
@@ -756,11 +781,14 @@ register("choose", () => {
         const url = got[String(id)];
         if (url) icons.set(id, url);
       }
-      if (left) return;
+      if (left) {
+        for (const id of all) iconsAsked.delete(id);
+        return;
+      }
       for (const id of ids) {
-        const url = icons.get(id);
-        const ico = url ? tiles.get(id)?.querySelector(".ico") : null;
-        if (url && ico && !ico.querySelector("img")) addIconImg(ico, url);
+        const img = iconImg(id, "row");
+        const ico = img ? tiles.get(id)?.querySelector(".ico") : null;
+        if (img && ico && !ico.contains(img)) ico.append(img);
       }
       if (curId !== null && ids.includes(curId)) renderInspector();
     }
@@ -988,6 +1016,10 @@ register("choose", () => {
   async function openVersions(r: RowDto, find = false) {
     const ios = phoneIos();
     if (panels.has(r.track_id)) {
+      // уже открыт (например, «Другая версия…» в карточке): показать его и перейти в него
+      const el = panelEls.get(r.track_id);
+      el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      (el?.querySelector<HTMLButtonElement>('.veropt[aria-pressed="true"]') ?? el?.querySelector<HTMLButtonElement>(".veropt"))?.focus({ preventScroll: true });
       if (find && ios) await findVersion(r, ios);
       return;
     }
@@ -1071,7 +1103,7 @@ register("choose", () => {
     const table = h(
       "div",
       { class: "tbl" },
-      h("div", { class: "thead", attrs: { "aria-hidden": "true" } }, h("span"), h("span", { text: "Приложение" }), h("span", { text: "На этом Apple ID" }), h("span", { text: "На iPhone" }), h("span", { text: "Размер" })),
+      h("div", { class: "thead", attrs: { "aria-hidden": "true" } }, h("span"), h("span", { text: "Приложение" }), h("span", { text: "На этом Apple ID" }), h("span", { text: deviceCol() }), h("span", { text: "Размер" })),
     );
     parts.push(table);
     for (const g of groups) {
@@ -1420,6 +1452,7 @@ register("choose", () => {
     owned = initialOwned(rows);
     loaded = true;
     heading.textContent = withPhone && toIphone() ? "Что вернуть на iPhone" : "Что вернуть";
+    renderPhoneCard();
     renderChips();
     renderList();
     const ids = idsToCheck(rows);
@@ -1436,7 +1469,7 @@ register("choose", () => {
       "div",
       { class: "choose-top" },
       h("div", { class: "choose-head" }, heading, h("label", { class: "searchbox" }, searchIcon(), search)),
-      h("div", { class: "hintrow" }, found, findLink, switchId),
+      h("div", { class: "hintrow" }, found, findLink, switchId, h("span", { class: "hint search-hint", text: "Ищет везде, включая App Store, и по прежним названиям" })),
       resumeBanner(),
       dropMsg,
     ),
