@@ -21,8 +21,9 @@ const URL: &str = "https://reportaproblem.apple.com/";
 const SCRIPT: &str = include_str!("../../../src/history-page.js");
 /// События истории — только сюда, не в окно Apple.
 const MAIN: &str = "main";
-/// Сколько видна плашка «Готово, найдено N» перед закрытием окна.
-const DONE_PAUSE: Duration = Duration::from_millis(1500);
+/// Сколько видна плашка «Готово, найдено N. Возвращаемся в программу…» перед закрытием окна:
+/// за полторы секунды её не успевали прочесть, и закрытие выглядело как падение.
+const DONE_PAUSE: Duration = Duration::from_secs(3);
 
 struct Run {
     round: u64,
@@ -207,6 +208,11 @@ async fn finish(app: &AppHandle, round: u64, problem: Option<Problem>) {
             tokio::time::sleep(DONE_PAUSE).await;
         }
         let _ = w.close();
+    }
+    // итог — в главном окне: оно выходит вперёд, а не остаётся за другими программами
+    if let Some(main) = app.get_webview_window(MAIN) {
+        let _ = main.unminimize();
+        let _ = main.set_focus();
     }
     let found = run.collected.items.len();
     let st = app.state::<AppState>();

@@ -253,6 +253,8 @@ register("choose", () => {
   // Сначала три шага (что будет), потом окно; пока оно открыто — «Найдено N…», после — итог.
   type HistoryPhase = "idle" | "explain" | "open";
   let historyPhase: HistoryPhase = "idle";
+  /** Итог захода истории — плашкой сверху списка (строка под блоком внизу, её не видно). */
+  let historyNote: { text: string; error: boolean; show: boolean } | null = null;
   const historyBtn = h("button", {
     class: "btn ghost small",
     text: "Найти всё, что вы скачивали",
@@ -322,20 +324,22 @@ register("choose", () => {
           class: "link",
           text: "Показать",
           attrs: { type: "button" },
-          on: {
-            click: () => {
-              const sec = list.querySelector<HTMLElement>('section[data-group="history"]');
-              sec?.scrollIntoView({ block: "start", behavior: "smooth" });
-              sec?.querySelector<HTMLElement>(".tile")?.focus({ preventScroll: true });
-            },
-          },
+          on: { click: showHistoryGroup },
         }),
       );
     historyMsg.hidden = false;
   }
 
+  /** К группе «Из истории покупок»: прокрутка и фокус на первую строку. */
+  function showHistoryGroup() {
+    const sec = list.querySelector<HTMLElement>('section[data-group="history"]');
+    sec?.scrollIntoView({ block: "start", behavior: "smooth" });
+    sec?.querySelector<HTMLElement>(".tile")?.focus({ preventScroll: true });
+  }
+
   async function openHistory() {
     const again = historyPhase === "open";
+    historyNote = null;
     setHistoryPhase("open");
     if (!again) historyStatus(historyProgressText(0), { busy: true });
     try {
@@ -358,12 +362,15 @@ register("choose", () => {
     const t = takeHistory(rows, owned, o.rows);
     rows = t.rows;
     owned = t.owned;
-    historyStatus(o.error ?? historyResultText(o.found, t.added.length), { error: o.error !== null, show: t.added.length > 0 });
+    const text = o.error ?? historyResultText(o.found, t.added.length);
+    historyStatus(text, { error: o.error !== null, show: t.added.length > 0 });
+    historyNote = { text, error: o.error !== null, show: t.added.length > 0 };
     if (loaded) {
       renderChips();
       renderList();
+      // окно Apple закрылось само: итог должен быть виден сразу, сверху списка
+      list.scrollTo({ top: 0 });
     }
-    historyMsg.scrollIntoView({ block: "nearest" });
     // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки (только если есть новое)
     if (t.check) void call("check_owned", { trackIds: t.check }).catch(() => undefined);
   }
@@ -676,6 +683,25 @@ register("choose", () => {
       parts.push(b);
     }
     if (dto?.ru_check_failed) parts.push(h("p", { class: "note", text: "Не удалось проверить российский App Store" }));
+    if (historyNote) {
+      const note = historyNote;
+      const b = h("div", { class: note.error ? "banner bad" : "banner", attrs: { role: "status" } }, h("span", { text: note.text }));
+      if (note.show) b.append(h("button", { class: "btn go small", text: "Показать", attrs: { type: "button" }, on: { click: showHistoryGroup } }));
+      b.append(
+        h("button", {
+          class: "link",
+          text: "Скрыть",
+          attrs: { type: "button" },
+          on: {
+            click: () => {
+              historyNote = null;
+              renderList();
+            },
+          },
+        }),
+      );
+      parts.unshift(b);
+    }
     return parts;
   }
 

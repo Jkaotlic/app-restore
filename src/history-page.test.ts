@@ -122,8 +122,8 @@ describe("history page script", () => {
     const api = load();
     expect(api.bannerText(0, "wait")).toBe("Войдите и пролистайте список покупок вниз до конца — так подгрузятся все приложения. Найдено: 0");
     expect(api.bannerText(312, "wait")).toBe("Войдите и пролистайте список покупок вниз до конца — так подгрузятся все приложения. Найдено: 312");
-    expect(api.bannerText(1222, "done")).toBe("Готово, найдено 1222. Окно закроется само.");
-    expect(api.bannerText(5, "error")).toBe("Дальше история не загрузилась, найдено 5. Окно закроется само.");
+    expect(api.bannerText(1222, "done")).toBe("Готово, найдено 1222. Возвращаемся в программу…");
+    expect(api.bannerText(5, "error")).toBe("Дальше история не загрузилась, найдено 5. Возвращаемся в программу…");
   });
 
   it("packs batches to at most 500 items and clips names", () => {

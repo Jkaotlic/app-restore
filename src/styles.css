@@ -267,6 +267,12 @@ input {
   flex: 1;
 }
 
+/* итог, который не удался (история покупок не загрузилась) */
+.banner.bad {
+  background: #f8e9e5;
+  color: var(--bad);
+}
+
 /* Строки приложений */
 .group {
   font: 500 13px/1.2 "Unbounded", sans-serif;
