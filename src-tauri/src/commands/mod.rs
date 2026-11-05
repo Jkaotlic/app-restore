@@ -1286,20 +1286,25 @@ pub fn owned_visible(state: State<'_, AppState>, track_ids: Vec<i64>) {
     *state.visible.lock().unwrap() = track_ids.into_iter().collect();
 }
 
-/// Иконки приложений из iTunes Lookup. Спрашивает только то, чего нет в кэше (до 1000 id за вызов);
-/// сбой даёт пусто, ошибок наружу нет.
+/// Сколько id за один вызов `app_icons` берём в работу.
+const ICONS_PER_CALL: usize = 1000;
+
+/// Иконки приложений из iTunes Lookup. Спрашивает только то, чего нет в кэше (до `ICONS_PER_CALL` id
+/// за вызов); сбой даёт пусто, ошибок наружу нет. «Иконки нет» кэшируется лишь для id из ответивших пачек.
 #[tauri::command]
 pub async fn app_icons(state: State<'_, AppState>, track_ids: Vec<i64>) -> Result<HashMap<i64, String>, UiError> {
+    let mut seen = HashSet::new();
     let mut ids = track_ids;
-    ids.truncate(1000);
+    ids.retain(|id| seen.insert(*id));
+    ids.truncate(ICONS_PER_CALL);
     let missing: Vec<i64> = {
         let cache = state.icons.lock().unwrap();
         ids.iter().copied().filter(|id| !cache.contains_key(id)).collect()
     };
     if !missing.is_empty() {
-        let found = artwork(state.fetch.as_ref(), &missing).await;
+        let (found, answered) = artwork(state.fetch.as_ref(), &missing).await;
         let mut cache = state.icons.lock().unwrap();
-        for id in missing {
+        for id in answered {
             cache.insert(id, found.get(&id).cloned());
         }
     }

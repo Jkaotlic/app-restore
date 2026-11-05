@@ -148,16 +148,19 @@ fn parse_artwork(body: &str) -> Vec<(i64, String)> {
         .collect()
 }
 
-/// Иконки пачками по `ICON_BATCH`. Сбой пачки пропускается: иконка — украшение, не повод падать.
-pub async fn artwork(fetch: &dyn Fetch, ids: &[i64]) -> HashMap<i64, String> {
+/// Иконки пачками по `ICON_BATCH`. Второе — id из пачек, на которые Apple ответил: только про них
+/// можно утверждать «иконки нет». Сбой пачки пропускается: иконка — украшение, не повод падать.
+pub async fn artwork(fetch: &dyn Fetch, ids: &[i64]) -> (HashMap<i64, String>, Vec<i64>) {
     let mut out = HashMap::new();
+    let mut answered = vec![];
     for chunk in ids.chunks(ICON_BATCH) {
         let list = chunk.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
         if let Ok(body) = fetch.get(&format!("{LOOKUP_URL}?id={list}&entity=software")).await {
             out.extend(parse_artwork(&body));
+            answered.extend_from_slice(chunk);
         }
     }
-    out
+    (out, answered)
 }
 
 const SEARCH_URL: &str = "https://itunes.apple.com/search";
@@ -309,8 +312,8 @@ mod tests {
     fn artwork_parses_lookup() {
         let got = parse_artwork(&fixture("lookup-us.json"));
         assert!(got.iter().any(|(id, u)| *id == 686449807 && u.starts_with("https://is1-ssl.mzstatic.com/")));
-        let body = r#"{"results":[{"trackId":1},{"trackId":2,"artworkUrl100":"http://x/a.jpg"},{"trackId":3,"artworkUrl100":"https://x/a.jpg"}]}"#;
-        assert_eq!(parse_artwork(body), vec![(3, "https://x/a.jpg".to_string())]);
+        let body = r#"{"results":[{"trackId":1},{"trackId":2,"artworkUrl100":"http://example.com/a.jpg"},{"trackId":3,"artworkUrl100":"https://example.com/a.jpg"}]}"#;
+        assert_eq!(parse_artwork(body), vec![(3, "https://example.com/a.jpg".to_string())]);
         assert!(parse_artwork("<html>").is_empty());
     }
 
@@ -322,21 +325,37 @@ mod tests {
         async fn get(&self, url: &str) -> Result<String, AppError> {
             let mut u = self.urls.lock().unwrap();
             u.push(url.into());
-            if u.len() == 2 { Err(AppError::AppleUnavailable { status: Some(503) }) } else { Ok(fixture("lookup-us.json")) }
+            match u.len() {
+                1 => Ok(fixture("lookup-us.json")),
+                2 => Err(AppError::AppleUnavailable { status: Some(503) }),
+                _ => Ok(r#"{"results":[{"trackId":320,"artworkUrl100":"https://example.com/a.jpg"}]}"#.into()),
+            }
         }
     }
 
     #[tokio::test]
     async fn artwork_batches_by_150() {
         let f = CountFetch { urls: Mutex::new(vec![]) };
-        let got = artwork(&f, &(1..=320).collect::<Vec<i64>>()).await;
+        let (got, answered) = artwork(&f, &(1..=320).collect::<Vec<i64>>()).await;
         let urls = f.urls.lock().unwrap();
         assert_eq!(urls.len(), 3);
-        for u in urls.iter() {
-            let ids = u.strip_prefix(&format!("{LOOKUP_URL}?id=")).unwrap().strip_suffix("&entity=software").unwrap();
-            assert!(ids.split(',').count() <= ICON_BATCH);
-        }
+        let batches: Vec<Vec<i64>> = urls
+            .iter()
+            .map(|u| {
+                let ids = u.strip_prefix(&format!("{LOOKUP_URL}?id=")).unwrap().strip_suffix("&entity=software").unwrap();
+                ids.split(',').map(|x| x.parse().unwrap()).collect()
+            })
+            .collect();
+        assert_eq!(batches.iter().map(Vec::len).collect::<Vec<_>>(), vec![150, 150, 20]);
+        assert_eq!(batches.concat(), (1..=320).collect::<Vec<i64>>());
+        // пришло из 1-го и 3-го запросов, 2-й упал
+        assert_eq!(got.len(), 2);
         assert!(got.contains_key(&686449807));
+        assert_eq!(got.get(&320).map(String::as_str), Some("https://example.com/a.jpg"));
+        // id упавшей пачки не попали в «отвеченные»: в кэше они останутся неспрошенными
+        assert_eq!(answered.len(), 170);
+        assert!(!answered.iter().any(|id| (151..=300).contains(id)));
+        assert!(answered.contains(&1) && answered.contains(&320));
     }
 
     fn lookup(body: Result<String, AppError>) -> (HttpLookup, Arc<FakeFetch>) {

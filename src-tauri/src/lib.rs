@@ -84,7 +84,7 @@ pub fn run() {
             commands::add_by_link,
             commands::links_in_text,
             commands::search_store,
-        commands::app_icons,
+            commands::app_icons,
             commands::start,
             commands::app_versions,
             commands::find_version,
