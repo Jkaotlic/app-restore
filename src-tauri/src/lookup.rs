@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use crate::retry::{APPLE_DELAYS, with_retry};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub const BATCH: usize = 150;
 const LOOKUP_URL: &str = "https://itunes.apple.com/lookup";
@@ -135,32 +135,103 @@ pub async fn app_name(fetch: &dyn Fetch, track_id: i64) -> Option<(String, Strin
 pub const ICON_BATCH: usize = 150;
 
 /// Пары (trackId, https-адрес `artworkUrl100`) из ответа Lookup; записи без адреса или с не-https пропускаются.
-fn parse_artwork(body: &str) -> Vec<(i64, String)> {
-    let Ok(v) = serde_json::from_str::<Value>(body) else { return vec![] };
-    let Some(results) = v.get("results").and_then(Value::as_array) else { return vec![] };
-    results
-        .iter()
-        .filter_map(|r| {
-            let id = r.get("trackId")?.as_i64()?;
-            let url = r.get("artworkUrl100")?.as_str()?;
-            url.starts_with("https://").then(|| (id, url.to_string()))
-        })
-        .collect()
+/// `None` — это не ответ Lookup (не JSON, нет `results`: например, страница входа в Wi-Fi).
+fn parse_artwork(body: &str) -> Option<Vec<(i64, String)>> {
+    let v = serde_json::from_str::<Value>(body).ok()?;
+    let results = v.get("results")?.as_array()?;
+    Some(
+        results
+            .iter()
+            .filter_map(|r| {
+                let id = r.get("trackId")?.as_i64()?;
+                let url = r.get("artworkUrl100")?.as_str()?;
+                url.starts_with("https://").then(|| (id, url.to_string()))
+            })
+            .collect(),
+    )
 }
 
-/// Иконки пачками по `ICON_BATCH`. Второе — id из пачек, на которые Apple ответил: только про них
-/// можно утверждать «иконки нет». Сбой пачки пропускается: иконка — украшение, не повод падать.
-pub async fn artwork(fetch: &dyn Fetch, ids: &[i64]) -> (HashMap<i64, String>, Vec<i64>) {
+/// Итог `artwork`: найденные иконки; id, про которые ответ окончательный (иконка есть или Apple
+/// ответил «нет» и без страны, и в российском магазине); `failed` — какая-то пачка не ответила.
+#[derive(Debug, Default)]
+pub struct Artwork {
+    pub found: HashMap<i64, String>,
+    pub answered: Vec<i64>,
+    pub failed: bool,
+}
+
+/// Один проход пачками по `ICON_BATCH`; после первого сбоя дальше не спрашивает (общий лимит Lookup).
+async fn artwork_pass(fetch: &dyn Fetch, ids: &[i64], country: Option<&str>) -> (HashMap<i64, String>, Vec<i64>, bool) {
     let mut out = HashMap::new();
     let mut answered = vec![];
     for chunk in ids.chunks(ICON_BATCH) {
         let list = chunk.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
-        if let Ok(body) = fetch.get(&format!("{LOOKUP_URL}?id={list}&entity=software")).await {
-            out.extend(parse_artwork(&body));
-            answered.extend_from_slice(chunk);
+        let url = match country {
+            Some(c) => format!("{LOOKUP_URL}?id={list}&country={c}&entity=software"),
+            None => format!("{LOOKUP_URL}?id={list}&entity=software"),
+        };
+        match fetch.get(&url).await.ok().as_deref().and_then(parse_artwork) {
+            Some(pairs) => {
+                out.extend(pairs);
+                answered.extend_from_slice(chunk);
+            }
+            None => return (out, answered, true),
         }
     }
-    (out, answered)
+    (out, answered, false)
+}
+
+/// Иконки: сначала Lookup без страны (US), потом для оставшихся без иконки — `country=ru`
+/// (приложения только российского магазина). Сбой — дальше не спрашиваем, ошибок наружу нет.
+pub async fn artwork(fetch: &dyn Fetch, ids: &[i64]) -> Artwork {
+    let (mut found, us, failed) = artwork_pass(fetch, ids, None).await;
+    let rest: Vec<i64> = us.iter().copied().filter(|id| !found.contains_key(id)).collect();
+    let (ru, failed) = if failed || rest.is_empty() {
+        (vec![], failed)
+    } else {
+        let (ru_found, ru, ru_failed) = artwork_pass(fetch, &rest, Some("ru")).await;
+        found.extend(ru_found);
+        (ru, ru_failed)
+    };
+    let ru: HashSet<i64> = ru.into_iter().collect();
+    let answered = us.into_iter().filter(|id| found.contains_key(id) || ru.contains(id)).collect();
+    Artwork { found, answered, failed }
+}
+
+/// Сколько ждём после сбоя пачки иконок: Lookup общий с проверкой покупок и поиском.
+pub const ICONS_BACKOFF: Duration = Duration::from_secs(60);
+
+/// Можно ли сейчас спрашивать иконки у Apple: пауза после сбоя кончилась (или её не было).
+pub fn icons_net_allowed(now: Instant, until: Option<Instant>) -> bool {
+    until.is_none_or(|u| now >= u)
+}
+
+/// Иконки для `ids` (без повторов): из кэша, недостающие — у Lookup, если не идёт пауза после сбоя.
+/// В кэш «иконки нет» — только для окончательных ответов; сбой ставит паузу `ICONS_BACKOFF`.
+pub async fn cached_icons(
+    fetch: &dyn Fetch,
+    cache: &Mutex<HashMap<i64, Option<String>>>,
+    backoff_until: &Mutex<Option<Instant>>,
+    ids: &[i64],
+    now: Instant,
+) -> HashMap<i64, String> {
+    let missing: Vec<i64> = {
+        let c = cache.lock().unwrap();
+        ids.iter().copied().filter(|id| !c.contains_key(id)).collect()
+    };
+    let allowed = icons_net_allowed(now, *backoff_until.lock().unwrap());
+    if !missing.is_empty() && allowed {
+        let got = artwork(fetch, &missing).await;
+        if got.failed {
+            *backoff_until.lock().unwrap() = Some(now + ICONS_BACKOFF);
+        }
+        let mut c = cache.lock().unwrap();
+        for id in got.answered {
+            c.insert(id, got.found.get(&id).cloned());
+        }
+    }
+    let c = cache.lock().unwrap();
+    ids.iter().filter_map(|id| Some((*id, c.get(id)?.clone()?))).collect()
 }
 
 const SEARCH_URL: &str = "https://itunes.apple.com/search";
@@ -310,52 +381,145 @@ mod tests {
     }
     #[test]
     fn artwork_parses_lookup() {
-        let got = parse_artwork(&fixture("lookup-us.json"));
+        let got = parse_artwork(&fixture("lookup-us.json")).unwrap();
         assert!(got.iter().any(|(id, u)| *id == 686449807 && u.starts_with("https://is1-ssl.mzstatic.com/")));
         let body = r#"{"results":[{"trackId":1},{"trackId":2,"artworkUrl100":"http://example.com/a.jpg"},{"trackId":3,"artworkUrl100":"https://example.com/a.jpg"}]}"#;
-        assert_eq!(parse_artwork(body), vec![(3, "https://example.com/a.jpg".to_string())]);
-        assert!(parse_artwork("<html>").is_empty());
+        assert_eq!(parse_artwork(body), Some(vec![(3, "https://example.com/a.jpg".to_string())]));
+        // не ответ Lookup (страница входа в Wi-Fi, чужой JSON) — не «иконки нет»
+        assert_eq!(parse_artwork("<html>"), None);
+        assert_eq!(parse_artwork(r#"{"error":"x"}"#), None);
+        assert_eq!(parse_artwork(r#"{"results":[]}"#), Some(vec![]));
     }
 
-    struct CountFetch {
+    /// Ответ по адресу: `fail` — ошибка для пачки с этим id; `ru` — иконки только в российском магазине.
+    struct UrlFetch {
         urls: Mutex<Vec<String>>,
+        fail: Option<i64>,
+        ru: Vec<i64>,
+        portal: bool,
+    }
+    impl UrlFetch {
+        fn new() -> Self {
+            Self { urls: Mutex::new(vec![]), fail: None, ru: vec![], portal: false }
+        }
+        fn ids(url: &str) -> Vec<i64> {
+            let ids = url.strip_prefix(&format!("{LOOKUP_URL}?id=")).unwrap();
+            ids.split('&').next().unwrap().split(',').map(|x| x.parse().unwrap()).collect()
+        }
     }
     #[async_trait]
-    impl Fetch for CountFetch {
+    impl Fetch for UrlFetch {
         async fn get(&self, url: &str) -> Result<String, AppError> {
-            let mut u = self.urls.lock().unwrap();
-            u.push(url.into());
-            match u.len() {
-                1 => Ok(fixture("lookup-us.json")),
-                2 => Err(AppError::AppleUnavailable { status: Some(503) }),
-                _ => Ok(r#"{"results":[{"trackId":320,"artworkUrl100":"https://example.com/a.jpg"}]}"#.into()),
+            self.urls.lock().unwrap().push(url.into());
+            let ids = Self::ids(url);
+            if self.fail.is_some_and(|f| ids.contains(&f)) {
+                return Err(AppError::AppleUnavailable { status: Some(503) });
             }
+            if self.portal {
+                return Ok("<html>Войдите в сеть</html>".into());
+            }
+            let icons: Vec<String> = if url.contains("&country=ru&") {
+                ids.iter().filter(|id| self.ru.contains(id)).map(|id| format!(r#"{{"trackId":{id},"artworkUrl100":"https://example.com/{id}.jpg"}}"#)).collect()
+            } else if ids.contains(&320) {
+                vec![r#"{"trackId":320,"artworkUrl100":"https://example.com/a.jpg"}"#.into()]
+            } else {
+                vec![]
+            };
+            Ok(format!(r#"{{"results":[{}]}}"#, icons.join(",")))
         }
     }
 
     #[tokio::test]
     async fn artwork_batches_by_150() {
-        let f = CountFetch { urls: Mutex::new(vec![]) };
-        let (got, answered) = artwork(&f, &(1..=320).collect::<Vec<i64>>()).await;
+        let f = UrlFetch::new();
+        let got = artwork(&f, &(1..=320).collect::<Vec<i64>>()).await;
         let urls = f.urls.lock().unwrap();
-        assert_eq!(urls.len(), 3);
-        let batches: Vec<Vec<i64>> = urls
-            .iter()
-            .map(|u| {
-                let ids = u.strip_prefix(&format!("{LOOKUP_URL}?id=")).unwrap().strip_suffix("&entity=software").unwrap();
-                ids.split(',').map(|x| x.parse().unwrap()).collect()
-            })
-            .collect();
-        assert_eq!(batches.iter().map(Vec::len).collect::<Vec<_>>(), vec![150, 150, 20]);
-        assert_eq!(batches.concat(), (1..=320).collect::<Vec<i64>>());
-        // пришло из 1-го и 3-го запросов, 2-й упал
-        assert_eq!(got.len(), 2);
-        assert!(got.contains_key(&686449807));
-        assert_eq!(got.get(&320).map(String::as_str), Some("https://example.com/a.jpg"));
-        // id упавшей пачки не попали в «отвеченные»: в кэше они останутся неспрошенными
-        assert_eq!(answered.len(), 170);
-        assert!(!answered.iter().any(|id| (151..=300).contains(id)));
-        assert!(answered.contains(&1) && answered.contains(&320));
+        let us: Vec<Vec<i64>> = urls.iter().filter(|u| !u.contains("country=")).map(|u| UrlFetch::ids(u)).collect();
+        assert_eq!(us.iter().map(Vec::len).collect::<Vec<_>>(), vec![150, 150, 20]);
+        assert_eq!(us.concat(), (1..=320).collect::<Vec<i64>>());
+        assert!(urls.iter().all(|u| u.ends_with("&entity=software")));
+        // без иконки — ещё раз в российском магазине, теми же пачками: 319 id → 150 + 150 + 19
+        let ru: Vec<usize> = urls.iter().filter(|u| u.contains("&country=ru&")).map(|u| UrlFetch::ids(u).len()).collect();
+        assert_eq!(ru, vec![150, 150, 19]);
+        assert_eq!(got.found.get(&320).map(String::as_str), Some("https://example.com/a.jpg"));
+        assert_eq!(got.answered.len(), 320);
+        assert!(!got.failed);
+    }
+
+    #[tokio::test]
+    async fn artwork_stops_after_the_first_failed_batch() {
+        let f = UrlFetch { fail: Some(151), ..UrlFetch::new() };
+        let got = artwork(&f, &(1..=320).collect::<Vec<i64>>()).await;
+        let urls = f.urls.lock().unwrap();
+        // 1-я пачка ответила, 2-я упала: 3-й и российского прохода нет
+        assert_eq!(urls.len(), 2);
+        assert!(got.failed);
+        // «иконки нет» без российского ответа не окончательно: в кэш не пойдёт
+        assert!(got.answered.is_empty());
+    }
+
+    #[tokio::test]
+    async fn artwork_asks_the_russian_store_for_ru_only_apps() {
+        let f = UrlFetch { ru: vec![7], ..UrlFetch::new() };
+        let got = artwork(&f, &[7, 8]).await;
+        assert_eq!(got.found.get(&7).map(String::as_str), Some("https://example.com/7.jpg"));
+        assert!(!got.found.contains_key(&8));
+        let mut answered = got.answered.clone();
+        answered.sort();
+        assert_eq!(answered, vec![7, 8]);
+        let urls = f.urls.lock().unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[1].contains("?id=7,8&country=ru&entity=software"));
+    }
+
+    #[tokio::test]
+    async fn artwork_portal_page_is_not_an_answer() {
+        let f = UrlFetch { portal: true, ..UrlFetch::new() };
+        let got = artwork(&f, &[1, 2]).await;
+        assert!(got.failed);
+        assert!(got.answered.is_empty());
+        assert_eq!(f.urls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn icons_net_allowed_after_backoff() {
+        let now = Instant::now();
+        assert!(icons_net_allowed(now, None));
+        assert!(!icons_net_allowed(now, Some(now + Duration::from_secs(1))));
+        assert!(icons_net_allowed(now + Duration::from_secs(1), Some(now + Duration::from_secs(1))));
+    }
+
+    #[tokio::test]
+    async fn cached_icons_waits_after_a_failed_batch() {
+        let f = UrlFetch { fail: Some(1), ..UrlFetch::new() };
+        let cache = Mutex::new(HashMap::new());
+        let until = Mutex::new(None);
+        let t0 = Instant::now();
+        assert!(cached_icons(&f, &cache, &until, &[1, 320], t0).await.is_empty());
+        assert_eq!(f.urls.lock().unwrap().len(), 1);
+        assert_eq!(*until.lock().unwrap(), Some(t0 + ICONS_BACKOFF));
+        // в паузе — только кэш, к Apple не идём
+        assert!(cached_icons(&f, &cache, &until, &[1, 320], t0 + Duration::from_secs(30)).await.is_empty());
+        assert_eq!(f.urls.lock().unwrap().len(), 1);
+        assert!(cache.lock().unwrap().is_empty());
+        // пауза кончилась — спрашиваем снова
+        cached_icons(&f, &cache, &until, &[1, 320], t0 + ICONS_BACKOFF).await;
+        assert_eq!(f.urls.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn cached_icons_answers_known_ids_from_cache() {
+        let f = UrlFetch::new();
+        let cache = Mutex::new(HashMap::new());
+        let until = Mutex::new(None);
+        let t0 = Instant::now();
+        let got = cached_icons(&f, &cache, &until, &[320, 5], t0).await;
+        assert_eq!(got.len(), 1);
+        let n = f.urls.lock().unwrap().len();
+        // и с иконкой, и окончательное «нет» — без сети
+        let again = cached_icons(&f, &cache, &until, &[320, 5], t0).await;
+        assert_eq!(again, got);
+        assert_eq!(f.urls.lock().unwrap().len(), n);
     }
 
     fn lookup(body: Result<String, AppError>) -> (HttpLookup, Arc<FakeFetch>) {

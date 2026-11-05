@@ -57,6 +57,7 @@ pub fn run() {
                 default_hook(info);
             }));
             commands::setup(app.handle());
+            fit_main_window(app);
             Ok(())
         })
         // файлы, перетащенные в окно: пути приходят сюда, интерфейсу доступ к ним не нужен
@@ -120,4 +121,49 @@ pub fn run() {
                 log::write("exit", "программа закрыта");
             }
         });
+}
+
+/// Размер окна, который помещается в рабочую область `area`: не больше её и не меньше `min`.
+pub fn fit_window(want: (f64, f64), area: (f64, f64), min: (f64, f64)) -> (f64, f64) {
+    (want.0.min(area.0).max(min.0), want.1.min(area.1).max(min.1))
+}
+
+/// Заголовок окна поверх внутреннего размера (логические px): macOS ~28, Windows ~32.
+const WINDOW_FRAME: f64 = 40.0;
+
+/// Окно 1200×780 не влезает в рабочую область монитора (1366×768, 1080p при 150 %): уменьшить до неё,
+/// но не меньше минимума из `tauri.conf.json`, и поставить по центру — иначе панель действий уходит за край.
+fn fit_main_window(app: &tauri::App) {
+    use tauri::Manager;
+    let Some(w) = app.get_webview_window("main") else { return };
+    let Ok(Some(m)) = w.current_monitor() else { return };
+    let cfg = app.config().app.windows.first();
+    let want = cfg.map_or((1200.0, 780.0), |c| (c.width, c.height));
+    let min = cfg.map_or((960.0, 620.0), |c| (c.min_width.unwrap_or(960.0), c.min_height.unwrap_or(620.0)));
+    let s = m.scale_factor();
+    let a = m.work_area().size;
+    let area = (a.width as f64 / s, a.height as f64 / s - WINDOW_FRAME);
+    let fit = fit_window(want, area, min);
+    if fit != want {
+        let _ = w.set_size(tauri::LogicalSize::new(fit.0, fit.1));
+        let _ = w.center();
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::fit_window;
+
+    #[test]
+    fn fits_the_work_area_but_not_below_the_minimum() {
+        let (want, min) = ((1200.0, 780.0), (960.0, 620.0));
+        // большой экран — как есть
+        assert_eq!(fit_window(want, (1920.0, 1040.0), min), want);
+        // 1366×768 без заголовка и панели задач
+        assert_eq!(fit_window(want, (1366.0, 688.0), min), (1200.0, 688.0));
+        // 1080p при 150 %: ≈ 1280×680
+        assert_eq!(fit_window(want, (1280.0, 680.0), min), (1200.0, 680.0));
+        // меньше минимума не делаем
+        assert_eq!(fit_window(want, (800.0, 500.0), min), (960.0, 620.0));
+    }
 }

@@ -25,7 +25,7 @@ use crate::ipatool::runner::SidecarRunner;
 use crate::ipatool::session::{Account, Session};
 use crate::library::Library;
 use crate::owned_cache::{self, Entry, OwnedCache};
-use crate::lookup::{Fetch, HttpLookup, Lookup, ReqwestFetch, app_name, artwork};
+use crate::lookup::{Fetch, HttpLookup, Lookup, ReqwestFetch, app_name, cached_icons};
 use crate::pending_jobs::{PendingJob, PendingStore};
 use crate::queue::{FsSpace, JobState, Queue};
 use crate::releases::NotifiedStore;
@@ -110,6 +110,8 @@ pub struct AppState {
     visible: Mutex<HashSet<i64>>,
     /// Иконки из Lookup: None — спрашивали, иконки нет.
     icons: Mutex<HashMap<i64, Option<String>>>,
+    /// Пауза после сбоя пачки иконок: до этого времени `app_icons` отвечает только из кэша.
+    icons_backoff_until: Mutex<Option<std::time::Instant>>,
     /// «Проверить весь каталог» идёт: эпоха Apple ID, при которой его начали (`check_catalog`).
     sweep: Mutex<Option<u64>>,
     /// trackId последнего ответа «В App Store»: их устаревшие ответы тоже перепроверяются.
@@ -215,6 +217,7 @@ impl AppState {
             owned_cache: OwnedCache::open(data_dir.join("owned-cache.json")),
             visible: Mutex::new(HashSet::new()),
             icons: Mutex::new(HashMap::new()),
+            icons_backoff_until: Mutex::new(None),
             sweep: Mutex::new(None),
             store_ids: Mutex::new(vec![]),
             screen_extra: Mutex::new(HashSet::new()),
@@ -1290,26 +1293,15 @@ pub fn owned_visible(state: State<'_, AppState>, track_ids: Vec<i64>) {
 const ICONS_PER_CALL: usize = 1000;
 
 /// Иконки приложений из iTunes Lookup. Спрашивает только то, чего нет в кэше (до `ICONS_PER_CALL` id
-/// за вызов); сбой даёт пусто, ошибок наружу нет. «Иконки нет» кэшируется лишь для id из ответивших пачек.
+/// за вызов); сбой даёт пусто, ошибок наружу нет. «Иконки нет» кэшируется лишь для окончательных ответов;
+/// после сбоя 60 с отвечает только из кэша (`cached_icons`): Lookup общий с покупками и поиском.
 #[tauri::command]
 pub async fn app_icons(state: State<'_, AppState>, track_ids: Vec<i64>) -> Result<HashMap<i64, String>, UiError> {
     let mut seen = HashSet::new();
     let mut ids = track_ids;
     ids.retain(|id| seen.insert(*id));
     ids.truncate(ICONS_PER_CALL);
-    let missing: Vec<i64> = {
-        let cache = state.icons.lock().unwrap();
-        ids.iter().copied().filter(|id| !cache.contains_key(id)).collect()
-    };
-    if !missing.is_empty() {
-        let (found, answered) = artwork(state.fetch.as_ref(), &missing).await;
-        let mut cache = state.icons.lock().unwrap();
-        for id in answered {
-            cache.insert(id, found.get(&id).cloned());
-        }
-    }
-    let cache = state.icons.lock().unwrap();
-    Ok(ids.into_iter().filter_map(|id| Some((id, cache.get(&id)?.clone()?))).collect())
+    Ok(cached_icons(state.fetch.as_ref(), &state.icons, &state.icons_backoff_until, &ids, std::time::Instant::now()).await)
 }
 
 /// «В App Store»: поиск по российскому магазину (Search API). Отдаёт строки, которых ещё нет на
