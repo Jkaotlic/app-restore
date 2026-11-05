@@ -227,6 +227,8 @@ pub trait DeviceHub: Send + Sync {
 const NO_SPACE: &str = "На iPhone не хватает места";
 const BAD_IOS: &str = "Эта версия приложения не подходит для iOS на телефоне";
 const IPAD_ONLY: &str = "Это приложение только для iPad";
+/// usbmuxd видит телефон, а тот не пускает к себе: только что подключили или перезагружается.
+pub const NOT_READY: &str = "iPhone пока не отвечает. Разблокируйте его, подождите несколько секунд и попробуйте снова";
 
 /// Сырой текст ошибки -> `AppError`. Идентификаторы взяты из исходников idevice 0.1.68:
 /// `src/lib.rs` (`IdeviceError::from_device_error_type`: InvalidHostID, DeviceLocked,
@@ -246,8 +248,12 @@ pub fn map_install_error(raw: &str) -> AppError {
         "pairing trust dialog pending",
         "user denied pairing",
         "device does not have pairing file",
+        // usbmuxd без записи о паре: «Доверять» на этом компьютере ещё не нажимали
+        "missing PairRecordData",
     ]) {
         AppError::DeviceNotTrusted
+    } else if has(&["Usbmuxd(ConnectionRefused)"]) {
+        AppError::DeviceRejected { reason: NOT_READY.into() }
     } else if has(&["PasswordProtected", "PasscodeLocked", "DeviceLocked", "device is locked", "device locked"]) {
         AppError::DeviceLocked
     } else if has(&["InsufficientStorage", "NoSpaceLeft", "No space left", "not enough space", "not enough free space"]) {
@@ -396,6 +402,8 @@ mod tests {
             "user denied pairing trust",
             "NotPaired",
             "InvalidPairRecord",
+            // новый iPhone, «Доверять» ещё не нажимали: у usbmuxd нет записи о паре (журнал 29.10)
+            "unexpected response from device: missing PairRecordData in pair record response / UnexpectedResponse(\"missing PairRecordData in pair record response\")",
         ] {
             assert_eq!(map_install_error(raw), AppError::DeviceNotTrusted, "{raw}");
         }
@@ -452,6 +460,17 @@ mod tests {
         ] {
             assert_eq!(map_install_error(raw), AppError::DeviceNotFound { drivers_missing: false }, "{raw}");
         }
+    }
+
+    #[test]
+    fn device_port_refused_is_not_ready_yet() {
+        // usbmuxd есть, телефон порт lockdown не открыл (только что подключили, перезагрузка);
+        // журнал 05.11: проходит само через пару секунд
+        let raw = "device refused connection / Usbmuxd(ConnectionRefused)";
+        assert_eq!(map_install_error(raw), rej(NOT_READY));
+        // отказ сокета самого usbmuxd — не это (его разбирает `mux_err`)
+        let sock = "Socket(Os { code: 61, kind: ConnectionRefused, message: \"Connection refused\" })";
+        assert_ne!(map_install_error(sock), rej(NOT_READY));
     }
 
     fn ph(class: &str, udid: &str) -> PhoneInfo {
