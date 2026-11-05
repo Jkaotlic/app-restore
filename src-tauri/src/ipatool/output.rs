@@ -81,7 +81,10 @@ fn map_error(raw: &str) -> AppError {
         AppError::AccountDisabled
     } else if has(&["something went wrong", "unsupported authentication redirect"]) {
         AppError::AppleChangedLogin
-    } else if has(&["platform version lookup returned no app", "catalog lookup returned http 404"]) {
+    } else if has(&["platform version lookup returned no app", "catalog lookup returned http 404"])
+        // патч 0001: повторное скачивание убранного приложения без версии, Apple отказал (403)
+        || (has(&["redownload request"]) && has(&["http 403"]))
+    {
         // до `status_of`: пропавшее у Apple — не «серверы не отвечают», даже с кодом в тексте
         AppError::AppGone
     } else if let Some(st) = status_of(&e) {
@@ -302,6 +305,13 @@ mod tests {
         // 5xx в том же тексте — всё равно приложение пропало, а не сбой Apple
         let l = err_line("platform version lookup returned no app; fallback: unexpected status code 503");
         assert_eq!(parse_output(&l, 1), Err(AppError::AppGone));
+        // живой ответ 05.11 (ipatool с патчем 0001): убранное приложение, повторное скачивание
+        // без версии — Apple отвечает 403. Это отказ, а не «не удалось проверить»
+        let l = err_line("failed to send redownload request: unexpected response from Apple (HTTP 403): empty or non-plist body");
+        assert_eq!(parse_output(&l, 1), Err(AppError::AppGone));
+        // а 5xx на том же запросе — сбой Apple, повторить стоит
+        let l = err_line("failed to send redownload request: unexpected response from Apple (HTTP 503): empty or non-plist body");
+        assert_eq!(parse_output(&l, 1), Err(AppError::AppleUnavailable { status: Some(503) }));
     }
 
     #[test]

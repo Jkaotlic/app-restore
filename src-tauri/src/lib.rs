@@ -50,6 +50,12 @@ pub fn run() {
                 log::init(dir);
             }
             log::write("start", &format!("v{} {}", env!("CARGO_PKG_VERSION"), std::env::consts::OS));
+            // паника — ещё и в журнал: «программа закрылась сама» иначе следов не оставляет
+            let default_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                log::write("panic", &info.to_string());
+                default_hook(info);
+            }));
             commands::setup(app.handle());
             Ok(())
         })
@@ -105,6 +111,12 @@ pub fn run() {
             commands::report_to_catalog,
             commands::history::open_history,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        // выход — в журнал: по нему видно, закрыли программу или она пропала без следа
+        .run(|_app, e| {
+            if let tauri::RunEvent::Exit = e {
+                log::write("exit", "программа закрыта");
+            }
+        });
 }
