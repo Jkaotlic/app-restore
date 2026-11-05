@@ -340,6 +340,70 @@ export function tileLine(
   return { text: "в ваших покупках", tone: "muted" };
 }
 
+export type CellTone = "ok" | "plain" | "muted" | "warn" | "checking" | "retry";
+
+/** Ячейка «На этом Apple ID». Правила по порядку, первое совпавшее. */
+export function ownedCell(r: RowDto, s: OwnedState | undefined, toIphone: boolean): { text: string; tone: CellTone } {
+  if (r.ipad_only && toIphone) return { text: "только для iPad", tone: "warn" };
+  if (r.other_account) return { text: r.purchaser_masked ? `Куплено на другом Apple ID (${r.purchaser_masked})` : "Куплено на другом Apple ID", tone: "warn" };
+  if ((r.source === "removed" || r.source === "phone" || r.source === "store" || r.source === "history") && !r.has_saved_copy) {
+    if (!s || s.kind === "checking") return { text: "Проверяем…", tone: "checking" };
+    if (s.kind === "gone") return { text: "Apple больше не отдаёт", tone: "muted" };
+    if (s.kind === "no") return { text: "Нет на вашем Apple ID", tone: "muted" };
+    if (s.kind === "error") return { text: "Не удалось проверить · повторить", tone: "retry" };
+    return { text: "Куплено", tone: "ok" };
+  }
+  if (r.has_saved_copy) return { text: "Есть копия на компьютере", tone: "plain" };
+  if (r.unknown_account) return { text: "Неизвестный Apple ID", tone: "muted" };
+  if (r.source === "purchase") return { text: "Куплено", tone: "ok" };
+  if (r.source === "link" && s?.kind === "yes") return { text: "Куплено", tone: "ok" };
+  return { text: "добавлено по ссылке", tone: "muted" };
+}
+
+/** Ячейка «На iPhone»: что стоит и какая версия новее. */
+export function phoneCell(r: RowDto, withPhone: boolean): { have: string; newer: string | null } {
+  if (!withPhone) return { have: "—", newer: null };
+  if (r.installed_version === null) return { have: "не установлено", newer: null };
+  return { have: r.installed_version || "есть", newer: hasNewer(r) ? r.available_version : null };
+}
+
+/** Строка под названием: откуда приложение и какая версия. */
+export function subLine(
+  r: RowDto,
+  s: OwnedState | undefined,
+  toIphone: boolean,
+  opts: { phoneIos?: string | null; chosen?: ChosenVersion | null },
+): { text: string; tone: CellTone; note?: string } {
+  if (opts.chosen) return { text: opts.chosen.display ? `версия ${opts.chosen.display} (выбрана)` : "выбрана другая версия", tone: "plain" };
+  const tooOld = toIphone ? tooOldNote(r.min_ios, opts.phoneIos ?? null) : null;
+  if (tooOld) return { text: tooOld, tone: "warn", note: downloadOnlyNote(opts.phoneIos ?? "") };
+  switch (r.source) {
+    case "removed":
+      return { text: "удалено из российского App Store", tone: "muted" };
+    case "purchase":
+      return { text: r.removed_from_ru ? "нет в российском App Store" : "в ваших покупках", tone: "muted" };
+    case "phone":
+      return { text: r.version ? `с телефона ${r.version}` : "с этого iPhone", tone: "muted" };
+    case "store": {
+      const text = r.available_version ? `доступно ${r.available_version}` : "в App Store";
+      return s?.kind === "no" ? { text, tone: "muted", note: NAMESAKE_NOTE } : { text, tone: "muted" };
+    }
+    case "history":
+      return { text: "из истории покупок", tone: "muted" };
+    case "saved":
+      return { text: "копия на компьютере", tone: "muted" };
+    default:
+      return { text: "добавлено по ссылке", tone: "muted" };
+  }
+}
+
+/** Как `tileA11y`, но по ячейке «На этом Apple ID». */
+export function rowA11y(name: string, owned: { text: string; tone: CellTone }, enabled: boolean, isSelected: boolean): { pressed: "true" | "false" | null; disabled: boolean; label: string | null } {
+  if (owned.tone === "retry") return { pressed: null, disabled: false, label: null };
+  if (!enabled) return { pressed: "false", disabled: true, label: `${name}, не выбрать: ${owned.text}` };
+  return { pressed: String(isSelected) as "true" | "false", disabled: false, label: null };
+}
+
 /** Состояние плитки для экранного диктора. Невыбираемая остаётся в порядке Tab (`aria-disabled`, а не
  * `disabled`) и называет причину; плитка «повторить проверку» — обычная кнопка, не переключатель. */
 export function tileA11y(name: string, line: TileLine, enabled: boolean, isSelected: boolean): { pressed: "true" | "false" | null; disabled: boolean; label: string | null } {

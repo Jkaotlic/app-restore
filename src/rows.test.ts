@@ -25,6 +25,10 @@ import {
   selectionLabel,
   selectionSummary,
   tileA11y,
+  ownedCell,
+  phoneCell,
+  subLine,
+  rowA11y,
   tileLine,
   visibleGroups,
   visibleChecks,
@@ -666,5 +670,58 @@ describe("«Проверить весь каталог» и «Новое»", () 
     expect(after.get(3)).toEqual(error);
     expect(after.has(4)).toBe(false);
     expect(before.get(1)).toEqual(error);
+  });
+});
+
+describe("row cells", () => {
+  const no: OwnedState = { kind: "no" };
+  it("ownedCell: rules in order", () => {
+    expect(ownedCell(row(1, "A", { ipad_only: true }), undefined, true)).toEqual({ text: "только для iPad", tone: "warn" });
+    expect(ownedCell(row(1, "A", { other_account: true, purchaser_masked: "ma***@x.ru" }), undefined, false)).toEqual({ text: "Куплено на другом Apple ID (ma***@x.ru)", tone: "warn" });
+    expect(ownedCell(row(1, "A", { other_account: true }), undefined, false)).toEqual({ text: "Куплено на другом Apple ID", tone: "warn" });
+    const c = cat(1, "Сбер");
+    expect(ownedCell(c, undefined, false)).toEqual({ text: "Проверяем…", tone: "checking" });
+    expect(ownedCell(c, { kind: "checking" }, false)).toEqual({ text: "Проверяем…", tone: "checking" });
+    expect(ownedCell(c, { kind: "gone" }, false)).toEqual({ text: "Apple больше не отдаёт", tone: "muted" });
+    expect(ownedCell(c, no, false)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
+    expect(ownedCell(c, { kind: "error", error: softErr }, false)).toEqual({ text: "Не удалось проверить · повторить", tone: "retry" });
+    expect(ownedCell(c, { kind: "yes" }, false)).toEqual({ text: "Куплено", tone: "ok" });
+    expect(ownedCell(cat(1, "Сбер", { has_saved_copy: true }), no, false)).toEqual({ text: "Есть копия на компьютере", tone: "plain" });
+    expect(ownedCell(row(1, "A", { unknown_account: true }), undefined, false)).toEqual({ text: "Неизвестный Apple ID", tone: "muted" });
+    expect(ownedCell(row(1, "A"), undefined, false)).toEqual({ text: "Куплено", tone: "ok" });
+    expect(ownedCell(row(1, "A", { source: "link" }), { kind: "yes" }, false)).toEqual({ text: "Куплено", tone: "ok" });
+    expect(ownedCell(row(1, "A", { source: "link" }), no, false)).toEqual({ text: "добавлено по ссылке", tone: "muted" });
+  });
+  it("phoneCell", () => {
+    expect(phoneCell(row(1, "A", { installed_version: "1" }), false)).toEqual({ have: "—", newer: null });
+    expect(phoneCell(row(1, "A", { installed_version: "21.3", available_version: "22.1" }), true)).toEqual({ have: "21.3", newer: "22.1" });
+    expect(phoneCell(row(1, "A", { installed_version: "" }), true)).toEqual({ have: "есть", newer: null });
+    expect(phoneCell(row(1, "A"), true)).toEqual({ have: "не установлено", newer: null });
+  });
+  it("subLine", () => {
+    const o = {};
+    expect(subLine(row(1, "A"), undefined, false, { chosen: { id: "1", display: "12.15.0" } })).toEqual({ text: "версия 12.15.0 (выбрана)", tone: "plain" });
+    expect(subLine(row(1, "A"), undefined, false, { chosen: { id: "1", display: null } })).toEqual({ text: "выбрана другая версия", tone: "plain" });
+    expect(subLine(row(1, "A", { min_ios: "17.0" }), undefined, true, { phoneIos: "15.0" })).toEqual({
+      text: "Нужна iOS 17.0, на iPhone 15.0",
+      tone: "warn",
+      note: downloadOnlyNote("15.0"),
+    });
+    expect(subLine(cat(1, "A"), undefined, false, o)).toEqual({ text: "удалено из российского App Store", tone: "muted" });
+    expect(subLine(row(1, "A", { removed_from_ru: true }), undefined, false, o).text).toBe("нет в российском App Store");
+    expect(subLine(row(1, "A"), undefined, false, o).text).toBe("в ваших покупках");
+    expect(subLine(row(1, "A", { source: "phone", version: "5.1" }), undefined, false, o).text).toBe("с телефона 5.1");
+    expect(subLine(row(1, "A", { source: "phone" }), undefined, false, o).text).toBe("с этого iPhone");
+    expect(subLine(row(1, "A", { source: "store", available_version: "12.1" }), { kind: "yes" }, false, o).text).toBe("доступно 12.1");
+    expect(subLine(row(1, "A", { source: "store" }), { kind: "yes" }, false, o)).toEqual({ text: "в App Store", tone: "muted" });
+    expect(subLine(row(1, "A", { source: "store" }), no, false, o)).toEqual({ text: "в App Store", tone: "muted", note: NAMESAKE_NOTE });
+    expect(subLine(row(1, "A", { source: "history" }), undefined, false, o).text).toBe("из истории покупок");
+    expect(subLine(row(1, "A", { source: "saved" }), undefined, false, o).text).toBe("копия на компьютере");
+    expect(subLine(row(1, "A", { source: "link" }), undefined, false, o).text).toBe("добавлено по ссылке");
+  });
+  it("rowA11y", () => {
+    expect(rowA11y("Сбер", { text: "x", tone: "retry" }, true, false)).toEqual({ pressed: null, disabled: false, label: null });
+    expect(rowA11y("Сбер", { text: "Нет на вашем Apple ID", tone: "muted" }, false, false)).toEqual({ pressed: "false", disabled: true, label: "Сбер, не выбрать: Нет на вашем Apple ID" });
+    expect(rowA11y("Сбер", { text: "Куплено", tone: "ok" }, true, true)).toEqual({ pressed: "true", disabled: false, label: null });
   });
 });
