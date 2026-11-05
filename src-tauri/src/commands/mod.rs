@@ -25,7 +25,7 @@ use crate::ipatool::runner::SidecarRunner;
 use crate::ipatool::session::{Account, Session};
 use crate::library::Library;
 use crate::owned_cache::{self, Entry, OwnedCache};
-use crate::lookup::{Fetch, HttpLookup, Lookup, ReqwestFetch, app_name};
+use crate::lookup::{Fetch, HttpLookup, Lookup, ReqwestFetch, app_name, artwork};
 use crate::pending_jobs::{PendingJob, PendingStore};
 use crate::queue::{FsSpace, JobState, Queue};
 use crate::releases::NotifiedStore;
@@ -108,6 +108,8 @@ pub struct AppState {
     owned_cache: OwnedCache,
     /// trackId строк, видимых при текущем поиске/фильтре (`owned_visible`): их проверяют первыми.
     visible: Mutex<HashSet<i64>>,
+    /// Иконки из Lookup: None — спрашивали, иконки нет.
+    icons: Mutex<HashMap<i64, Option<String>>>,
     /// «Проверить весь каталог» идёт: эпоха Apple ID, при которой его начали (`check_catalog`).
     sweep: Mutex<Option<u64>>,
     /// trackId последнего ответа «В App Store»: их устаревшие ответы тоже перепроверяются.
@@ -212,6 +214,7 @@ impl AppState {
             owned: Mutex::new(HashMap::new()),
             owned_cache: OwnedCache::open(data_dir.join("owned-cache.json")),
             visible: Mutex::new(HashSet::new()),
+            icons: Mutex::new(HashMap::new()),
             sweep: Mutex::new(None),
             store_ids: Mutex::new(vec![]),
             screen_extra: Mutex::new(HashSet::new()),
@@ -1281,6 +1284,27 @@ async fn run_checks(app: AppHandle, track_ids: Vec<i64>, recheck: bool) {
 #[tauri::command]
 pub fn owned_visible(state: State<'_, AppState>, track_ids: Vec<i64>) {
     *state.visible.lock().unwrap() = track_ids.into_iter().collect();
+}
+
+/// Иконки приложений из iTunes Lookup. Спрашивает только то, чего нет в кэше (до 1000 id за вызов);
+/// сбой даёт пусто, ошибок наружу нет.
+#[tauri::command]
+pub async fn app_icons(state: State<'_, AppState>, track_ids: Vec<i64>) -> Result<HashMap<i64, String>, UiError> {
+    let mut ids = track_ids;
+    ids.truncate(1000);
+    let missing: Vec<i64> = {
+        let cache = state.icons.lock().unwrap();
+        ids.iter().copied().filter(|id| !cache.contains_key(id)).collect()
+    };
+    if !missing.is_empty() {
+        let found = artwork(state.fetch.as_ref(), &missing).await;
+        let mut cache = state.icons.lock().unwrap();
+        for id in missing {
+            cache.insert(id, found.get(&id).cloned());
+        }
+    }
+    let cache = state.icons.lock().unwrap();
+    Ok(ids.into_iter().filter_map(|id| Some((id, cache.get(&id)?.clone()?))).collect())
 }
 
 /// «В App Store»: поиск по российскому магазину (Search API). Отдаёт строки, которых ещё нет на

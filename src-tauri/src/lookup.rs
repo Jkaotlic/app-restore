@@ -131,6 +131,35 @@ pub async fn app_name(fetch: &dyn Fetch, track_id: i64) -> Option<(String, Strin
     parse_name(&body, track_id)
 }
 
+/// Сколько trackId спрашиваем у Lookup за один запрос.
+pub const ICON_BATCH: usize = 150;
+
+/// Пары (trackId, https-адрес `artworkUrl100`) из ответа Lookup; записи без адреса или с не-https пропускаются.
+fn parse_artwork(body: &str) -> Vec<(i64, String)> {
+    let Ok(v) = serde_json::from_str::<Value>(body) else { return vec![] };
+    let Some(results) = v.get("results").and_then(Value::as_array) else { return vec![] };
+    results
+        .iter()
+        .filter_map(|r| {
+            let id = r.get("trackId")?.as_i64()?;
+            let url = r.get("artworkUrl100")?.as_str()?;
+            url.starts_with("https://").then(|| (id, url.to_string()))
+        })
+        .collect()
+}
+
+/// Иконки пачками по `ICON_BATCH`. Сбой пачки пропускается: иконка — украшение, не повод падать.
+pub async fn artwork(fetch: &dyn Fetch, ids: &[i64]) -> HashMap<i64, String> {
+    let mut out = HashMap::new();
+    for chunk in ids.chunks(ICON_BATCH) {
+        let list = chunk.iter().map(i64::to_string).collect::<Vec<_>>().join(",");
+        if let Ok(body) = fetch.get(&format!("{LOOKUP_URL}?id={list}&entity=software")).await {
+            out.extend(parse_artwork(&body));
+        }
+    }
+    out
+}
+
 const SEARCH_URL: &str = "https://itunes.apple.com/search";
 /// Сколько результатов Search API просим за раз.
 pub const SEARCH_LIMIT: usize = 50;
@@ -276,6 +305,40 @@ mod tests {
     fn fixture(name: &str) -> String {
         std::fs::read_to_string(format!("{}/tests/fixtures/lookup/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
     }
+    #[test]
+    fn artwork_parses_lookup() {
+        let got = parse_artwork(&fixture("lookup-us.json"));
+        assert!(got.iter().any(|(id, u)| *id == 686449807 && u.starts_with("https://is1-ssl.mzstatic.com/")));
+        let body = r#"{"results":[{"trackId":1},{"trackId":2,"artworkUrl100":"http://x/a.jpg"},{"trackId":3,"artworkUrl100":"https://x/a.jpg"}]}"#;
+        assert_eq!(parse_artwork(body), vec![(3, "https://x/a.jpg".to_string())]);
+        assert!(parse_artwork("<html>").is_empty());
+    }
+
+    struct CountFetch {
+        urls: Mutex<Vec<String>>,
+    }
+    #[async_trait]
+    impl Fetch for CountFetch {
+        async fn get(&self, url: &str) -> Result<String, AppError> {
+            let mut u = self.urls.lock().unwrap();
+            u.push(url.into());
+            if u.len() == 2 { Err(AppError::AppleUnavailable { status: Some(503) }) } else { Ok(fixture("lookup-us.json")) }
+        }
+    }
+
+    #[tokio::test]
+    async fn artwork_batches_by_150() {
+        let f = CountFetch { urls: Mutex::new(vec![]) };
+        let got = artwork(&f, &(1..=320).collect::<Vec<i64>>()).await;
+        let urls = f.urls.lock().unwrap();
+        assert_eq!(urls.len(), 3);
+        for u in urls.iter() {
+            let ids = u.strip_prefix(&format!("{LOOKUP_URL}?id=")).unwrap().strip_suffix("&entity=software").unwrap();
+            assert!(ids.split(',').count() <= ICON_BATCH);
+        }
+        assert!(got.contains_key(&686449807));
+    }
+
     fn lookup(body: Result<String, AppError>) -> (HttpLookup, Arc<FakeFetch>) {
         let f = Arc::new(FakeFetch { body, urls: Mutex::new(vec![]) });
         (HttpLookup::with_fetch(f.clone(), "https://lookup.example.com/lookup").with_delays(vec![]), f)
