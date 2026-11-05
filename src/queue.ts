@@ -103,7 +103,6 @@ export function resumedJob(p: PendingJobDto): Job {
     installed_version: null,
     available_version: null,
     install_state: "unknown",
-    checked: false,
     ipad_only: false,
     unknown_account: false,
     aliases: [],

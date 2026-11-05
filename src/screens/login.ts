@@ -2,7 +2,7 @@ import { asUiError, call, go, refreshSidebar, register, safe, state, targetPhone
 import { h } from "../dom";
 import { offersSkipSave, skipSaveNote } from "../copies";
 import { listen } from "@tauri-apps/api/event";
-import { CODE_HINT, LOGIN_SLOW_AFTER_S, RESEND_AFTER_S, resendLabel, afterLoginScreen, errorText, loginNote as waitText, sameFromMatch } from "../labels";
+import { CODE_HINT, CODE_MISSING_AFTER_S, CODE_REJECTED_TEXT, PASSWORD_NOTE, codeStepText, LOGIN_SLOW_AFTER_S, RESEND_AFTER_S, resendLabel, afterLoginScreen, errorText, loginNote as waitText, sameFromMatch } from "../labels";
 import type { LoginDto } from "../types";
 import { resetForAccount } from "./accounts";
 import { checkAccount } from "./phone";
@@ -48,6 +48,15 @@ register("login", () => {
   let codeStep = false;
   let resendAt = 0;
   let resendTimer: ReturnType<typeof setInterval> | undefined;
+  /** Код не пришёл за `CODE_MISSING_AFTER_S` — подсказка про неверный пароль. Начал вводить
+   * цифры — код пришёл, подсказка не нужна. */
+  let missingTimer: ReturnType<typeof setTimeout> | undefined;
+  function watchCode() {
+    clearTimeout(missingTimer);
+    missingTimer = setTimeout(() => {
+      if (codeStep && !button.disabled && !boxes.some((b) => b.value)) say(codeStepText(CODE_MISSING_AFTER_S), true);
+    }, CODE_MISSING_AFTER_S * 1000);
+  }
   function tickResend() {
     const left = Math.ceil((resendAt - Date.now()) / 1000);
     resend.textContent = resendLabel(left);
@@ -71,6 +80,7 @@ register("login", () => {
     button.textContent = on ? "Подтвердить код" : "Войти";
     if (!on) {
       clearInterval(resendTimer);
+      clearTimeout(missingTimer);
       message.hidden = true;
       if (focus) email.focus();
     }
@@ -202,12 +212,15 @@ register("login", () => {
       if (ui.code === "auth_code_required") {
         setCodeStep(true);
         boxes.forEach((b) => (b.value = ""));
-        say(errorText(ui), false);
+        // на неверный пароль Apple тоже просит код, но не присылает его: говорим об этом сразу
+        say(codeStepText(0), false);
+        watchCode();
         // каждый вход без кода просит у Apple новый: следующий — не раньше чем через минуту
         startResend();
         boxes[0].focus();
       } else {
-        say(errorText(ui), true);
+        clearTimeout(missingTimer);
+        say(ui.code === "code_rejected" && codeStep ? CODE_REJECTED_TEXT : errorText(ui), true);
         if (offersSkipSave(ui)) {
           skipNote.textContent = skipSaveNote(state.account?.email ?? null);
           skipBox.hidden = false;
@@ -242,8 +255,14 @@ register("login", () => {
       { class: "push" },
       button,
       h("button", { class: "link", text: "Назад", attrs: { type: "button" }, on: { click: () => go("accounts") } }),
-      h("span", { class: "note", text: "Пароль не сохраняется на компьютере." }),
+      h("span", { class: "note", text: PASSWORD_NOTE }),
     ),
   );
-  return { el: form, leave: () => clearInterval(resendTimer) };
+  return {
+    el: form,
+    leave: () => {
+      clearInterval(resendTimer);
+      clearTimeout(missingTimer);
+    },
+  };
 });

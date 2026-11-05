@@ -49,8 +49,6 @@ export interface RowDto {
   /** «Доступно: Y»; null — пока неизвестно. */
   available_version: string | null;
   install_state: InstallState;
-  /** Отметить сразу (Rust: catalog::default_checked). */
-  checked: boolean;
   /** «Только для iPad». */
   ipad_only: boolean;
   /** Копия без папки аккаунта и без покупателя: «Неизвестный Apple ID». */
@@ -122,7 +120,6 @@ export interface OwnedEvent {
   error: UiError | null;
   available_version: string | null;
   install_state: InstallState;
-  checked: boolean;
 }
 
 /** Событие `purchases_progress`. */

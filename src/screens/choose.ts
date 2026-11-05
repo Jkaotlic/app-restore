@@ -8,7 +8,6 @@ import {
   addLinkRow,
   applyOwned,
   applyOwnedRow,
-  autoChecks,
   barState,
   canSelect,
   dropStoreRows,
@@ -75,13 +74,10 @@ function searchIcon(): SVGSVGElement {
 register("choose", () => {
   let rows: RowDto[] = [];
   let owned: OwnedMap = new Map();
-  // «Назад» на шаг iPhone и обратно не сбрасывает галочки
+  // «Назад» на шаг iPhone и обратно не сбрасывает галочки. Сама программа ничего не отмечает:
+  // что вернуть, человек выбирает сам.
   const saved = state.choice;
   const selected = new Set<number>(saved?.selected);
-  /** Человек сам снял галочку: автоматически её не возвращаем. */
-  const unchecked = new Set<number>(saved?.unchecked);
-  /** Человек сам поставил галочку: автоматически её не снимаем. */
-  const picked = new Set<number>(saved?.picked);
   let started = false;
   let query = "";
   let chip: Chip = "all";
@@ -123,7 +119,7 @@ register("choose", () => {
   cancelBtn.hidden = true;
   /** Подключённые телефоны (udid через запятую): выбор источника перерисовывается, только когда они меняются. */
   let phonesKey = state.phones.map((p) => p.udid).join(",");
-  // «Только для iPad» зависит от устройства, на которое ставим, а не от «Дальше» (как и `checked` в Rust)
+  // «Только для iPad» зависит от устройства, на которое ставим, а не от «Дальше»
   const toIphone = () => targetIsIphone();
 
   /** Плитки на экране по trackId и кнопки «Выбрать все в группе»: выбор меняется на месте. */
@@ -385,15 +381,8 @@ register("choose", () => {
   const selectable = (r: RowDto) => canSelect(r, owned.get(r.track_id), toIphone());
 
   function setSelected(id: number, on: boolean) {
-    if (on) {
-      selected.add(id);
-      picked.add(id);
-      unchecked.delete(id);
-    } else {
-      selected.delete(id);
-      picked.delete(id);
-      unchecked.add(id);
-    }
+    if (on) selected.add(id);
+    else selected.delete(id);
   }
 
   const lineOf = (r: RowDto) => tileLine(r, owned.get(r.track_id), toIphone(), withPhone, { phoneIos: phoneIos(), chosen: state.versions.get(r.track_id) ?? null });
@@ -978,18 +967,10 @@ register("choose", () => {
     syncSelection();
   }
 
-  /** Отметка по умолчанию из Rust (`checked`); ручной выбор человека главнее. */
-  function autoSelect(id: number, checked: boolean) {
-    if (checked && !unchecked.has(id)) selected.add(id);
-    else if (!checked && !picked.has(id)) selected.delete(id);
-  }
-
   function onOwned(ev: OwnedEvent) {
     if (!rows.some((r) => r.track_id === ev.track_id)) return;
     owned = applyOwned(owned, ev);
     rows = applyOwnedRow(rows, ev);
-    const r = rows.find((x) => x.track_id === ev.track_id);
-    if (!ev.error && r && autoChecks(r)) autoSelect(ev.track_id, ev.checked);
     if (!loaded) return;
     // ошибка «стоп» меняет все ждущие строки
     if (ev.error) renderList();
@@ -1237,7 +1218,6 @@ register("choose", () => {
       rows = [];
     }
     owned = initialOwned(rows);
-    for (const r of rows) if (r.checked && selectable(r) && !unchecked.has(r.track_id)) selected.add(r.track_id);
     loaded = true;
     heading.textContent = withPhone && toIphone() ? "Что вернуть на iPhone" : "Что вернуть";
     renderChips();
@@ -1304,7 +1284,7 @@ register("choose", () => {
       left = true;
       clearTimeout(visibleTimer);
       for (const t of waitTimers.values()) clearInterval(t);
-      if (!started) state.choice = { selected: [...selected], unchecked: [...unchecked], picked: [...picked] };
+      if (!started) state.choice = { selected: [...selected] };
       void call("check_owned", { trackIds: [] }).catch(() => undefined);
     },
   };

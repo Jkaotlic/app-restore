@@ -16,7 +16,6 @@ const base: RowDto = {
   installed_version: null,
   available_version: null,
   install_state: "not_installed",
-  checked: false,
   ipad_only: false,
   unknown_account: false,
   aliases: [],

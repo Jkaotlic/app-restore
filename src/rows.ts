@@ -138,7 +138,7 @@ export function foundText(rows: RowDto[], chip: Chip, query: string, withPhone =
 
 /** «Выбрать все в группе»: что выбирается и выбрано ли уже всё. Уже стоящие той же версии пропускаются. */
 export function groupPick(rows: RowDto[], selectable: (r: RowDto) => boolean, selected: Set<number>): { ids: number[]; allOn: boolean } {
-  // уже стоит та же (или новее) версия — переставлять незачем, как и при отметке по умолчанию
+  // уже стоит та же (или новее) версия — переставлять незачем
   const ids = rows.filter((r) => selectable(r) && r.install_state !== "installed").map((r) => r.track_id);
   return { ids, allOn: ids.length > 0 && ids.every((id) => selected.has(id)) };
 }
@@ -185,11 +185,6 @@ export function dropStoreRows(rows: RowDto[], selected: Set<number>): RowDto[] {
   return rows.filter((r) => r.source !== "store" || selected.has(r.track_id));
 }
 
-/** Отметка по умолчанию из `owned` (Rust `checked`): строку App Store человек отмечает сам. */
-export function autoChecks(r: RowDto): boolean {
-  return r.source !== "store" && r.source !== "history";
-}
-
 /** Права проверяет `check_owned`: каталог, App Store и «С этого iPhone» (кроме чужого Apple ID). */
 function needsCheck(r: RowDto): boolean {
   return r.source === "removed" || r.source === "store" || r.source === "history" || (r.source === "phone" && !r.other_account);
@@ -212,7 +207,7 @@ export function applyOwnedRow(rows: RowDto[], ev: OwnedEvent): RowDto[] {
   if (ev.error) return rows;
   return rows.map((r) =>
     r.track_id === ev.track_id
-      ? { ...r, owned: ev.owned, available_version: ev.available_version, install_state: ev.install_state, checked: ev.checked }
+      ? { ...r, owned: ev.owned, available_version: ev.available_version, install_state: ev.install_state }
       : r,
   );
 }

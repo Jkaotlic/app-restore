@@ -1,5 +1,5 @@
 //! Чистая часть команд: что отдать интерфейсу и какое действие выбрать. Без Tauri, проверяется тестами.
-use crate::catalog::{AppRow, InstallState, RowSource, Rows, SavedIpa, apply_versions, default_checked};
+use crate::catalog::{AppRow, InstallState, RowSource, Rows, SavedIpa, apply_versions};
 use crate::device::{AccountMatch, InstalledApp, PhoneInfo, mask_email, pick_default};
 use crate::ipatool::output::OwnedApp;
 use crate::errors::AppError;
@@ -89,8 +89,6 @@ pub struct RowDto {
     /// «Доступно: Y»; `null`, пока неизвестно.
     pub available_version: Option<String>,
     pub install_state: InstallState,
-    /// Отметить сразу (`catalog::default_checked`).
-    pub checked: bool,
     /// «Только для iPad»: при установке на iPhone строку не выбрать.
     pub ipad_only: bool,
     /// Копия лежит в «Мои приложения» без папки аккаунта и без покупателя: «Неизвестный Apple ID».
@@ -122,9 +120,7 @@ pub struct RowsDto {
     pub source_udid: Option<String>,
 }
 
-/// `target_iphone`: ставим на iPhone — строки «только для iPad» не отмечаются.
-pub fn row_dto(r: AppRow, target_iphone: bool) -> RowDto {
-    let checked = default_checked(r.source, r.owned, r.saved_copy.is_some(), r.install_state, r.ipad_only && target_iphone);
+pub fn row_dto(r: AppRow) -> RowDto {
     RowDto {
         size_bytes: r.saved_copy.as_deref().and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len()),
         aliases: r.aliases,
@@ -136,7 +132,6 @@ pub fn row_dto(r: AppRow, target_iphone: bool) -> RowDto {
         installed_version: r.installed_version,
         available_version: r.available_version,
         install_state: r.install_state,
-        checked,
         track_id: r.app.id,
         bundle_id: r.app.bundle_id,
         name: r.app.name,
@@ -154,8 +149,8 @@ pub fn row_dto(r: AppRow, target_iphone: bool) -> RowDto {
     }
 }
 
-pub fn rows_dto(r: Rows, target_iphone: bool) -> RowsDto {
-    RowsDto { rows: r.rows.into_iter().map(|x| row_dto(x, target_iphone)).collect(), ru_check_failed: r.ru_check_failed, purchases_error: None, source_udid: None }
+pub fn rows_dto(r: Rows) -> RowsDto {
+    RowsDto { rows: r.rows.into_iter().map(row_dto).collect(), ru_check_failed: r.ru_check_failed, purchases_error: None, source_udid: None }
 }
 
 /// Приложение на телефоне для интерфейса: {bundle_id, name, version, item_id}.
@@ -173,8 +168,6 @@ pub struct RowCtx<'a> {
     pub saved: &'a [SavedIpa],
     /// Копии без известного покупателя (`Library::list_unknown`).
     pub unknown: &'a [SavedIpa],
-    /// Установка пойдёт на iPhone (не на iPad и не «без телефона»).
-    pub target_iphone: bool,
     /// Размеры из Lookup (`fileSizeBytes`) по trackId.
     pub sizes: &'a HashMap<i64, u64>,
     /// Apple ID программы: с ним сравнивается покупатель строк «С этого iPhone».
@@ -343,7 +336,7 @@ pub fn catalog_rows(ctx: &RowCtx) -> RowsDto {
         .into_iter()
         .map(|r| {
             let copy = r.source == RowSource::Purchase;
-            let mut d = row_dto(r, ctx.target_iphone);
+            let mut d = row_dto(r);
             if copy {
                 (d.source, d.removed_from_ru) = ("saved", false);
             }
@@ -374,8 +367,8 @@ fn with_unknown(mut rows: Vec<RowDto>, ctx: &RowCtx) -> Vec<RowDto> {
     let mut built = crate::catalog::build_rows(&[], ctx.owned, copies, Some(&HashSet::new()), ctx.unknown);
     apply_versions(&mut built.rows, ctx.installed, ctx.latest, ctx.unknown);
     rows.extend(built.rows.into_iter().map(|r| {
-        let mut d = row_dto(r, ctx.target_iphone);
-        (d.source, d.removed_from_ru, d.checked, d.unknown_account) = ("saved", false, false, true);
+        let mut d = row_dto(r);
+        (d.source, d.removed_from_ru, d.unknown_account) = ("saved", false, true);
         d
     }));
     rows
@@ -391,7 +384,7 @@ pub fn rows_without_purchases(ctx: &RowCtx, error: AppError) -> RowsDto {
 pub fn purchase_rows(ctx: &RowCtx, purchases: Vec<OwnedApp>, present_ru: Option<&HashSet<i64>>) -> RowsDto {
     let mut rows = crate::catalog::build_rows(ctx.catalog, ctx.owned, purchases, present_ru, ctx.saved);
     apply_versions(&mut rows.rows, ctx.installed, ctx.latest, ctx.saved);
-    let d = rows_dto(rows, ctx.target_iphone);
+    let d = rows_dto(rows);
     let mut list = with_unknown(d.rows, ctx);
     if let Some(present) = present_ru {
         let taken: HashSet<i64> = list.iter().map(|r| r.track_id).collect();
@@ -478,7 +471,6 @@ fn phone_row(track_id: i64, a: &InstalledApp, ctx: &RowCtx) -> RowDto {
         install_state: crate::catalog::install_state(installed_version.as_deref(), available_version.as_deref()),
         installed_version,
         available_version,
-        checked: false,
         ipad_only: false,
         unknown_account: false,
         aliases: vec![],
@@ -503,7 +495,7 @@ fn catalog_row(track_id: i64, ctx: &RowCtx) -> Option<AppRow> {
 /// кладёт их в `ctx.owned`, версию — в `ctx.latest`).
 pub fn link_row(track_id: i64, ctx: &RowCtx, looked_up: Option<(String, String)>) -> RowDto {
     if let Some(row) = catalog_row(track_id, ctx) {
-        return row_dto(row, ctx.target_iphone);
+        return row_dto(row);
     }
     let (name, bundle_id) = looked_up.unwrap_or_else(|| (format!("Приложение {track_id}"), String::new()));
     let available_version = ctx.latest.get(&track_id).cloned();
@@ -525,8 +517,6 @@ pub fn link_row(track_id: i64, ctx: &RowCtx, looked_up: Option<(String, String)>
         install_state: crate::catalog::install_state(installed_version.as_deref(), available_version.as_deref()),
         installed_version,
         available_version,
-        // добавил сам — значит, хочет поставить
-        checked: true,
         ipad_only: false,
         unknown_account: false,
         aliases: vec![],
@@ -586,7 +576,6 @@ pub fn store_rows(found: Vec<crate::lookup::StoreApp>, taken: &HashSet<i64>, ctx
                 install_state: crate::catalog::install_state(installed_version.as_deref(), available_version.as_deref()),
                 installed_version,
                 available_version,
-                checked: false,
                 ipad_only: a.ipad_only,
                 unknown_account: false,
                 aliases: vec![],
@@ -633,7 +622,6 @@ pub struct OwnedEvent {
     pub error: Option<UiError>,
     pub available_version: Option<String>,
     pub install_state: InstallState,
-    pub checked: bool,
 }
 
 pub fn owned_event(track_id: i64, r: &Result<(bool, Option<String>), AppError>, ctx: &RowCtx) -> OwnedEvent {
@@ -649,14 +637,11 @@ pub fn owned_event(track_id: i64, r: &Result<(bool, Option<String>), AppError>, 
     {
         let available_version = ctx.latest.get(&track_id).cloned().or_else(|| r.as_ref().ok().and_then(|x| x.1.clone()));
         let install_state = crate::catalog::install_state(target_version(ctx, track_id, &a.bundle_id).as_deref(), available_version.as_deref());
-        return OwnedEvent { track_id, owned, error, available_version, install_state, checked: false };
+        return OwnedEvent { track_id, owned, error, available_version, install_state };
     }
     let available_version = row.as_ref().and_then(|x| x.available_version.clone()).or_else(|| r.as_ref().ok().and_then(|x| x.1.clone()));
     let install_state = row.as_ref().map_or(InstallState::NotInstalled, |x| x.install_state);
-    let has_copy = row.as_ref().is_some_and(|x| x.saved_copy.is_some());
-    let blocked = ctx.target_iphone && row.as_ref().is_some_and(|x| x.ipad_only);
-    let checked = default_checked(RowSource::Removed, owned, has_copy, install_state, blocked);
-    OwnedEvent { track_id, owned, error, available_version, install_state, checked }
+    OwnedEvent { track_id, owned, error, available_version, install_state }
 }
 
 /// Кэш «что стоит на телефоне» по udid: другой телефон — пустой список, а не чужие приложения.
@@ -1379,7 +1364,7 @@ mod tests {
             None,
             &[saved(900, "/x/900_b_1.ipa")],
         );
-        let d = rows_dto(rows, true);
+        let d = rows_dto(rows);
         assert!(d.ru_check_failed);
         assert_eq!(
             d.rows[0],
@@ -1397,8 +1382,6 @@ mod tests {
                 installed_version: None,
                 available_version: Some("1".into()),
                 install_state: InstallState::NotInstalled,
-                // права ещё не проверены, но копия на компьютере есть — её и поставим
-                checked: true,
                 ipad_only: false,
                 unknown_account: false,
                 aliases: vec![],
@@ -1425,7 +1408,6 @@ mod tests {
         installed: Option<Vec<InstalledApp>>,
         saved: Vec<SavedIpa>,
         unknown: Vec<SavedIpa>,
-        target_iphone: bool,
         sizes: HashMap<i64, u64>,
         account: Option<String>,
         /// Телефон-источник «С этого iPhone»; `None` — тот же, что цель (`installed`).
@@ -1442,7 +1424,6 @@ mod tests {
                 installed: None,
                 saved: vec![],
                 unknown: vec![],
-                target_iphone: false,
                 sizes: HashMap::new(),
                 account: None,
                 source: None,
@@ -1458,7 +1439,6 @@ mod tests {
                 installed: self.installed.as_deref(),
                 saved: &self.saved,
                 unknown: &self.unknown,
-                target_iphone: self.target_iphone,
                 sizes: &self.sizes,
                 account: self.account.as_deref(),
                 source: self.source.as_deref().or(self.installed.as_deref()),
@@ -1480,14 +1460,14 @@ mod tests {
         c.installed = Some(vec![inst("ru.sberbank.onlineiphone", "12.14.0", Some(900)), inst("ph.telegra.Telegraph", "12.1", None)]);
         let r = link_row(900, &c.get(), Some(("Другое".into(), "x".into())));
         assert_eq!((r.name.as_str(), r.source, r.owned, r.letter.as_deref()), ("Сбер", "removed", Some(true), Some("С")));
-        assert_eq!((r.install_state, r.checked), (InstallState::UpdateAvailable, true));
+        assert_eq!(r.install_state, InstallState::UpdateAvailable);
         let r = link_row(5, &c.get(), Some(("Telegram".into(), "ph.telegra.Telegraph".into())));
         assert_eq!((r.name.as_str(), r.bundle_id.as_str(), r.source), ("Telegram", "ph.telegra.Telegraph", "link"));
         assert!(r.owned == Some(true) && r.has_saved_copy && !r.removed_from_ru);
-        // ссылку человек добавил сам: строка отмечена, даже если уже стоит
+        // ссылку человек добавил сам: строка есть, даже если уже стоит
         assert_eq!(
-            (r.installed_version.as_deref(), r.available_version.as_deref(), r.install_state, r.checked),
-            (Some("12.1"), Some("12.1"), InstallState::Installed, true)
+            (r.installed_version.as_deref(), r.available_version.as_deref(), r.install_state),
+            (Some("12.1"), Some("12.1"), InstallState::Installed)
         );
         let r = link_row(77, &c.get(), None);
         assert_eq!(r.name, "Приложение 77");
@@ -1558,13 +1538,13 @@ mod tests {
         assert_eq!(phone.iter().map(|r| r.track_id).collect::<Vec<_>>(), [60, 90, 70], "по имени");
         let alpha = phone[0];
         assert_eq!((alpha.name.as_str(), alpha.bundle_id.as_str(), alpha.installed_version.as_deref()), ("Имя com.example.alpha", "com.example.alpha", Some("14.2")));
-        assert_eq!((alpha.owned, alpha.other_account, alpha.checked, alpha.removed_from_ru), (None, false, false, true));
+        assert_eq!((alpha.owned, alpha.other_account, alpha.removed_from_ru), (None, false, true));
         let foreign = phone[1];
-        assert!(foreign.other_account && !foreign.checked);
+        assert!(foreign.other_account);
         let json = serde_json::to_string(foreign).unwrap();
         assert!(!json.contains("other@"), "адрес покупателя не уходит в интерфейс: {json}");
         let zeta = phone[2];
-        assert_eq!((zeta.owned, zeta.available_version.as_deref(), zeta.install_state, zeta.checked), (Some(true), Some("2.1"), InstallState::UpdateAvailable, false), "уже стоит — не отмечаем сами");
+        assert_eq!((zeta.owned, zeta.available_version.as_deref(), zeta.install_state), (Some(true), Some("2.1"), InstallState::UpdateAvailable));
         // Lookup упал — в магазине ли приложение, неизвестно: группы нет
         assert!(purchase_rows(&c.get(), vec![], None).rows.iter().all(|r| r.source != "phone"));
         // без телефона группы нет
@@ -1579,7 +1559,7 @@ mod tests {
         c.owned = [(60, true)].into();
         c.latest = [(60, "1.1".to_string())].into();
         let e = owned_event(60, &Ok((true, Some("1.1".into()))), &c.get());
-        assert_eq!((e.owned, e.available_version.as_deref(), e.install_state, e.checked), (Some(true), Some("1.1"), InstallState::UpdateAvailable, false));
+        assert_eq!((e.owned, e.available_version.as_deref(), e.install_state), (Some(true), Some("1.1"), InstallState::UpdateAvailable));
     }
 
     #[test]
@@ -1614,7 +1594,7 @@ mod tests {
     fn owned_event_app_gone_is_not_owned_with_reason() {
         let c = Ctx::new(vec![removed(1, "A")]);
         let e = owned_event(1, &Err(AppError::AppGone), &c.get());
-        assert_eq!((e.owned, e.checked), (Some(false), false));
+        assert_eq!(e.owned, Some(false));
         let err = e.error.unwrap();
         assert_eq!((err.code.as_str(), err.retryable), ("app_gone", false));
     }
@@ -1633,39 +1613,23 @@ mod tests {
                 owned: Some(true),
                 error: None,
                 available_version: Some("12.15.0".into()),
-                install_state: InstallState::UpdateAvailable,
-                checked: true
+                install_state: InstallState::UpdateAvailable
             }
         );
         let e = owned_event(4, &Ok((true, Some("2.0".into()))), &c.get());
-        assert_eq!((e.install_state, e.checked), (InstallState::Installed, false), "уже стоит — не отмечаем");
+        assert_eq!(e.install_state, InstallState::Installed);
         let e = owned_event(2, &Ok((false, None)), &c.get());
-        assert_eq!((e.owned, e.checked, e.error), (Some(false), false, None));
+        assert_eq!((e.owned, e.error), (Some(false), None));
         let e = owned_event(3, &Err(AppError::AppleUnavailable { status: Some(503) }), &c.get());
-        assert_eq!((e.owned, e.checked), (None, false));
+        assert_eq!(e.owned, None);
         assert_eq!(e.error.unwrap().code, "apple_unavailable");
         // без телефона
         c.installed = None;
         let json = serde_json::to_value(owned_event(4, &Ok((true, Some("2.0".into()))), &c.get())).unwrap();
         assert_eq!(
             json,
-            serde_json::json!({"track_id": 4, "owned": true, "error": null, "available_version": "2.0", "install_state": "not_installed", "checked": true})
+            serde_json::json!({"track_id": 4, "owned": true, "error": null, "available_version": "2.0", "install_state": "not_installed"})
         );
-    }
-
-    #[test]
-    fn ipad_only_not_checked_for_iphone() {
-        let mut c = Ctx::new(vec![RemovedApp { ipad_only: true, ..removed(656485245, "ВКонтакте для iPad") }, removed(2, "Обычное")]);
-        c.owned = [(656485245, true), (2, true)].into();
-        c.target_iphone = true;
-        let d = catalog_rows(&c.get());
-        assert_eq!(d.rows.iter().map(|r| (r.ipad_only, r.checked)).collect::<Vec<_>>(), [(true, false), (false, true)]);
-        let e = owned_event(656485245, &Ok((true, None)), &c.get());
-        assert!(!e.checked);
-        // на iPad или без телефона — как обычно
-        c.target_iphone = false;
-        assert!(catalog_rows(&c.get()).rows[0].checked);
-        assert!(owned_event(656485245, &Ok((true, None)), &c.get()).checked);
     }
 
     #[test]
@@ -1692,7 +1656,7 @@ mod tests {
         let buy = vec![OwnedApp { version: "1.1".into(), ..app(1, "com.example.a", "A") }, app(2, "com.example.b", "B")];
         let d = purchase_rows(&c.get(), buy, Some(&[1, 2].into()));
         assert_eq!(d.rows.iter().map(|r| r.track_id).collect::<Vec<_>>(), [900, 1, 2]);
-        assert_eq!((d.rows[1].install_state, d.rows[1].checked), (InstallState::UpdateAvailable, false), "покупки не отмечаем сами");
+        assert_eq!(d.rows[1].install_state, InstallState::UpdateAvailable);
         assert_eq!(d.rows[2].install_state, InstallState::NotInstalled);
         assert!(!d.ru_check_failed && d.purchases_error.is_none());
         assert!(purchase_rows(&c.get(), vec![], None).ru_check_failed);
@@ -1882,7 +1846,7 @@ mod tests {
         let d = catalog_rows(&c.get());
         assert_eq!(d.rows.iter().map(|r| (r.track_id, r.unknown_account)).collect::<Vec<_>>(), [(900, false), (7, false), (5, true)]);
         let u = &d.rows[2];
-        assert_eq!((u.source, u.checked, u.has_saved_copy, u.bundle_id.as_str()), ("saved", false, true, "com.example.u"));
+        assert_eq!((u.source, u.has_saved_copy, u.bundle_id.as_str()), ("saved", true, "com.example.u"));
         // после покупок: та же строка, если такой покупки нет
         let p = purchase_rows(&c.get(), vec![app(1, "com.example.a", "Alpha")], Some(&HashSet::new()));
         assert_eq!(p.rows.iter().map(|r| (r.track_id, r.unknown_account)).collect::<Vec<_>>(), [(900, false), (1, false), (5, true)]);
@@ -1929,7 +1893,7 @@ mod tests {
         assert_eq!((d.rows[0].source, d.rows[0].has_saved_copy), ("removed", true));
         let k = &d.rows[1];
         assert_eq!((k.source, k.name.as_str(), k.version.as_str(), k.has_saved_copy), ("saved", "com.example.k", "2.0", true));
-        assert_eq!(rows_dto(crate::catalog::build_rows(&[], &HashMap::new(), vec![], None, &[]), false).purchases_error, None);
+        assert_eq!(rows_dto(crate::catalog::build_rows(&[], &HashMap::new(), vec![], None, &[])).purchases_error, None);
     }
 
     #[test]
@@ -2287,7 +2251,7 @@ mod tests {
         // событие `owned` строки источника: не отмечается, состояние по цели
         c.installed = Some(vec![]);
         let e = owned_event(60, &Ok((true, Some("1.1".into()))), &c.get());
-        assert_eq!((e.install_state, e.checked), (InstallState::NotInstalled, false));
+        assert_eq!(e.install_state, InstallState::NotInstalled);
     }
 
     #[test]
@@ -2475,12 +2439,11 @@ mod tests {
         let mut c = Ctx::new(vec![]);
         c.owned = [(11, true), (12, false)].into();
         c.latest = [(11, "2.1".to_string())].into();
-        c.target_iphone = true;
         c.installed = Some(vec![inst("com.example.s11", "1.9", Some(11))]);
         let found = vec![store_app(10, "Взято"), store_app(11, "Есть"), store_app(12, "Нет"), store_app(11, "Повтор"), store_app(13, "Новое")];
         let rows = store_rows(found, &[10].into(), &c.get());
-        let got: Vec<_> = rows.iter().map(|r| (r.track_id, r.name.as_str(), r.source, r.owned, r.checked)).collect();
-        assert_eq!(got, [(11, "Есть", "store", Some(true), false), (12, "Нет", "store", Some(false), false), (13, "Новое", "store", None, false)]);
+        let got: Vec<_> = rows.iter().map(|r| (r.track_id, r.name.as_str(), r.source, r.owned)).collect();
+        assert_eq!(got, [(11, "Есть", "store", Some(true)), (12, "Нет", "store", Some(false)), (13, "Новое", "store", None)]);
         let r = &rows[0];
         assert_eq!((r.installed_version.as_deref(), r.available_version.as_deref(), r.install_state), (Some("1.9"), Some("2.1"), InstallState::UpdateAvailable));
         assert_eq!((r.size_bytes, r.removed_from_ru, r.bundle_id.as_str()), (Some(1000), false, "com.example.s11"));

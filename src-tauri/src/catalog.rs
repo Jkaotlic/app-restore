@@ -136,16 +136,6 @@ fn copy_ipad_only(saved: &[SavedIpa], path: Option<&std::path::Path>) -> bool {
     path.and_then(|p| saved.iter().find(|s| s.path == p)).is_some_and(|s| is_ipad_only(&s.device_family))
 }
 
-/// Отмечать ли строку сразу. Только записи каталога (покупок сотни — их выбирают руками) и только
-/// те, что можно поставить: права подтверждены или есть копия. `blocked` — приложение только для iPad,
-/// а ставим на iPhone.
-pub fn default_checked(source: RowSource, owned: Option<bool>, has_saved_copy: bool, state: InstallState, blocked: bool) -> bool {
-    let can_install = (owned == Some(true) || has_saved_copy) && !blocked;
-    source == RowSource::Removed
-        && can_install
-        && matches!(state, InstallState::NotInstalled | InstallState::UpdateAvailable)
-}
-
 /// Подставляет версии и состояние. `installed = None` — телефона нет: колонки «На iPhone» нет.
 /// `latest`: последние версии у Apple по записям каталога (итоги `check_owned`).
 pub fn apply_versions(rows: &mut [AppRow], installed: Option<&[InstalledApp]>, latest: &HashMap<i64, String>, saved: &[SavedIpa]) {
@@ -380,22 +370,6 @@ mod tests {
         assert_eq!(find_installed(&phone, 5, ""), None, "пустой bundle id ни с чем не совпадает");
         assert_eq!(find_installed(&phone, 5, "com.example.other"), None);
         assert_eq!(find_installed(&[], 492224193, "x"), None);
-    }
-
-    #[test]
-    fn default_checked_by_state() {
-        use InstallState::*;
-        let cat = |owned, copy, st| default_checked(RowSource::Removed, owned, copy, st, false);
-        assert!(cat(Some(true), false, NotInstalled));
-        assert!(!cat(Some(true), false, Installed));
-        assert!(cat(Some(true), false, UpdateAvailable));
-        assert!(!cat(Some(true), false, Unknown));
-        assert!(cat(Some(false), true, NotInstalled), "копия на компьютере ставится и без прав");
-        assert!(!cat(Some(false), false, NotInstalled), "без прав и без копии не ставится");
-        assert!(!cat(None, false, NotInstalled), "права ещё проверяются");
-        assert!(!default_checked(RowSource::Purchase, Some(true), false, NotInstalled, false), "покупки выбирают руками");
-        assert!(!default_checked(RowSource::Purchase, Some(true), false, UpdateAvailable, false));
-        assert!(!default_checked(RowSource::Removed, Some(true), true, NotInstalled, true), "только для iPad, ставим на iPhone");
     }
 
     #[test]

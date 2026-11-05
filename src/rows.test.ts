@@ -35,7 +35,6 @@ import {
   HIDDEN_PURCHASES_HINT,
   NAMESAKE_NOTE,
   OTHER_ID_LOGIN_NOTE,
-  autoChecks,
   barState,
   dropStoreRows,
   replaceStoreRows,
@@ -64,7 +63,6 @@ function row(id: number, name: string, over: Partial<RowDto> = {}): RowDto {
     installed_version: null,
     available_version: null,
     install_state: "not_installed",
-    checked: false,
     ipad_only: false,
     unknown_account: false,
     aliases: [],
@@ -94,7 +92,6 @@ const ev = (track_id: number, owned: boolean | null, error: OwnedEvent["error"] 
   error,
   available_version: null,
   install_state: "not_installed",
-  checked: false,
   ...over,
 });
 
@@ -486,7 +483,7 @@ describe("progressive purchases", () => {
 
 describe("applyOwnedRow", () => {
   it("brings the version, state and ownership into the row", () => {
-    const r = applyOwnedRow([cat(1, "А"), cat(2, "Б")], ev(1, true, null, { available_version: "12.15.0", install_state: "update_available", checked: true }));
+    const r = applyOwnedRow([cat(1, "А"), cat(2, "Б")], ev(1, true, null, { available_version: "12.15.0", install_state: "update_available" }));
     expect(r[0]).toMatchObject({ owned: true, available_version: "12.15.0", install_state: "update_available" });
     expect(r[1]).toEqual(cat(2, "Б"));
   });
@@ -603,8 +600,6 @@ describe("«В App Store»", () => {
     expect(canSelect(s, { kind: "yes" })).toBe(true);
     expect(tileLine(s, { kind: "no" }, false, false)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE });
     expect(tileLine({ ...s, available_version: "2.0" }, { kind: "yes" }, false, false)).toEqual({ text: "доступно 2.0", tone: "plain" });
-    expect(autoChecks(s)).toBe(false);
-    expect(autoChecks(cat(1, "Сбер"))).toBe(true);
   });
 });
 

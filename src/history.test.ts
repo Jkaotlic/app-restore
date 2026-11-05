@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, mergeHistoryRows, rememberHistory, takeHistory, keptHistory } from "./history";
-import { autoChecks, canSelect, idsToCheck, mergePurchases, pendingChecks, tileLine, visibleGroups, initialOwned } from "./rows";
+import { canSelect, idsToCheck, mergePurchases, pendingChecks, tileLine, visibleGroups, initialOwned } from "./rows";
 import type { RowDto } from "./types";
 
 function row(id: number, name: string, over: Partial<RowDto> = {}): RowDto {
@@ -19,7 +19,6 @@ function row(id: number, name: string, over: Partial<RowDto> = {}): RowDto {
     installed_version: null,
     available_version: null,
     install_state: "not_installed",
-    checked: false,
     ipad_only: false,
     unknown_account: false,
     aliases: [],
@@ -51,7 +50,6 @@ describe("history group", () => {
     expect(pendingChecks([r], initialOwned([r]))).toEqual([20]);
     expect(canSelect(r, { kind: "checking" })).toBe(false);
     expect(canSelect(r, { kind: "yes" })).toBe(true);
-    expect(autoChecks(r)).toBe(false);
     expect(tileLine(r, { kind: "checking" }, false, false).tone).toBe("checking");
     expect(tileLine(r, { kind: "no" }, false, false).text).toBe("Нет на вашем Apple ID");
   });

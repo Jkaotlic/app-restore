@@ -97,7 +97,6 @@ export function copyRow(c: CopyDto): RowDto {
     installed_version: null,
     available_version: null,
     install_state: "unknown",
-    checked: false,
     ipad_only: c.ipad_only,
     unknown_account: c.purchaser_masked === null,
     aliases: [],

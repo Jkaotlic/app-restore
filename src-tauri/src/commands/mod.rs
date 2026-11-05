@@ -2,7 +2,7 @@
 //! здесь тонкая склейка: состояние, вызовы модулей, события.
 //!
 //! События: `job` {track_id, state}, `queue_paused` (bool), `owned` {track_id, owned, error, available_version,
-//! install_state, checked}, `phones` {phones, error}, `purchases_progress` {page, pages},
+//! install_state}, `phones` {phones, error}, `purchases_progress` {page, pages},
 //! `purchases` (RowsDto).
 //!
 //! Apple ID покупателя с телефона — личные данные: в логи не пишется, интерфейс получает маску,
@@ -396,11 +396,7 @@ impl AppState {
         let source = source_udid.as_ref().and_then(|u| self.phone_lists.lock().unwrap().get(u).cloned());
         let saved = self.library.list();
         let unknown = self.library.list_unknown();
-        let target_iphone = {
-            let p = self.phones.lock().unwrap();
-            p.target.as_deref().is_some_and(|t| p.last.iter().any(|d| d.udid == t && d.device_class == "iPhone"))
-        };
-        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, target_iphone, sizes: &sizes, account: account.as_deref(), source: source.as_deref(), source_udid: source_udid.as_deref(), min_os: &min_os })
+        f(&RowCtx { catalog: &catalog, owned: &owned, latest: &latest, installed: installed.as_deref(), saved: &saved, unknown: &unknown, sizes: &sizes, account: account.as_deref(), source: source.as_deref(), source_udid: source_udid.as_deref(), min_os: &min_os })
     }
 
     /// Что стоит на телефоне, с запоминанием. Во время установки телефон не трогаем — прошлый список.

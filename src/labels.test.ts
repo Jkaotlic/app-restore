@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { waitLeft, CODE_HINT, RESEND_AFTER_S, resendLabel, errorText, loginNote, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
+import { waitLeft, CODE_HINT, CODE_MISSING_AFTER_S, CODE_REJECTED_TEXT, PASSWORD_NOTE, codeStepText, RESEND_AFTER_S, resendLabel, errorText, loginNote, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
 import type { JobDto, PhoneDto } from "./types";
 
 const err = { code: "device_locked", text: "Разблокируйте iPhone и нажмите «Доверять»", retryable: false };
@@ -235,6 +235,20 @@ describe("login waiting", () => {
     expect(resendLabel(0)).toBe("Отправить код ещё раз");
     expect(resendLabel(-3)).toBe("Отправить код ещё раз");
     expect(resendLabel(42)).toBe("Отправить код ещё раз — через 42 с");
+  });
+  // На неверный пароль Apple отвечает так же, как на верный: «нужен код» (фикстура
+  // login-wrong-password). Кода при этом нет — человек ждёт вечно, если не сказать.
+  it("code step: first «if the password is right», then «no code — likely wrong password»", () => {
+    expect(CODE_MISSING_AFTER_S).toBe(45);
+    expect(codeStepText(0)).toBe("Если пароль верный, Apple пришлёт код окном на ваши устройства, обычно за несколько секунд.");
+    expect(codeStepText(44)).toBe(codeStepText(0));
+    expect(codeStepText(45)).toBe("Код так и не пришёл? Скорее всего, неверный пароль: тогда Apple молчит и кода не присылает. Нажмите «Изменить» и введите пароль снова.");
+  });
+  it("rejected code names the wrong password too", () => {
+    expect(CODE_REJECTED_TEXT).toBe("Apple не принял код. Если код свежий, скорее всего, неверный пароль: отдельно Apple об этом не говорит. Нажмите «Изменить» и проверьте пароль.");
+  });
+  it("password note tells where the password is kept", () => {
+    expect(PASSWORD_NOTE).toBe("Пароль сохраняется вместе со входом в Связке ключей, чтобы переключать Apple ID без повторного ввода.");
   });
 });
 

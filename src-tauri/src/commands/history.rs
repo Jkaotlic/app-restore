@@ -70,7 +70,6 @@ fn history_row(f: &Found, ctx: &RowCtx) -> RowDto {
         install_state: crate::catalog::install_state(installed_version.as_deref(), available_version.as_deref()),
         installed_version,
         available_version,
-        checked: false,
         ipad_only: false,
         unknown_account: false,
         aliases: vec![],

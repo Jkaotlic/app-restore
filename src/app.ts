@@ -29,7 +29,7 @@ export interface State {
   /** Шаг iPhone пройден с телефоном («Дальше»); false — «Продолжить без iPhone». */
   withPhone: boolean;
   /** Галочки «Выбора» при уходе на шаг iPhone («Назад»); null — начать заново. */
-  choice: { selected: number[]; unchecked: number[]; picked: number[] } | null;
+  choice: { selected: number[] } | null;
   jobs: Map<number, Job>;
   /** Ответ на «тот же Apple ID?»; null — ещё не ответили. */
   sameAppleId: boolean | null;
