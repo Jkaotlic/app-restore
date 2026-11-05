@@ -90,10 +90,10 @@ export function chipList(withPhone: boolean): { key: Chip; label: string }[] {
   return withPhone ? CHIPS : CHIPS.filter((c) => c.key !== "on" && c.key !== "new");
 }
 
-/** Стрелки в панели чипов (roving tabindex): куда перевести фокус; `null` — клавиша не наша. */
+/** Стрелки в разделах (roving tabindex): куда перевести фокус; `null` — клавиша не наша. */
 export function rovingIndex(key: string, current: number, n: number): number | null {
-  if (key === "ArrowRight") return (current + 1) % n;
-  if (key === "ArrowLeft") return (current - 1 + n) % n;
+  if (key === "ArrowRight" || key === "ArrowDown") return (current + 1) % n;
+  if (key === "ArrowLeft" || key === "ArrowUp") return (current - 1 + n) % n;
   if (key === "Home") return 0;
   if (key === "End") return n - 1;
   return null;
@@ -159,7 +159,7 @@ export function selectionLabel(count: number, hidden: number): string {
 
 /** Короткий итог для экранного диктора вместо озвучивания всего списка. */
 export function foundText(rows: RowDto[], chip: Chip, query: string, withPhone = true): string {
-  return `Найдено ${visibleGroups(rows, chip, query, withPhone).reduce((n, g) => n + g.rows.length, 0)}`;
+  return `Показано ${visibleGroups(rows, chip, query, withPhone).reduce((n, g) => n + g.rows.length, 0)}`;
 }
 
 /** «Выбрать все в группе»: что выбирается и выбрано ли уже всё. Уже стоящие той же версии пропускаются. */
@@ -176,13 +176,19 @@ export function emptySearchText(query: string): string {
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 
+const bytesText = (bytes: number) => (bytes >= GB ? `${(bytes / GB).toFixed(1).replace(".", ",")} ГБ` : `${Math.max(1, Math.round(bytes / MB))} МБ`);
+
+/** Колонка «Размер»: неизвестен — «—». */
+export function sizeText(bytes: number | null): string {
+  return bytes === null ? "—" : bytesText(bytes);
+}
+
 /** «Выбрано N · ≈ размер»: сумма известных размеров; часть неизвестна — «+»; ни одного — без размера. */
 export function selectionSummary(rows: RowDto[]): { count: number; size: string | null } {
   const known = rows.filter((r) => r.size_bytes !== null);
   if (!known.length) return { count: rows.length, size: null };
   const bytes = known.reduce((s, r) => s + (r.size_bytes ?? 0), 0);
-  const text = bytes >= GB ? `${(bytes / GB).toFixed(1).replace(".", ",")} ГБ` : `${Math.max(1, Math.round(bytes / MB))} МБ`;
-  return { count: rows.length, size: `≈ ${text}${known.length < rows.length ? "+" : ""}` };
+  return { count: rows.length, size: `≈ ${bytesText(bytes)}${known.length < rows.length ? "+" : ""}` };
 }
 
 /** Пришли покупки: группа «Пропали из App Store» остаётся как на экране (права там уже
@@ -219,10 +225,10 @@ function needsCheck(r: RowDto): boolean {
 /** Подсказка у нижней панели, когда телефона нет. */
 export const NO_PHONE_HINT = "Подключите iPhone, чтобы вернуть. Без него можно только скачать копии";
 
-/** Нижняя панель: «Вернуть N» (нужен телефон) и «Только скачать N» (и без телефона). */
-export function barState(count: number, hasPhone: boolean): { go: { text: string; disabled: boolean }; only: { text: string; disabled: boolean }; hint: string | null } {
+/** Нижняя панель: «Вернуть N» (нужен телефон; ставим на iPhone — «Вернуть N на iPhone») и «Только скачать N» (и без телефона). */
+export function barState(count: number, hasPhone: boolean, toIphone = false): { go: { text: string; disabled: boolean }; only: { text: string; disabled: boolean }; hint: string | null } {
   return {
-    go: { text: count ? `Вернуть ${count}` : "Вернуть", disabled: count === 0 || !hasPhone },
+    go: { text: count ? `Вернуть ${count}${toIphone ? " на iPhone" : ""}` : "Вернуть", disabled: count === 0 || !hasPhone },
     only: { text: count ? `Только скачать ${count}` : "Только скачать", disabled: count === 0 },
     hint: hasPhone ? null : NO_PHONE_HINT,
   };
@@ -298,48 +304,6 @@ export function recheckIds(map: OwnedMap, id: number): number[] {
   return [id, ...waiting];
 }
 
-export type TileTone = "plain" | "muted" | "warn" | "checking" | "retry";
-
-export type TileLine = { text: string; tone: TileTone; up?: string; note?: string };
-
-/** Вторая строка плитки. `up` — новая версия, её выделяем: «на iPhone 21.3 → 22.1». `retry` — плитка
- * по нажатию повторяет проверку прав. `note` — третья строка рядом с версией («Неизвестный Apple ID», «Есть копия на компьютере»).
- * `phoneIos` — iOS телефона-цели: последней версии нужна новее — «Нужна iOS X, на iPhone Y» (скачать можно).
- * `chosen` — выбрана другая версия («Другая версия…»). */
-export function tileLine(
-  r: RowDto,
-  s: OwnedState | undefined,
-  toIphone: boolean,
-  withPhone: boolean,
-  opts: { phoneIos?: string | null; chosen?: ChosenVersion | null } = {},
-): TileLine {
-  if (r.ipad_only && toIphone) return { text: "только для iPad", tone: "warn" };
-  if (r.other_account) return { text: r.purchaser_masked ? `Куплено на другом Apple ID (${r.purchaser_masked})` : "Куплено на другом Apple ID", tone: "warn" };
-  if ((r.source === "removed" || r.source === "phone" || r.source === "store" || r.source === "history") && !r.has_saved_copy) {
-    if (!s || s.kind === "checking") return { text: "проверяем…", tone: "checking" };
-    if (s.kind === "gone") return { text: "Apple больше не отдаёт", tone: "muted" };
-    if (s.kind === "no") return r.source === "store" ? { text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE } : { text: "Нет на вашем Apple ID", tone: "muted" };
-    if (s.kind === "error") return { text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" };
-  }
-  if (opts.chosen) return { text: opts.chosen.display ? `версия ${opts.chosen.display} (выбрана)` : "выбрана другая версия", tone: "plain" };
-  const tooOld = toIphone ? tooOldNote(r.min_ios, opts.phoneIos ?? null) : null;
-  if (tooOld) return { text: tooOld, tone: "warn", note: downloadOnlyNote(opts.phoneIos ?? "") };
-  const note = r.unknown_account ? "Неизвестный Apple ID" : r.has_saved_copy ? "Есть копия на компьютере" : undefined;
-  const withNote = (l: TileLine): TileLine => (note ? { ...l, note } : l);
-  if (withPhone && r.installed_version !== null) {
-    const have = r.installed_version || "есть";
-    if (hasNewer(r)) return withNote({ text: `на iPhone ${have} → `, up: r.available_version!, tone: "plain" });
-    return withNote({ text: `на iPhone ${have}`, tone: "plain" });
-  }
-  // строка телефона-источника, которой нет на цели: версия со старого телефона
-  if (r.source === "phone" && r.version) return withNote({ text: `с телефона ${r.version}`, tone: "plain" });
-  if (r.available_version) return withNote({ text: `доступно ${r.available_version}`, tone: "plain" });
-  if (r.unknown_account) return { text: "Неизвестный Apple ID", tone: "muted" };
-  if (r.has_saved_copy) return { text: "Есть копия на компьютере", tone: "plain" };
-  if (r.source === "purchase" && r.removed_from_ru) return { text: "нет в российском App Store", tone: "muted" };
-  return { text: "в ваших покупках", tone: "muted" };
-}
-
 export type CellTone = "ok" | "plain" | "muted" | "warn" | "checking" | "retry";
 
 /** Ячейка «На этом Apple ID». Правила по порядку, первое совпавшее. */
@@ -405,18 +369,11 @@ function subBase(r: RowDto, s: OwnedState | undefined): { text: string; tone: Ce
   }
 }
 
-/** Как `tileA11y`, но по ячейке «На этом Apple ID». */
+/** Состояние строки для экранного диктора по ячейке «На этом Apple ID». Невыбираемая остаётся в порядке Tab
+ * (`aria-disabled`, а не `disabled`) и называет причину; строка «повторить проверку» — обычная кнопка, не переключатель. */
 export function rowA11y(name: string, owned: { text: string; tone: CellTone }, enabled: boolean, isSelected: boolean): { pressed: "true" | "false" | null; disabled: boolean; label: string | null } {
   if (owned.tone === "retry") return { pressed: null, disabled: false, label: null };
   if (!enabled) return { pressed: "false", disabled: true, label: `${name}, не выбрать: ${owned.text}` };
-  return { pressed: String(isSelected) as "true" | "false", disabled: false, label: null };
-}
-
-/** Состояние плитки для экранного диктора. Невыбираемая остаётся в порядке Tab (`aria-disabled`, а не
- * `disabled`) и называет причину; плитка «повторить проверку» — обычная кнопка, не переключатель. */
-export function tileA11y(name: string, line: TileLine, enabled: boolean, isSelected: boolean): { pressed: "true" | "false" | null; disabled: boolean; label: string | null } {
-  if (line.tone === "retry") return { pressed: null, disabled: false, label: null };
-  if (!enabled) return { pressed: "false", disabled: true, label: `${name}, не выбрать: ${line.text}` };
   return { pressed: String(isSelected) as "true" | "false", disabled: false, label: null };
 }
 
@@ -453,7 +410,7 @@ export function isLight(color: string): boolean {
   return 0.2126 * lin(m[1]) + 0.7152 * lin(m[2]) + 0.0722 * lin(m[3]) > 0.45;
 }
 
-/** Третья строка плитки «В App Store» без прав: тёзка — не обязательно то самое приложение. */
+/** Третья строка «В App Store» без прав: тёзка — не обязательно то самое приложение. */
 export const NAMESAKE_NOTE = "Если у вас было приложение с таким названием, это могло быть другое — удалённое или скрытое";
 
 /** Подсказка под группой «В App Store»: где вернуть скрытую покупку. */
@@ -462,7 +419,7 @@ export const HIDDEN_PURCHASES_HINT = "Скрытые покупки: App Store �
 /** Подсказка под группой «С этого iPhone». */
 export const SOURCE_HINT = "Само приложение с телефона не забрать — копию скачаем с Apple по номеру. Работает, если приложение есть на Apple ID";
 
-/** Подсказка на «Входе» после «Войти в этот Apple ID» у плитки, купленной на другом Apple ID. */
+/** Подсказка на «Входе» после «Войти в этот Apple ID» у строки, купленной на другом Apple ID. */
 export const OTHER_ID_LOGIN_NOTE = "Войдите в Apple ID, с которого скачано это приложение";
 
 /** Выбор «Телефон-источник» над группой: только при двух и больше подключённых. Цель помечена. */

@@ -1,4 +1,4 @@
-import { asUiError, call, go, refreshSidebar, register, safe, state, targetIsIphone, targetPhone, type Job } from "../app";
+import { asUiError, call, go, refreshSidebar, register, safe, setSidebarExtra, state, targetIsIphone, targetPhone, type Job } from "../app";
 import { h } from "../dom";
 import { resumeBanner } from "./resume";
 import { batchText, dropMessages, mergePending, runBatch } from "../drop";
@@ -35,8 +35,11 @@ import {
   hiddenCount,
   selectionLabel,
   selectionSummary,
-  tileA11y,
-  tileLine,
+  ownedCell,
+  phoneCell,
+  subLine,
+  rowA11y,
+  sizeText,
   visibleGroups,
   visibleChecks,
   isNewRow,
@@ -45,18 +48,44 @@ import {
   sweepText,
   type Chip,
   type GroupKey,
+  type CellTone,
   type OwnedMap,
-  type TileLine,
 } from "../rows";
 import type { DropDto, FoundVersionDto, HistoryOutcome, HistoryProgress, InstalledDto, OwnedEvent, PurchasesProgress, RowDto, RowsDto, RunDto, SourceRowsDto, SweepDto, UiError, VersionDto, VersionsDto } from "../types";
 import { canPickVersion, findOffered, foundMessage, recheckFrom, splitStart, startVersions, tooOldNote, versionLabel, waitText } from "../versions";
 import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, keptHistory, mergeHistoryRows, takeHistory } from "../history";
 
-export function appIcon(r: RowDto): HTMLElement {
+/** Значок: буква на цвете; `url` — иконка App Store поверх буквы (не загрузилась — снова буква). */
+export function appIcon(r: RowDto, url?: string | null): HTMLElement {
   const { letter, color } = iconFor(r);
   const cls = ["ico", [...letter].length > 2 ? "tight" : "", isLight(color) ? "light" : ""].filter(Boolean).join(" ");
-  return h("span", { class: cls, text: letter, style: { background: color }, attrs: { "aria-hidden": "true" } });
+  const ico = h("span", { class: cls, text: letter, style: { background: color }, attrs: { "aria-hidden": "true" } });
+  if (url) addIconImg(ico, url);
+  return ico;
 }
+
+function addIconImg(ico: Element, url: string) {
+  const img = h("img", { attrs: { src: url, alt: "", loading: "lazy", decoding: "async", referrerpolicy: "no-referrer" } });
+  img.addEventListener("error", () => img.remove());
+  ico.append(img);
+}
+
+/** Телефон в карточке боковой панели. */
+function sidePhoneIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  for (const [k, v] of Object.entries({ width: "30", height: "30", viewBox: "0 0 24 24", fill: "none", stroke: "#cfe0dd", "stroke-width": "1.5", "stroke-linecap": "round", "aria-hidden": "true" }))
+    svg.setAttribute(k, v);
+  const body = document.createElementNS(ns, "rect");
+  for (const [k, v] of Object.entries({ x: "6.5", y: "2.5", width: "11", height: "19", rx: "2.5" })) body.setAttribute(k, v);
+  const p = document.createElementNS(ns, "path");
+  p.setAttribute("d", "M10.5 18.5h3");
+  svg.append(body, p);
+  return svg;
+}
+
+/** Заголовки разделов в боковой панели. */
+const SECTION_TITLE: Record<Chip, string> = { all: "Разделы", bank: "Разделы", social: "Разделы", travel: "Разделы", buy: "Apple ID", on: "iPhone", new: "iPhone" };
 
 function searchIcon(): SVGSVGElement {
   const ns = "http://www.w3.org/2000/svg";
@@ -122,12 +151,12 @@ register("choose", () => {
   // «Только для iPad» зависит от устройства, на которое ставим, а не от «Дальше»
   const toIphone = () => targetIsIphone();
 
-  /** Плитки на экране по trackId и кнопки «Выбрать все в группе»: выбор меняется на месте. */
+  /** Строки на экране по trackId и кнопки «Выбрать все в группе»: выбор меняется на месте. */
   const tiles = new Map<number, HTMLButtonElement>();
-  /** «Другая версия…» под плитками: видна у выбранных строк, которые скачиваются по номеру. */
+  /** «Другая версия…» под строками: видна у выбранных строк, которые скачиваются по номеру. */
   const versionLinks = new Map<number, HTMLButtonElement>();
   /** Открытые списки версий по trackId: переживают перерисовку списка. */
-  /** «Найти подходящую версию» под несовместимыми плитками: видна и без выбора. */
+  /** «Найти подходящую версию» под несовместимыми строками: видна и без выбора. */
   const findLinks = new Map<number, HTMLButtonElement>();
   /** `waitUntil` — пауза после 429 (мс, `Date.now()`): кнопки к Apple скрыты, идёт обратный отсчёт. */
   type Panel = { loading: boolean; versions: VersionDto[]; more: boolean; error: string | null; found: string | null; waitUntil: number | null; listed: boolean };
@@ -147,21 +176,42 @@ register("choose", () => {
 
   // в живой области только короткий итог: весь список на каждую букву диктор не читает
   const list = h("div", { class: "scroll tiles-list" });
-  const found = h("p", { class: "found", attrs: { role: "status" } });
-  const chips = h("div", { class: "chips", attrs: { role: "toolbar", "aria-label": "Фильтры" } });
+  const inspector = h("aside", { class: "inspector", attrs: { "aria-label": "О приложении" } });
+  // фокус на строке (Tab, стрелки, возврат фокуса) — она и в карточке
+  list.addEventListener("focusin", (e) => {
+    const t = (e.target as HTMLElement | null)?.closest?.<HTMLElement>(".tile");
+    if (t?.dataset.id) setCurrent(Number(t.dataset.id));
+  });
+  const found = h("span", { class: "found", attrs: { role: "status" } });
+  // боковая панель: карточка телефона и разделы (бывшие чипсы)
+  const phoneCard = h("div", { class: "side-phone" });
+  const chips = h("div", { class: "sections", attrs: { role: "toolbar", "aria-label": "Разделы", "aria-orientation": "vertical" } });
   chips.addEventListener("keydown", (e: KeyboardEvent) => {
-    const all = [...chips.querySelectorAll<HTMLButtonElement>(".chip")];
+    const all = [...chips.querySelectorAll<HTMLButtonElement>(".sec-btn")];
     const i = rovingIndex(e.key, all.indexOf(document.activeElement as HTMLButtonElement), all.length);
     if (i === null || !all.length) return;
     e.preventDefault();
     for (const b of all) b.tabIndex = -1;
     all[i].tabIndex = 0;
     all[i].focus();
-    all[i].scrollIntoView({ block: "nearest", inline: "nearest" });
   });
+  setSidebarExtra(h("div", { class: "side-choose" }, phoneCard, chips));
 
-  chips.addEventListener("scroll", () => chipsFade(), { passive: true });
-  if (typeof ResizeObserver !== "undefined") new ResizeObserver(() => chipsFade()).observe(chips);
+  /** Карточка телефона-цели: имя и iOS; без телефона — «iPhone не подключён». */
+  function renderPhoneCard() {
+    const p = targetPhone();
+    phoneCard.classList.toggle("off", !p);
+    phoneCard.replaceChildren(
+      sidePhoneIcon(),
+      h(
+        "div",
+        { class: "sp-t" },
+        h("b", { text: p ? p.name : "iPhone не подключён" }),
+        p ? h("span", { class: "sp-ios" }, h("i", { attrs: { "aria-hidden": "true" } }), `iOS ${p.ios_version} · подключён`) : null,
+      ),
+    );
+  }
+  renderPhoneCard();
 
   const search = h("input", {
     class: "input",
@@ -169,6 +219,7 @@ register("choose", () => {
       type: "search",
       placeholder: "Название, например «Сбер» или «ВК»",
       "aria-label": "Поиск по каталогу, покупкам и телефону",
+      title: "Ищет везде, включая App Store, и по прежним названиям",
       autocomplete: "off",
       spellcheck: "false",
     },
@@ -392,45 +443,71 @@ register("choose", () => {
     else selected.delete(id);
   }
 
-  const lineOf = (r: RowDto) => tileLine(r, owned.get(r.track_id), toIphone(), withPhone, { phoneIos: phoneIos(), chosen: state.versions.get(r.track_id) ?? null });
+  /** Ячейка «На этом Apple ID» и строка под названием. */
+  const cellOf = (r: RowDto) => ownedCell(r, owned.get(r.track_id), toIphone());
+  const subOf = (r: RowDto) => subLine(r, owned.get(r.track_id), toIphone(), { phoneIos: phoneIos(), chosen: state.versions.get(r.track_id) ?? null });
 
+  /** Иконки App Store по trackId (`app_icons`): `null` — у Apple нет, остаётся буква. На время экрана. */
+  const icons = new Map<number, string | null>();
+  const iconsAsked = new Set<number>();
+  /** Карточка справа: последняя строка, по которой кликнули или на которую перешёл фокус. */
+  let curId: number | null = null;
+
+  /** Строка таблицы: флажок · иконка, название и подстрока · Apple ID · iPhone · размер. */
   function tileEl(r: RowDto): HTMLButtonElement {
-    const line = lineOf(r);
+    const own = cellOf(r);
+    const sub = subOf(r);
+    const ph = phoneCell(r, withPhone);
     const enabled = selectable(r);
-    const ver = h("span", { class: `ver ${line.tone}`, text: line.text });
-    if (line.up) ver.append(h("span", { class: "up", text: line.up }));
-    if (line.tone === "checking") ver.append(h("span", { class: "spin", attrs: { "aria-hidden": "true" } }));
     const tile = h(
       "button",
       {
-        class: "tile",
-        attrs: { type: "button", title: `${r.name} — ${line.text}${line.up ?? ""}${line.note ? ` · ${line.note}` : ""}` },
+        class: r.track_id === curId ? "tile cur" : "tile",
+        attrs: { type: "button", title: [r.name, own.text, sub.text, sub.note].filter(Boolean).join(" · ") },
         on: {
-          // `aria-disabled`, не `disabled`: плитка в порядке Tab и называет причину; нажатие ничего не делает
+          // `aria-disabled`, не `disabled`: строка в порядке Tab и называет причину; нажатие ничего не делает
           click: safe(async () => {
-            if (line.tone === "retry") return recheck(r.track_id);
+            setCurrent(r.track_id);
+            if (own.tone === "retry") return recheck(r.track_id);
             if (!selectable(r)) return;
             setSelected(r.track_id, !selected.has(r.track_id));
             syncSelection();
           }),
         },
       },
-      appIcon(r),
+      h("span", { class: "tbox", attrs: { "aria-hidden": "true" } }),
       h(
         "span",
-        { class: "tt" },
-        h("span", { class: "nm" }, isNewRow(r, state.newIds) ? h("span", { class: "badge-new", text: "Новое" }) : null, r.name),
-        ver,
-        line.note ? h("span", { class: "ver note", text: line.note }) : null,
+        { class: "c-app" },
+        appIcon(r, icons.get(r.track_id)),
+        h(
+          "span",
+          { class: "tt" },
+          h("span", { class: "nm" }, isNewRow(r, state.newIds) ? h("span", { class: "badge-new", text: "Новое" }) : null, r.name),
+          h("span", { class: `sub ${sub.tone}`, text: sub.text }),
+          sub.note ? h("span", { class: "rnote", text: sub.note }) : null,
+        ),
       ),
-      h("span", { class: "tbox", attrs: { "aria-hidden": "true" } }),
+      ownEl(own),
+      h("span", { class: "c-phone" }, h("span", { text: ph.have }), ph.newer ? h("span", { class: "up", text: `→ ${ph.newer}` }) : null),
+      h("span", { class: "c-size", text: sizeText(r.size_bytes) }),
     );
     tile.dataset.id = String(r.track_id);
-    applyA11y(tile, r, line, enabled);
+    applyA11y(tile, r, own, enabled);
     return tile;
   }
 
-  /** Плитка группы «С этого iPhone» и её кнопки под ней: внутри кнопки-плитки другие кнопки нельзя. */
+  /** Плашка «На этом Apple ID» по тону; пустой текст — пустая ячейка. */
+  function ownEl(own: { text: string; tone: CellTone }): HTMLElement {
+    return h(
+      "span",
+      { class: "c-own" },
+      own.tone === "checking" ? h("span", { class: "spin", attrs: { "aria-hidden": "true" } }) : null,
+      own.text ? h("span", { class: `pill ${own.tone}`, text: own.text }) : null,
+    );
+  }
+
+  /** Строка группы «С этого iPhone» и её кнопки под ней: внутри кнопки-строки другие кнопки нельзя. */
   function phoneTile(r: RowDto, tile: HTMLButtonElement): HTMLElement {
     const msg = h("span", { class: "note", attrs: { role: "status" } });
     const report = h("button", {
@@ -467,7 +544,7 @@ register("choose", () => {
     return h("div", { class: "tilewrap" }, tile, h("div", { class: "tile-actions" }, login, report, msg));
   }
 
-  /** Плитка нового выпуска («Новое»): под ней «Открыть в App Store» — лицензию человек берёт сам. */
+  /** Строка нового выпуска («Новое»): под ней «Открыть в App Store» — лицензию человек берёт сам. */
   function newTile(r: RowDto, tile: HTMLButtonElement): HTMLElement {
     const msg = h("span", { class: "note", attrs: { role: "status" } });
     const open = h("button", {
@@ -570,8 +647,8 @@ register("choose", () => {
     renderList();
   }
 
-  function applyA11y(tile: HTMLElement, r: RowDto, line: TileLine, enabled: boolean) {
-    const a = tileA11y(r.name, line, enabled, selected.has(r.track_id));
+  function applyA11y(tile: HTMLElement, r: RowDto, own: { text: string; tone: CellTone }, enabled: boolean) {
+    const a = rowA11y(r.name, own, enabled, selected.has(r.track_id));
     if (a.pressed === null) tile.removeAttribute("aria-pressed");
     else tile.setAttribute("aria-pressed", a.pressed);
     if (a.disabled) tile.setAttribute("aria-disabled", "true");
@@ -585,7 +662,7 @@ register("choose", () => {
     const byId = new Map(rows.map((r) => [r.track_id, r]));
     for (const [id, tile] of tiles) {
       const r = byId.get(id);
-      if (r) applyA11y(tile, r, lineOf(r), selectable(r));
+      if (r) applyA11y(tile, r, cellOf(r), selectable(r));
     }
     for (const [id, link] of versionLinks) {
       const r = byId.get(id);
@@ -601,6 +678,79 @@ register("choose", () => {
       g.btn.textContent = pick.allOn ? "Снять в группе" : "Выбрать все в группе";
     }
     renderBar();
+    renderInspector();
+  }
+
+  /** Строка для карточки справа; подсветка — у неё одной. */
+  function setCurrent(id: number) {
+    if (curId === id) return;
+    curId = id;
+    for (const [tid, t] of tiles) t.classList.toggle("cur", tid === id);
+    renderInspector();
+  }
+
+  /** «Другая версия…» видна там же, где ссылка под строкой: выбранные строки, что скачиваются по номеру. */
+  const versionOffered = (r: RowDto) => r.track_id > 0 && !r.other_account && r.source !== "saved" && selected.has(r.track_id) && canPickVersion(r, owned.get(r.track_id));
+
+  /** Карточка справа (видна от 1100 px): иконка, название, подстрока, факты, «Другая версия…». */
+  function renderInspector() {
+    // строка, скрытая фильтром, в карточке не показывается: панель версий открылась бы невидимой
+    const r = curId !== null && tiles.has(curId) ? rows.find((x) => x.track_id === curId) : undefined;
+    const hadFocus = inspector.contains(document.activeElement);
+    if (!r) {
+      inspector.replaceChildren(h("p", { class: "insp-empty", text: "Нажмите на приложение, чтобы увидеть подробности" }));
+      return;
+    }
+    const own = cellOf(r);
+    const sub = subOf(r);
+    const ph = phoneCell(r, withPhone);
+    const big = appIcon(r, icons.get(r.track_id));
+    big.classList.add("big");
+    const fact = (k: string, v: string) => [h("dt", { text: k }), h("dd", { text: v })];
+    const parts: HTMLElement[] = [
+      h("div", { class: "insp-head" }, big, h("div", { class: "insp-t" }, h("h3", { text: r.name }), h("p", { class: `sub ${sub.tone}`, text: sub.text }))),
+      h(
+        "dl",
+        { class: "insp-facts" },
+        ...fact("Apple ID", own.text || "—"),
+        ...fact("Доступно", r.available_version || "—"),
+        ...fact("На iPhone", ph.newer ? `${ph.have} → ${ph.newer}` : ph.have),
+        ...fact("Размер", sizeText(r.size_bytes)),
+        ...fact("Нужна iOS", r.min_ios || "—"),
+      ),
+    ];
+    if (sub.note) parts.push(h("p", { class: "note", text: sub.note }));
+    const ver = versionOffered(r) ? h("button", { class: "btn ghost small", text: "Другая версия…", attrs: { type: "button" }, on: { click: safe(() => openVersions(r)) } }) : null;
+    if (ver) parts.push(ver);
+    inspector.replaceChildren(...parts);
+    // карточка перерисовывается на каждое событие: фокус с её кнопки не теряем
+    if (hadFocus) ver?.focus();
+  }
+
+  /** Иконки для строк на экране, которых ещё не спрашивали: один вызов (до 1000 номеров). Сбой — молча, буквы. */
+  async function fetchIcons() {
+    const ids = [...tiles.keys()].filter((id) => id > 0 && !icons.has(id) && !iconsAsked.has(id)).slice(0, 1000);
+    if (!ids.length) return;
+    for (const id of ids) iconsAsked.add(id);
+    let got: Record<string, string> | null = null;
+    try {
+      got = await call<Record<string, string>>("app_icons", { trackIds: ids });
+    } catch {
+      // не спросили — спросим при следующей отрисовке
+    }
+    for (const id of ids) {
+      iconsAsked.delete(id);
+      if (got) icons.set(id, got[String(id)] ?? null);
+    }
+    if (!got || left) return;
+    for (const id of ids) {
+      const url = icons.get(id);
+      const ico = url ? tiles.get(id)?.querySelector(".ico") : null;
+      if (url && ico && !ico.querySelector("img")) addIconImg(ico, url);
+    }
+    if (curId !== null && ids.includes(curId)) renderInspector();
+    // строк больше 1000 — остаток следующим вызовом
+    void fetchIcons();
   }
 
   function renderChips() {
@@ -608,37 +758,37 @@ register("choose", () => {
     const keys = chipList(withPhone);
     if (!keys.some((c) => c.key === chip)) chip = "all";
     const focused = (document.activeElement as HTMLElement | null)?.dataset?.chip;
-    chips.replaceChildren(
-      ...keys.map((c) => {
-        const b = h(
-          "button",
-          {
-            class: "chip",
-            attrs: { type: "button", "aria-pressed": String(c.key === chip) },
-            on: {
-              click: () => {
-                chip = c.key;
-                renderChips();
-                renderList();
-              },
+    const parts: HTMLElement[] = [];
+    let title = "";
+    for (const c of keys) {
+      // заголовок над разделами одной темы: «Разделы», «Apple ID», «iPhone»
+      if (SECTION_TITLE[c.key] !== title) {
+        title = SECTION_TITLE[c.key];
+        parts.push(h("div", { class: "sec-title", text: title, attrs: { "aria-hidden": "true" } }));
+      }
+      const b = h(
+        "button",
+        {
+          class: "sec-btn",
+          attrs: { type: "button", "aria-pressed": String(c.key === chip) },
+          on: {
+            click: () => {
+              chip = c.key;
+              renderChips();
+              renderList();
             },
           },
-          c.label,
-          h("span", { text: String(counts[c.key]) }),
-        );
-        b.dataset.chip = c.key;
-        // в Tab один чип (выбранный), по остальным — стрелками
-        b.tabIndex = c.key === chip ? 0 : -1;
-        return b;
-      }),
-    );
+        },
+        h("span", { class: "sec-l", text: c.label }),
+        h("span", { class: "n", text: String(counts[c.key]) }),
+      );
+      b.dataset.chip = c.key;
+      // в Tab один раздел (выбранный), по остальным — стрелками
+      b.tabIndex = c.key === chip ? 0 : -1;
+      parts.push(b);
+    }
+    chips.replaceChildren(...parts);
     if (focused) chips.querySelector<HTMLElement>(`[data-chip="${focused}"]`)?.focus();
-    chipsFade();
-  }
-
-  /** Чипы не влезли: правый край тает — видно, что ряд листается вбок. */
-  function chipsFade() {
-    chips.classList.toggle("more", chips.scrollLeft + chips.clientWidth < chips.scrollWidth - 1);
   }
 
   /** Группа: заголовок (`head` — кнопки рядом с «Выбрать все в группе»), `extra` — под заголовком. */
@@ -650,7 +800,7 @@ register("choose", () => {
       syncSelection();
     });
     groupLinks.push({ key, rows: items, btn });
-    const grid = h("div", { class: "tiles" });
+    const grid = h("div", { class: "trows" });
     for (const r of items) {
       const t = tileEl(r);
       tiles.set(r.track_id, t);
@@ -705,7 +855,7 @@ register("choose", () => {
     return parts;
   }
 
-  /** «Другая версия…» под плиткой (у плитки-кнопки — своя обёртка: кнопку в кнопку нельзя). */
+  /** «Другая версия…» под строкой (у строки-кнопки — своя обёртка: кнопку в кнопку нельзя). */
   function withVersionLink(r: RowDto, cell: HTMLElement): HTMLElement {
     if (r.track_id <= 0 || r.other_account || r.source === "saved") return cell;
     const link = h("button", {
@@ -755,7 +905,7 @@ register("choose", () => {
     );
   }
 
-  /** Список версий под плиткой: «Последняя», версии от новой к старой, «Ещё» и «Найти подходящую». */
+  /** Список версий под строкой: «Последняя», версии от новой к старой, «Ещё» и «Найти подходящую». */
   function panelEl(r: RowDto): HTMLElement {
     const id = r.track_id;
     const p = panels.get(id)!;
@@ -902,6 +1052,13 @@ register("choose", () => {
     found.textContent = foundText(rows, chip, query, withPhone);
     const plain = chip === "all" && query.trim() === "";
     const parts: HTMLElement[] = banners();
+    // колонки — один закреплённый заголовок над всеми группами
+    const table = h(
+      "div",
+      { class: "tbl" },
+      h("div", { class: "thead", attrs: { "aria-hidden": "true" } }, h("span"), h("span", { text: "Приложение" }), h("span", { text: "На этом Apple ID" }), h("span", { text: "На iPhone" }), h("span", { text: "Размер" })),
+    );
+    parts.push(table);
     for (const g of groups) {
       const extra: HTMLElement[] = [];
       if (g.key === "catalog" && !g.rows.length && plain) extra.push(h("p", { class: "empty", text: "Пока пусто. Добавьте приложение по ссылке — блок «Не нашли приложение?» ниже." }));
@@ -932,7 +1089,7 @@ register("choose", () => {
         if (g.rows.length) extra.push(h("p", { class: "note group-hint", text: SOURCE_HINT }));
       }
       if (g.key === "history" && g.rows.length) extra.push(h("p", { class: "note group-hint", text: HISTORY_HINT }));
-      if (g.rows.length || extra.length) parts.push(groupSection(g.key, g.title, g.rows, extra, head));
+      if (g.rows.length || extra.length) table.append(groupSection(g.key, g.title, g.rows, extra, head));
     }
     if (groups.every((g) => !g.rows.length) && !plain) {
       parts.push(h("p", { class: "empty", text: query.trim() ? emptySearchText(query) : "В этом фильтре пусто." }));
@@ -942,6 +1099,7 @@ register("choose", () => {
     list.replaceChildren(...parts);
     if (focusedId) tiles.get(Number(focusedId))?.focus();
     syncSelection();
+    void fetchIcons();
   }
 
   /** Rust проверяет видимые при поиске/фильтре строки первыми; прочие ждут. */
@@ -955,7 +1113,7 @@ register("choose", () => {
     }, 300);
   }
 
-  /** Одна плитка после события `owned`: остальной список и фокус не трогаем. */
+  /** Одна строка после события `owned`: остальной список и фокус не трогаем. */
   function renderTile(id: number) {
     const old = tiles.get(id);
     const r = rows.find((x) => x.track_id === id);
@@ -965,6 +1123,7 @@ register("choose", () => {
     old.replaceWith(t);
     tiles.set(id, t);
     if (had) t.focus();
+    if (id === curId) renderInspector();
   }
 
   function chosen(): RowDto[] {
@@ -979,7 +1138,7 @@ register("choose", () => {
     sizeEl.textContent = count && size ? size : "";
     sizeEl.hidden = !sizeEl.textContent;
     clearBtn.hidden = count === 0;
-    const bar = barState(count, !!targetPhone());
+    const bar = barState(count, !!targetPhone(), toIphone());
     startBtn.disabled = bar.go.disabled;
     startBtn.textContent = bar.go.text;
     onlyBtn.disabled = bar.only.disabled;
@@ -1261,15 +1420,12 @@ register("choose", () => {
     h(
       "div",
       { class: "choose-top" },
-      h("div", { class: "choose-head" }, heading, switchId),
+      h("div", { class: "choose-head" }, heading, h("label", { class: "searchbox" }, searchIcon(), search)),
+      h("div", { class: "hintrow" }, found, findLink, switchId),
       resumeBanner(),
-      h("label", { class: "searchbox" }, searchIcon(), search),
-      h("div", { class: "hintrow" }, h("p", { class: "hint", text: "Ищет везде, включая App Store, и по прежним названиям" }), findLink),
       dropMsg,
     ),
-    chips,
-    found,
-    list,
+    h("div", { class: "choose-main" }, list, inspector),
     h(
       "div",
       { class: "selbar" },
@@ -1284,8 +1440,9 @@ register("choose", () => {
   void load().catch((e) => console.error(e));
   /** Подключили или отключили телефон: выбор источника над группой перерисовать. */
   function onPhones() {
-    // «Вернуть» зависит от того, есть ли куда ставить: панель — на каждое событие
+    // «Вернуть» зависит от того, есть ли куда ставить: панель и карточка телефона — на каждое событие
     renderBar();
+    renderPhoneCard();
     const key = state.phones.map((p) => p.udid).join(",");
     if (key === phonesKey) return;
     phonesKey = key;

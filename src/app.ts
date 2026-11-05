@@ -186,6 +186,13 @@ function openFolderButton(cmd: string, label: string, cls: string): HTMLElement 
   return h("div", { class: "openlib" }, btn, msg);
 }
 
+/** Своё содержимое экрана в левой колонке (между шагами и «Все копии»); сбрасывается при `go`. */
+let sidebarExtra: HTMLElement | null = null;
+
+export function setSidebarExtra(el: HTMLElement | null): void {
+  sidebarExtra = el;
+}
+
 function sidebar(screen: Screen): HTMLElement {
   const idx = stepIndex(screen);
   const items = STEPS.map((label, i) => h("li", { class: idx < 0 ? "" : i < idx ? "done" : i === idx ? "now" : "", text: label }));
@@ -215,7 +222,7 @@ function sidebar(screen: Screen): HTMLElement {
     pendingNote(state.pendingLinks.length) ? h("div", { class: "update", text: pendingNote(state.pendingLinks.length)!, attrs: { role: "status" } }) : null,
     state.dropNote ? h("div", { class: "update", text: state.dropNote, attrs: { role: "status" } }) : null,
   );
-  return h("nav", { class: "steps" }, h("div", { class: "brand" }, "Вернуть", h("br"), "приложения"), h("ol", {}, ...items), copies, foot);
+  return h("nav", { class: "steps" }, h("div", { class: "brand" }, "Вернуть", h("br"), "приложения"), h("ol", {}, ...items), sidebarExtra, copies, foot);
 }
 
 /** Первый экран после запуска: список Apple ID, а если он пуст — сразу вход. */
@@ -233,6 +240,7 @@ export function go(screen: Screen): void {
   state.screen = screen;
   const fn = screens.get(screen);
   if (!fn) throw new Error(`no screen ${screen}`);
+  sidebarExtra = null;
   current = fn();
   const root = document.getElementById("app")!;
   root.replaceChildren(h("div", { class: "win" }, sidebar(screen), current.el));

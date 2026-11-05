@@ -61,7 +61,7 @@ input {
 .win {
   height: 100%;
   display: grid;
-  grid-template-columns: 170px 1fr;
+  grid-template-columns: 220px 1fr;
 }
 
 /* Левая колонка: где человек сейчас */
@@ -71,6 +71,8 @@ input {
   padding: 22px 16px;
   display: flex;
   flex-direction: column;
+  /* на «Выборе» под шагами разделы: в низком окне колонка прокручивается */
+  overflow-y: auto;
 }
 .steps .brand {
   font: 700 13px/1.2 "Unbounded", sans-serif;
@@ -304,6 +306,16 @@ label.app {
   color: #fff;
   font: 700 13px "Unbounded", sans-serif;
   flex: none;
+  position: relative;
+  overflow: hidden;
+}
+/* иконка App Store поверх буквы; не загрузилась — `img` убирается, видна буква */
+.ico img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .ico.tight {
   font-size: 10px;
@@ -634,24 +646,31 @@ label.app {
   color: var(--ok);
 }
 
-/* «Выбор»: поиск, фильтры, плитки, нижняя панель (макет docs/superpowers/specs/mockups/choose-v3.html) */
+/* «Выбор»: шапка с поиском, таблица, карточка справа, нижняя панель (спека 2026-11-05-choose-table) */
 .body.choose {
+  padding-top: 18px;
   padding-bottom: 0;
+}
+.choose-top {
+  flex: none;
+  margin: 0 -28px;
+  padding: 0 28px 10px;
+  border-bottom: 1px solid var(--line);
 }
 .choose-head {
   display: flex;
-  align-items: baseline;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
+  gap: 10px 16px;
+  margin-bottom: 8px;
 }
 .choose-head h2 {
   margin: 0;
 }
-.choose-head .link {
-  flex: none;
-  white-space: nowrap;
-  color: var(--muted);
+.choose-head .searchbox {
+  flex: 0 1 340px;
+  min-width: 220px;
 }
 .choose-top .banner {
   margin-bottom: 10px;
@@ -669,82 +688,91 @@ label.app {
   pointer-events: none;
 }
 .searchbox .input {
-  font-size: 16px;
-  padding: 11px 14px 11px 40px;
+  font-size: 15px;
+  height: 42px;
+  padding: 0 12px 0 38px;
   border-radius: 10px;
+}
+.searchbox svg {
+  left: 12px;
 }
 .hintrow {
   display: flex;
   align-items: baseline;
-  gap: 4px 14px;
+  gap: 4px 16px;
   flex-wrap: wrap;
-  margin-top: 5px;
-}
-.hintrow .hint {
-  flex: 1 1 260px;
-  margin: 0;
   font-size: 12.5px;
+  color: var(--muted);
+}
+.hintrow .link {
+  flex: none;
+  font-size: 12.5px;
+  white-space: nowrap;
 }
 .hintrow .find-link {
-  flex: none;
-  font-size: 12.5px;
   font-weight: 600;
-  white-space: nowrap;
 }
-.chips {
+/* список и карточка: карточка прижата к правому краю окна */
+.choose-main {
+  flex: 1;
+  min-height: 0;
   display: flex;
-  gap: 6px;
-  padding: 10px 0 10px;
+  margin-right: -28px;
+}
+.tiles-list {
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
-  scrollbar-width: none;
-  flex: none;
+  margin-right: 0;
+  padding-right: 28px;
 }
-/* ряд листается вбок: правый край тает, пока есть что листать */
-.chips.more {
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 48px), transparent);
+/* таблица уже 640 px — листается вбок; заголовок колонок закреплён */
+.tbl {
+  min-width: 640px;
 }
-.chip {
-  flex: none;
-  white-space: nowrap;
-  font-size: 13.5px;
-  border: 1.5px solid var(--line);
-  background: #fff;
-  color: var(--ink);
-  border-radius: 999px;
-  padding: 5px 12px;
-  cursor: pointer;
+.thead,
+.tile {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) 210px 150px 80px;
+  gap: 12px;
+  align-items: center;
+  padding: 7px 10px;
 }
-.chip span {
+.thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+  padding-top: 8px;
+  padding-bottom: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
   color: var(--muted);
-  margin-left: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
-.chip[aria-pressed="true"] {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: var(--paper);
-}
-.chip[aria-pressed="true"] span {
-  color: #b9cbc8;
+.thead span:last-child {
+  text-align: right;
 }
 .gsec {
-  margin-top: 6px;
+  margin-top: 4px;
+}
+.gsec > :not(.ghead):not(.trows) {
+  margin-left: 10px;
+  margin-right: 10px;
 }
 .ghead {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 12px;
-  position: sticky;
-  top: 0;
-  background: var(--paper);
-  padding: 8px 0 6px;
-  z-index: 1;
+  padding: 12px 10px 6px;
 }
 .ghead h3 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 650;
+  font-size: 13px;
+  font-weight: 700;
 }
 .ghead h3 small {
   color: var(--muted);
@@ -767,41 +795,48 @@ label.app {
   font-size: 13px;
   white-space: nowrap;
 }
-.tiles {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
-  /* список версий во всю ширину встаёт под рядом своей плитки, соседи не съезжают вниз */
-  grid-auto-flow: row dense;
-  gap: 8px;
-}
+/* строка таблицы: вся строка — кнопка-переключатель */
 .tile {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 20px;
-  gap: 10px;
-  align-items: center;
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   text-align: left;
-  background: #fff;
-  border: 1.5px solid var(--line);
-  border-radius: 10px;
-  padding: 9px 10px;
   cursor: pointer;
   color: var(--ink);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.trows > * {
+  border-bottom: 1px solid var(--soft);
 }
 .tile:hover:not([aria-disabled="true"]) {
-  border-color: var(--off);
+  background: #f4f7f6;
 }
-.tile[aria-pressed="true"] {
-  border-color: var(--ink);
-  box-shadow: inset 0 0 0 1px var(--ink);
+/* строка в карточке справа */
+.tile.cur {
+  background: var(--soft);
 }
 .tile[aria-disabled="true"] {
-  opacity: 0.55;
   cursor: default;
 }
+.tile[aria-disabled="true"] .c-app,
+.tile[aria-disabled="true"] .c-phone,
+.tile[aria-disabled="true"] .c-size {
+  opacity: 0.6;
+}
+.c-app {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
 .tile .ico {
-  border-radius: 9px;
-  font-size: 15px;
-  font-weight: 600;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 700;
 }
 .tile .ico.tight {
   font-size: 10px;
@@ -811,35 +846,91 @@ label.app {
 }
 .tile .tt {
   min-width: 0;
-  display: block;
+  display: flex;
+  flex-direction: column;
 }
 .tile .nm,
-.tile .ver {
-  display: block;
+.tile .sub,
+.tile .rnote {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .tile .nm {
-  font-size: 14px;
   font-weight: 600;
-  line-height: 1.25;
+  line-height: 1.3;
 }
-.tile .ver {
+.tile .sub,
+.insp-t .sub {
   font-size: 12px;
   color: var(--muted);
 }
-.tile .ver .up {
-  color: var(--ok);
-  font-weight: 600;
+.tile .sub.plain,
+.insp-t .sub.plain {
+  color: var(--ink);
 }
-.tile .ver.warn {
+.tile .sub.warn,
+.insp-t .sub.warn {
   color: var(--bad);
 }
-.tile .ver.retry {
+.tile .rnote {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+/* «На этом Apple ID»: «Куплено» — зелёной плашкой, «проверяем» — со значком ожидания */
+.c-own {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.c-own .spin {
+  margin-left: 0;
+  flex: none;
+}
+.pill {
+  color: var(--muted);
+}
+.pill.plain {
+  color: var(--ink);
+}
+.pill.ok {
+  background: #e3f3ea;
+  color: #1f6b3f;
+  font-weight: 600;
+  border-radius: 99px;
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+.pill.warn {
+  color: var(--bad);
+}
+.pill.retry {
   color: var(--ink);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+.c-phone {
+  display: flex;
+  gap: 4px;
+  align-items: baseline;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.c-phone .up {
+  color: var(--ok);
+  font-weight: 600;
+}
+.c-size {
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
 }
 .tbox {
   width: 20px;
@@ -853,6 +944,9 @@ label.app {
   background: var(--go);
   border-color: #d9a82a;
 }
+.tile[aria-disabled="true"] .tbox {
+  border-color: var(--line);
+}
 .tile[aria-pressed="true"] .tbox::after {
   content: "";
   width: 9px;
@@ -861,10 +955,9 @@ label.app {
   border-bottom: 2px solid var(--ink);
   transform: rotate(-45deg) translate(1px, -1px);
 }
-.tile:focus-visible,
-.chip:focus-visible {
+.tile:focus-visible {
   outline: 2px solid var(--ink);
-  outline-offset: 2px;
+  outline-offset: -2px;
 }
 .tiles-list .empty {
   text-align: center;
@@ -919,12 +1012,6 @@ label.app {
   font-size: 15px;
   padding: 11px 26px;
 }
-.found {
-  margin: -6px 0 4px;
-  font-size: 12px;
-  color: var(--muted);
-  flex: none;
-}
 /* «Не удалось проверить»: кнопка повтора, не переключатель — без квадратика */
 .tile:not([aria-pressed]) .tbox {
   visibility: hidden;
@@ -956,14 +1043,23 @@ label.app {
 .tilewrap {
   display: flex;
   flex-direction: column;
-  gap: 3px;
   min-width: 0;
 }
+/* ссылки под строкой — под названием */
 .tile-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 4px 12px;
-  padding: 0 4px;
+  padding: 0 10px 7px 96px;
+  margin-top: -3px;
+}
+.verpanel .tile-actions {
+  padding: 0;
+  margin: 0;
+}
+/* все ссылки скрыты, сообщения пусты — места под строкой нет */
+.tilewrap .tile-actions:not(:has(> :not([hidden]):not(:empty))) {
+  display: none;
 }
 .tile-actions .link,
 .tile-actions .note {
@@ -977,9 +1073,9 @@ label.app {
   margin: 0 0 8px;
   max-width: 72ch;
 }
-/* «Другая версия…»: список версий во всю ширину сетки под плиткой */
+/* «Другая версия…»: список версий во всю ширину под строкой */
 .verpanel {
-  grid-column: 1 / -1;
+  margin: 2px 10px 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -1016,10 +1112,6 @@ label.app {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
 }
-/* «Куплено на другом Apple ID (ma***@…)»: маска адреса видна целиком */
-.tile .ver.warn {
-  white-space: normal;
-}
 .bar-hint {
   flex: none;
   margin: 6px 0 0;
@@ -1041,7 +1133,7 @@ label.app {
 }
 /* «Не нашли приложение?» под всеми группами: история покупок, ссылка, ещё способы */
 .findmore {
-  margin: 22px 0 18px;
+  margin: 22px 10px 18px;
   border-top: 1px solid var(--line);
   padding-top: 14px;
   scroll-margin-top: 4px;
@@ -1193,10 +1285,7 @@ label.app {
     padding-top: 18px;
   }
   .choose-head {
-    margin-bottom: 8px;
-  }
-  .chips {
-    padding: 8px 0;
+    margin-bottom: 6px;
   }
 }
 /* «Новое»: новый выпуск под другим именем, бейдж перед названием */
@@ -1283,4 +1372,197 @@ label.app {
 .codehelp p + p {
   margin-top: 8px;
   color: var(--muted);
+}
+
+/* плашки сверху списка; нижняя панель встык к карточке */
+.tiles-list > .banner {
+  margin: 10px 0 4px;
+}
+.tiles-list > .note {
+  margin: 8px 10px 0;
+}
+.body.choose .selbar {
+  margin-top: 0;
+}
+
+/* Карточка выбранной строки справа: только в широком окне */
+.inspector {
+  display: none;
+}
+@media (min-width: 1100px) {
+  .inspector {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    flex: 0 0 250px;
+    min-width: 0;
+    overflow-y: auto;
+    border-left: 1px solid var(--line);
+    background: #fff;
+    padding: 20px;
+  }
+  .tiles-list {
+    padding-right: 12px;
+  }
+}
+.insp-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.insp-head {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+.ico.big {
+  width: 60px;
+  height: 60px;
+  border-radius: 14px;
+  font-size: 25px;
+}
+.insp-t {
+  min-width: 0;
+}
+.insp-t h3 {
+  margin: 0;
+  font: 500 16px/1.3 "Unbounded", sans-serif;
+  overflow-wrap: anywhere;
+}
+.insp-t .sub {
+  margin: 2px 0 0;
+}
+.insp-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 14px;
+  font-size: 13px;
+}
+.insp-facts dt {
+  color: var(--muted);
+}
+.insp-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.insp-facts dd:first-of-type {
+  font-weight: 600;
+}
+.inspector > .note {
+  margin: 0;
+  line-height: 1.4;
+}
+.inspector > .btn {
+  align-self: flex-start;
+}
+
+/* Левая колонка на «Выборе»: карточка телефона и разделы */
+.side-choose {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.side-phone {
+  background: #1d413e;
+  border-radius: 12px;
+  padding: 10px 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.side-phone svg {
+  flex: none;
+}
+.side-phone .sp-t {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.side-phone b {
+  color: #fff;
+  font-weight: 600;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.side-phone.off b {
+  color: #cfe0dd;
+  font-weight: 500;
+}
+.sp-ios {
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sp-ios i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #5fd08f;
+  flex: none;
+}
+.sections {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sec-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9fb8b4;
+  padding: 8px 8px 3px;
+}
+.sec-title:first-child {
+  padding-top: 0;
+}
+.sec-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 8px;
+  min-height: 32px;
+  font-size: 13.5px;
+  line-height: 1.25;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  color: #cfe0dd;
+}
+.sec-btn:hover {
+  background: #1d413e;
+}
+.sec-btn[aria-pressed="true"] {
+  background: #2e5c58;
+  color: #fff;
+  font-weight: 600;
+}
+.sec-btn .sec-l {
+  flex: 1;
+  min-width: 0;
+}
+.sec-btn .n {
+  flex: none;
+  font-size: 11.5px;
+  border-radius: 99px;
+  padding: 1px 7px;
+  background: #1d413e;
+  color: #cfe0dd;
+  font-weight: 600;
+}
+.sec-btn[aria-pressed="true"] .n {
+  background: var(--go);
+  color: var(--ink);
+}
+.sec-btn:focus-visible {
+  outline: 2px solid var(--go);
+  outline-offset: 1px;
 }

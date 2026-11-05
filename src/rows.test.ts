@@ -24,12 +24,11 @@ import {
   rovingIndex,
   selectionLabel,
   selectionSummary,
-  tileA11y,
+  sizeText,
   ownedCell,
   phoneCell,
   subLine,
   rowA11y,
-  tileLine,
   visibleGroups,
   visibleChecks,
   replacePhoneRows,
@@ -130,9 +129,9 @@ describe("visibleGroups", () => {
 
 describe("foundText", () => {
   it("counts what the chip and the search leave on screen", () => {
-    expect(foundText(rows, "all", "")).toBe("Найдено 6");
-    expect(foundText(rows, "all", "tele")).toBe("Найдено 1");
-    expect(foundText(rows, "all", "zzz")).toBe("Найдено 0");
+    expect(foundText(rows, "all", "")).toBe("Показано 6");
+    expect(foundText(rows, "all", "tele")).toBe("Показано 1");
+    expect(foundText(rows, "all", "zzz")).toBe("Показано 0");
   });
 });
 
@@ -213,6 +212,11 @@ describe("selection summary", () => {
     expect(selectionSummary([row(1, "a"), row(2, "b")])).toEqual({ count: 2, size: null });
     expect(selectionSummary([row(1, "a", { size_bytes: 3 * 1024 * MB })])).toEqual({ count: 1, size: "≈ 3,0 ГБ" });
     expect(selectionSummary([row(1, "a", { size_bytes: 1000 })])).toEqual({ count: 1, size: "≈ 1 МБ" });
+  });
+  it("one row size for the table: unknown is a dash", () => {
+    expect(sizeText(412 * MB)).toBe("412 МБ");
+    expect(sizeText(3 * 1024 * MB)).toBe("3,0 ГБ");
+    expect(sizeText(null)).toBe("—");
   });
 });
 
@@ -341,64 +345,13 @@ describe("visibleChecks", () => {
   });
 });
 
-describe("tileLine and canSelect", () => {
+describe("canSelect", () => {
   const yes = { kind: "yes" } as const;
-  it("ownership state first for catalog and phone rows", () => {
-    expect(tileLine(cat(1, "А"), { kind: "checking" }, false, true)).toEqual({ text: "проверяем…", tone: "checking" });
-    expect(tileLine(cat(1, "А"), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
-    expect(tileLine(row(60, "А", { source: "phone" }), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted" });
-    expect(tileLine(cat(1, "А"), { kind: "error", error: softErr }, false, true)).toEqual({ text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" });
-    // Apple больше не отдаёт: не выбрать и не повторять
-    const gone = { kind: "gone" } as const;
-    expect(tileLine(cat(1, "А"), gone, false, true)).toEqual({ text: "Apple больше не отдаёт", tone: "muted" });
-    expect(tileLine(row(70, "С", { source: "store" }), gone, false, true)).toEqual({ text: "Apple больше не отдаёт", tone: "muted" });
-    expect(canSelect(cat(1, "А"), gone)).toBe(false);
-    // тёзка из App Store: подсказка третьей строкой; у каталога её нет
-    expect(tileLine(row(70, "Сила звука", { source: "store" }), { kind: "no" }, false, true)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE });
-    // копия на компьютере: ставится и без подтверждения прав
-    expect(tileLine(cat(1, "А", { has_saved_copy: true, available_version: "16.4" }), { kind: "checking" }, false, true)).toEqual({ text: "доступно 16.4", tone: "plain", note: "Есть копия на компьютере" });
+  it("Apple no longer serves it: not selectable", () => {
+    expect(canSelect(cat(1, "А"), { kind: "gone" })).toBe(false);
   });
-  it("too new for the phone iOS: says so, still selectable; chosen version wins", () => {
-    const tb = row(80, "Т-Банк", { min_ios: "17.0", available_version: "7.1" });
-    expect(tileLine(tb, yes, true, true, { phoneIos: "16.1" })).toEqual({ text: "Нужна iOS 17.0, на iPhone 16.1", tone: "warn", note: downloadOnlyNote("16.1") });
-    expect(canSelect(tb, yes, true)).toBe(true);
-    // не на iPhone (iPad или без телефона) и подходящая iOS — как обычно
-    expect(tileLine(tb, yes, false, true, { phoneIos: "16.1" })).toEqual({ text: "доступно 7.1", tone: "plain" });
-    expect(tileLine(tb, yes, true, true, { phoneIos: "17.2" })).toEqual({ text: "доступно 7.1", tone: "plain" });
-    // права ещё проверяются — сначала они
-    expect(tileLine(cat(81, "К", { min_ios: "17.0" }), { kind: "checking" }, true, true, { phoneIos: "16.1" }).tone).toBe("checking");
-    // выбрана другая версия: минимальная iOS последней к ней не относится
-    expect(tileLine(tb, yes, true, true, { phoneIos: "16.1", chosen: { id: "9", display: "6.0" } })).toEqual({ text: "версия 6.0 (выбрана)", tone: "plain" });
-    expect(tileLine(tb, yes, true, true, { chosen: { id: "9", display: null } })).toEqual({ text: "выбрана другая версия", tone: "plain" });
-  });
-  it("versions: newer, installed, available", () => {
-    const vtb = cat(2, "ВТБ", { installed_version: "21.3", available_version: "22.1", install_state: "update_available" });
-    expect(tileLine(vtb, yes, false, true)).toEqual({ text: "на iPhone 21.3 → ", up: "22.1", tone: "plain" });
-    expect(tileLine(vtb, yes, false, false)).toEqual({ text: "доступно 22.1", tone: "plain" });
-    expect(tileLine(cat(3, "А", { installed_version: "14.0", available_version: "14.0", install_state: "installed" }), yes, false, true)).toEqual({ text: "на iPhone 14.0", tone: "plain" });
-    expect(tileLine(row(60, "О", { source: "phone", installed_version: "14.2" }), yes, false, true)).toEqual({ text: "на iPhone 14.2", tone: "plain" });
-    expect(tileLine(row(10, "Т", { available_version: "7.12" }), undefined, false, true)).toEqual({ text: "доступно 7.12", tone: "plain" });
-  });
-  it("blocking reasons win", () => {
-    expect(tileLine(cat(1, "VK для iPad", { ipad_only: true }), yes, true, true)).toEqual({ text: "только для iPad", tone: "warn" });
-    expect(tileLine(row(60, "О", { source: "phone", other_account: true, installed_version: "1" }), undefined, false, true)).toEqual({ text: "Куплено на другом Apple ID", tone: "warn" });
-  });
-  it("an unknown Apple ID copy says so even when its version is known (Rust fills available_version from the copy)", () => {
-    const u = row(5, "com.example.u", { source: "saved", unknown_account: true, has_saved_copy: true, available_version: "3.2" });
-    expect(tileLine(u, undefined, false, true)).toMatchObject({ text: "доступно 3.2", note: "Неизвестный Apple ID" });
-    expect(tileLine({ ...u, installed_version: "3.1" }, undefined, false, true)).toMatchObject({ note: "Неизвестный Apple ID" });
-  });
-  it("a saved copy is mentioned next to the version line", () => {
-    const sber = cat(1, "Сбер", { has_saved_copy: true, available_version: "16.4" });
-    expect(tileLine(sber, { kind: "yes" }, false, true)).toEqual({ text: "доступно 16.4", tone: "plain", note: "Есть копия на компьютере" });
-    expect(tileLine({ ...sber, installed_version: "16.4", install_state: "installed" }, { kind: "yes" }, false, true)).toMatchObject({ text: "на iPhone 16.4", note: "Есть копия на компьютере" });
-    expect(tileLine(row(10, "Т", { available_version: "7.12" }), undefined, false, true).note).toBeUndefined();
-  });
-  it("fallbacks without versions", () => {
-    expect(tileLine(row(12, "c", { source: "saved", has_saved_copy: true }), undefined, false, true)).toEqual({ text: "Есть копия на компьютере", tone: "plain" });
-    expect(tileLine(row(10, "c", { removed_from_ru: true }), yes, false, true)).toEqual({ text: "нет в российском App Store", tone: "muted" });
-    expect(tileLine(row(12, "c", { source: "saved", unknown_account: true, has_saved_copy: true }), undefined, false, true)).toEqual({ text: "Неизвестный Apple ID", tone: "muted" });
-    expect(tileLine(row(10, "c"), yes, false, true)).toEqual({ text: "в ваших покупках", tone: "muted" });
+  it("too new for the phone iOS: still selectable", () => {
+    expect(canSelect(row(80, "Т-Банк", { min_ios: "17.0", available_version: "7.1" }), yes, true)).toBe(true);
   });
   it("phone rows need a confirmed purchase and the same Apple ID", () => {
     const p = row(60, "О", { source: "phone", owned: null });
@@ -429,23 +382,6 @@ describe("tileLine and canSelect", () => {
   });
 });
 
-describe("tileA11y", () => {
-  it("selectable tiles are toggles", () => {
-    expect(tileA11y("ВТБ", { text: "доступно 22.1", tone: "plain" }, true, true)).toEqual({ pressed: "true", disabled: false, label: null });
-    expect(tileA11y("ВТБ", { text: "доступно 22.1", tone: "plain" }, true, false)).toEqual({ pressed: "false", disabled: false, label: null });
-  });
-  it("blocked tiles stay focusable, say why and never show as pressed", () => {
-    expect(tileA11y("Чужое", { text: "Куплено на другом Apple ID", tone: "warn" }, false, true)).toEqual({
-      pressed: "false",
-      disabled: true,
-      label: "Чужое, не выбрать: Куплено на другом Apple ID",
-    });
-  });
-  it("a retry tile is a plain button, not a toggle", () => {
-    expect(tileA11y("Маруся", { text: "Не удалось проверить · нажмите, чтобы повторить", tone: "retry" }, false, false)).toEqual({ pressed: null, disabled: false, label: null });
-  });
-});
-
 describe("rovingIndex", () => {
   it("arrows move through the chips and wrap, Home and End jump, other keys do nothing", () => {
     expect(rovingIndex("ArrowRight", 0, 7)).toBe(1);
@@ -454,6 +390,9 @@ describe("rovingIndex", () => {
     expect(rovingIndex("Home", 4, 7)).toBe(0);
     expect(rovingIndex("End", 1, 7)).toBe(6);
     expect(rovingIndex("Enter", 1, 7)).toBeNull();
+    // разделы в боковой панели — столбиком: вниз и вверх
+    expect(rovingIndex("ArrowDown", 6, 7)).toBe(0);
+    expect(rovingIndex("ArrowUp", 0, 7)).toBe(6);
   });
 });
 
@@ -525,16 +464,6 @@ describe("unknown Apple ID copies", () => {
 
 describe("phone as a source", () => {
   const ph = (udid: string, name: string, target = false): PhoneDto => ({ udid, name, ios_version: "17", device_class: "iPhone", product_type: "p", target });
-  it("the foreign purchaser shows only the mask from Rust", () => {
-    const r = row(60, "О", { source: "phone", other_account: true, purchaser_masked: "ma***@example.com" });
-    expect(tileLine(r, undefined, false, true)).toEqual({ text: "Куплено на другом Apple ID (ma***@example.com)", tone: "warn" });
-  });
-  it("a source app missing on the target shows the source version", () => {
-    const r = row(60, "О", { source: "phone", version: "5.2", installed_version: null, available_version: "5.3" });
-    expect(tileLine(r, { kind: "yes" }, false, true)).toEqual({ text: "с телефона 5.2", tone: "plain" });
-    expect(tileLine(r, { kind: "yes" }, false, false)).toEqual({ text: "с телефона 5.2", tone: "plain" });
-    expect(tileLine({ ...r, installed_version: "5.0" }, { kind: "yes" }, false, true).text).toBe("на iPhone 5.0 → ");
-  });
   it("picker only with more than one phone; target is marked", () => {
     expect(sourceChoices([ph("A", "Новый", true)], "A")).toBeNull();
     expect(sourceChoices([], null)).toBeNull();
@@ -618,8 +547,6 @@ describe("«В App Store»", () => {
     expect(canSelect(s, { kind: "checking" })).toBe(false);
     expect(canSelect(s, { kind: "no" })).toBe(false);
     expect(canSelect(s, { kind: "yes" })).toBe(true);
-    expect(tileLine(s, { kind: "no" }, false, false)).toEqual({ text: "Нет на вашем Apple ID", tone: "muted", note: NAMESAKE_NOTE });
-    expect(tileLine({ ...s, available_version: "2.0" }, { kind: "yes" }, false, false)).toEqual({ text: "доступно 2.0", tone: "plain" });
   });
 });
 
@@ -632,6 +559,10 @@ describe("barState", () => {
   });
   it("без телефона «Вернуть» неактивна с подсказкой, «Только скачать» — активна", () => {
     expect(barState(2, false)).toEqual({ go: { text: "Вернуть 2", disabled: true }, only: { text: "Только скачать 2", disabled: false }, hint: NO_PHONE_HINT });
+  });
+  it("ставим на iPhone: «Вернуть N на iPhone»", () => {
+    expect(barState(3, true, true).go.text).toBe("Вернуть 3 на iPhone");
+    expect(barState(0, true, true).go.text).toBe("Вернуть");
   });
 });
 
