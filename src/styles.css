@@ -682,7 +682,7 @@ label.app {
 }
 .searchbox svg {
   position: absolute;
-  left: 13px;
+  left: 12px;
   top: 50%;
   transform: translateY(-50%);
   pointer-events: none;
@@ -692,9 +692,6 @@ label.app {
   height: 42px;
   padding: 0 12px 0 38px;
   border-radius: 10px;
-}
-.searchbox svg {
-  left: 12px;
 }
 .hintrow {
   display: flex;
@@ -726,14 +723,14 @@ label.app {
   margin-right: 0;
   padding-right: 28px;
 }
-/* таблица уже 640 px — листается вбок; заголовок колонок закреплён */
+/* таблица уже 560 px — листается вбок; заголовок колонок закреплён */
 .tbl {
-  min-width: 640px;
+  min-width: 560px;
 }
 .thead,
 .tile {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 210px 150px 80px;
+  grid-template-columns: 28px minmax(0, 1fr) 150px 100px 64px;
   gap: 12px;
   align-items: center;
   padding: 7px 10px;
@@ -813,9 +810,9 @@ label.app {
 .tile:hover:not([aria-disabled="true"]) {
   background: #f4f7f6;
 }
-/* строка в карточке справа */
+/* строка в карточке справа: светлее --soft, чтобы --muted читался (≥ 4.5:1) */
 .tile.cur {
-  background: var(--soft);
+  background: #f2f6f5;
 }
 .tile[aria-disabled="true"] {
   cursor: default;
@@ -891,8 +888,11 @@ label.app {
   margin-left: 0;
   flex: none;
 }
+/* длинная плашка переносится внутри своей ячейки */
 .pill {
   color: var(--muted);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .pill.plain {
   color: var(--ink);
@@ -903,7 +903,6 @@ label.app {
   font-weight: 600;
   border-radius: 99px;
   padding: 2px 9px;
-  white-space: nowrap;
 }
 .pill.warn {
   color: var(--bad);
@@ -922,8 +921,9 @@ label.app {
   white-space: nowrap;
   overflow: hidden;
 }
+/* мелкий зелёный текст: темнее --ok, иначе контраст < 4.5:1 */
 .c-phone .up {
-  color: var(--ok);
+  color: #1f7a47;
   font-weight: 600;
 }
 .c-size {
@@ -1385,16 +1385,16 @@ label.app {
   margin-top: 0;
 }
 
-/* Карточка выбранной строки справа: только в широком окне */
+/* Карточка выбранной строки справа: только в широком окне (от 1180 px) */
 .inspector {
   display: none;
 }
-@media (min-width: 1100px) {
+@media (min-width: 1180px) {
   .inspector {
     display: flex;
     flex-direction: column;
     gap: 16px;
-    flex: 0 0 250px;
+    flex: 0 0 260px;
     min-width: 0;
     overflow-y: auto;
     border-left: 1px solid var(--line);
@@ -1404,6 +1404,9 @@ label.app {
   .tiles-list {
     padding-right: 12px;
   }
+}
+.inspector:focus {
+  outline: none;
 }
 .insp-empty {
   margin: 0;
@@ -1518,7 +1521,12 @@ label.app {
   color: #9fb8b4;
   padding: 8px 8px 3px;
 }
-.sec-title:first-child {
+.sec-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sec-group:first-child .sec-title {
   padding-top: 0;
 }
 .sec-btn {

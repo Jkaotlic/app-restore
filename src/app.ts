@@ -253,7 +253,11 @@ export function go(screen: Screen): void {
 /** Перерисовать только левую колонку (появился аккаунт или новая версия). */
 export function refreshSidebar(): void {
   const old = document.querySelector(".steps");
+  // содержимое экрана переезжает в новую колонку: перенос снимает фокус — вернуть его туда же
+  const active = document.activeElement;
+  const keep = active instanceof HTMLElement && sidebarExtra?.contains(active) ? active : null;
   old?.replaceWith(sidebar(state.screen));
+  keep?.focus();
 }
 
 /** Ошибка из Rust или что-то неожиданное → UiError с понятным текстом. */

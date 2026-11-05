@@ -176,7 +176,7 @@ register("choose", () => {
 
   // в живой области только короткий итог: весь список на каждую букву диктор не читает
   const list = h("div", { class: "scroll tiles-list" });
-  const inspector = h("aside", { class: "inspector", attrs: { "aria-label": "О приложении" } });
+  const inspector = h("aside", { class: "inspector", attrs: { "aria-label": "О приложении", tabindex: "-1" } });
   // фокус на строке (Tab, стрелки, возврат фокуса) — она и в карточке
   list.addEventListener("focusin", (e) => {
     const t = (e.target as HTMLElement | null)?.closest?.<HTMLElement>(".tile");
@@ -447,8 +447,9 @@ register("choose", () => {
   const cellOf = (r: RowDto) => ownedCell(r, owned.get(r.track_id), toIphone());
   const subOf = (r: RowDto) => subLine(r, owned.get(r.track_id), toIphone(), { phoneIos: phoneIos(), chosen: state.versions.get(r.track_id) ?? null });
 
-  /** Иконки App Store по trackId (`app_icons`): `null` — у Apple нет, остаётся буква. На время экрана. */
-  const icons = new Map<number, string | null>();
+  /** Иконки App Store по trackId (`app_icons`), только найденные: промахи не запоминаем — Rust сам
+   * помнит ответы Apple и на известные пустые отвечает без сети. `iconsAsked` — номера в идущем вызове. */
+  const icons = new Map<number, string>();
   const iconsAsked = new Set<number>();
   /** Карточка справа: последняя строка, по которой кликнули или на которую перешёл фокус. */
   let curId: number | null = null;
@@ -666,7 +667,7 @@ register("choose", () => {
     }
     for (const [id, link] of versionLinks) {
       const r = byId.get(id);
-      link.hidden = !r || !selected.has(id) || !canPickVersion(r, owned.get(id));
+      link.hidden = !r || !versionOffered(r);
     }
     for (const [id, link] of findLinks) {
       const r = byId.get(id);
@@ -689,16 +690,26 @@ register("choose", () => {
     renderInspector();
   }
 
-  /** «Другая версия…» видна там же, где ссылка под строкой: выбранные строки, что скачиваются по номеру. */
-  const versionOffered = (r: RowDto) => r.track_id > 0 && !r.other_account && r.source !== "saved" && selected.has(r.track_id) && canPickVersion(r, owned.get(r.track_id));
+  /** У строки бывает «Другая версия…»: скачивается по номеру со своего Apple ID. */
+  const versionRow = (r: RowDto) => r.track_id > 0 && !r.other_account && r.source !== "saved";
+  /** «Другая версия…» видна (под строкой и в карточке): такая строка выбрана и версию можно выбрать. */
+  const versionOffered = (r: RowDto) => versionRow(r) && selected.has(r.track_id) && canPickVersion(r, owned.get(r.track_id));
 
-  /** Карточка справа (видна от 1100 px): иконка, название, подстрока, факты, «Другая версия…». */
+  /** Карточка справа (видна от 1180 px): иконка, название, подстрока, факты, «Другая версия…». */
   function renderInspector() {
     // строка, скрытая фильтром, в карточке не показывается: панель версий открылась бы невидимой
     const r = curId !== null && tiles.has(curId) ? rows.find((x) => x.track_id === curId) : undefined;
     const hadFocus = inspector.contains(document.activeElement);
+    // кнопки в карточке больше нет — фокус на строку, иначе на саму карточку (не на body)
+    const keepFocus = (btn: HTMLElement | null) => {
+      if (!hadFocus) return;
+      if (btn) btn.focus();
+      else if (curId !== null && tiles.has(curId)) tiles.get(curId)!.focus();
+      else inspector.focus();
+    };
     if (!r) {
       inspector.replaceChildren(h("p", { class: "insp-empty", text: "Нажмите на приложение, чтобы увидеть подробности" }));
+      keepFocus(null);
       return;
     }
     const own = cellOf(r);
@@ -724,33 +735,35 @@ register("choose", () => {
     if (ver) parts.push(ver);
     inspector.replaceChildren(...parts);
     // карточка перерисовывается на каждое событие: фокус с её кнопки не теряем
-    if (hadFocus) ver?.focus();
+    keepFocus(ver);
   }
 
-  /** Иконки для строк на экране, которых ещё не спрашивали: один вызов (до 1000 номеров). Сбой — молча, буквы. */
+  /** Иконки для строк на экране без иконки, которых сейчас не спрашивают: по 1000 номеров за вызов.
+   * Сбой — молча, буквы; следующая отрисовка спросит снова. */
   async function fetchIcons() {
-    const ids = [...tiles.keys()].filter((id) => id > 0 && !icons.has(id) && !iconsAsked.has(id)).slice(0, 1000);
-    if (!ids.length) return;
-    for (const id of ids) iconsAsked.add(id);
-    let got: Record<string, string> | null = null;
-    try {
-      got = await call<Record<string, string>>("app_icons", { trackIds: ids });
-    } catch {
-      // не спросили — спросим при следующей отрисовке
+    const all = [...tiles.keys()].filter((id) => id > 0 && !icons.has(id) && !iconsAsked.has(id));
+    for (let i = 0; i < all.length; i += 1000) {
+      const ids = all.slice(i, i + 1000);
+      for (const id of ids) iconsAsked.add(id);
+      let got: Record<string, string> = {};
+      try {
+        got = await call<Record<string, string>>("app_icons", { trackIds: ids });
+      } catch {
+        // молча: остаются буквы
+      }
+      for (const id of ids) {
+        iconsAsked.delete(id);
+        const url = got[String(id)];
+        if (url) icons.set(id, url);
+      }
+      if (left) return;
+      for (const id of ids) {
+        const url = icons.get(id);
+        const ico = url ? tiles.get(id)?.querySelector(".ico") : null;
+        if (url && ico && !ico.querySelector("img")) addIconImg(ico, url);
+      }
+      if (curId !== null && ids.includes(curId)) renderInspector();
     }
-    for (const id of ids) {
-      iconsAsked.delete(id);
-      if (got) icons.set(id, got[String(id)] ?? null);
-    }
-    if (!got || left) return;
-    for (const id of ids) {
-      const url = icons.get(id);
-      const ico = url ? tiles.get(id)?.querySelector(".ico") : null;
-      if (url && ico && !ico.querySelector("img")) addIconImg(ico, url);
-    }
-    if (curId !== null && ids.includes(curId)) renderInspector();
-    // строк больше 1000 — остаток следующим вызовом
-    void fetchIcons();
   }
 
   function renderChips() {
@@ -759,12 +772,14 @@ register("choose", () => {
     if (!keys.some((c) => c.key === chip)) chip = "all";
     const focused = (document.activeElement as HTMLElement | null)?.dataset?.chip;
     const parts: HTMLElement[] = [];
+    let group = h("div");
     let title = "";
     for (const c of keys) {
-      // заголовок над разделами одной темы: «Разделы», «Apple ID», «iPhone»
+      // разделы одной темы — группа с названием: «Разделы», «Apple ID», «iPhone»
       if (SECTION_TITLE[c.key] !== title) {
         title = SECTION_TITLE[c.key];
-        parts.push(h("div", { class: "sec-title", text: title, attrs: { "aria-hidden": "true" } }));
+        group = h("div", { class: "sec-group", attrs: { role: "group", "aria-label": title } }, h("div", { class: "sec-title", text: title, attrs: { "aria-hidden": "true" } }));
+        parts.push(group);
       }
       const b = h(
         "button",
@@ -785,7 +800,7 @@ register("choose", () => {
       b.dataset.chip = c.key;
       // в Tab один раздел (выбранный), по остальным — стрелками
       b.tabIndex = c.key === chip ? 0 : -1;
-      parts.push(b);
+      group.append(b);
     }
     chips.replaceChildren(...parts);
     if (focused) chips.querySelector<HTMLElement>(`[data-chip="${focused}"]`)?.focus();
@@ -857,7 +872,7 @@ register("choose", () => {
 
   /** «Другая версия…» под строкой (у строки-кнопки — своя обёртка: кнопку в кнопку нельзя). */
   function withVersionLink(r: RowDto, cell: HTMLElement): HTMLElement {
-    if (r.track_id <= 0 || r.other_account || r.source === "saved") return cell;
+    if (!versionRow(r)) return cell;
     const link = h("button", {
       class: "link",
       text: "Другая версия…",
