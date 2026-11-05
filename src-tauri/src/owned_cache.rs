@@ -22,14 +22,26 @@ pub struct Entry {
     /// Apple больше не отдаёт приложение (`AppGone`): `owned = false`, плитка называет причину.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub gone: bool,
+    /// Чей ответ «gone» (`GONE_GEN`); у прочих ответов 0. В старых файлах поля нет.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub gone_gen: u32,
+}
+
+/// Поколение ответов «gone». 1 — ipatool с исправлением для убранных из магазина приложений
+/// (`scripts/ipatool-patches/0001`): прежний ipatool называл их пропавшими, хотя Apple их отдаёт.
+/// Ответ «gone» прежнего поколения устарел сразу. Поднять, когда ipatool снова так поменяется.
+pub const GONE_GEN: u32 = 1;
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 impl Entry {
     /// Ответ проверки прав для кэша; сбой (`None`) не кэшируется.
     pub fn from_result(r: &Result<(bool, Option<String>), crate::errors::AppError>, now: u64) -> Option<Entry> {
         match r {
-            Ok((owned, version)) => Some(Entry { owned: *owned, checked_at: now, version: version.clone(), gone: false }),
-            Err(crate::errors::AppError::AppGone) => Some(Entry { owned: false, checked_at: now, version: None, gone: true }),
+            Ok((owned, version)) => Some(Entry { owned: *owned, checked_at: now, version: version.clone(), gone: false, gone_gen: 0 }),
+            Err(crate::errors::AppError::AppGone) => Some(Entry { owned: false, checked_at: now, version: None, gone: true, gone_gen: GONE_GEN }),
             Err(_) => None,
         }
     }
@@ -49,8 +61,9 @@ pub fn key(email: &str) -> String {
 }
 
 /// Ответ ещё свежий: младше `TTL_SECS`. Время «из будущего» (часы перевели) — тоже свежий.
+/// «gone» прежнего поколения (`GONE_GEN`) не свежий никогда.
 pub fn fresh(e: &Entry, now: u64) -> bool {
-    now.saturating_sub(e.checked_at) < TTL_SECS
+    now.saturating_sub(e.checked_at) < TTL_SECS && !(e.gone && e.gone_gen < GONE_GEN)
 }
 
 /// Содержимое файла; битое или чужого вида — пусто.
@@ -159,7 +172,7 @@ pub fn stale_ids(entries: &HashMap<i64, Entry>, on_screen: &HashSet<i64>, now: u
 pub fn from_purchases(purchases: &[crate::ipatool::output::OwnedApp], now: u64) -> Vec<(i64, Entry)> {
     purchases
         .iter()
-        .map(|a| (a.id, Entry { owned: true, checked_at: now, version: Some(a.version.clone()).filter(|v| !v.is_empty()), gone: false }))
+        .map(|a| (a.id, Entry { owned: true, checked_at: now, version: Some(a.version.clone()).filter(|v| !v.is_empty()), gone: false, gone_gen: 0 }))
         .collect()
 }
 
@@ -229,7 +242,7 @@ mod tests {
     use super::*;
 
     fn e(owned: bool, at: u64) -> Entry {
-        Entry { owned, checked_at: at, version: None, gone: false }
+        Entry { owned, checked_at: at, version: None, gone: false, gone_gen: 0 }
     }
 
     const NOW: u64 = 1_000_000_000;
@@ -334,20 +347,25 @@ mod tests {
     fn purchases_are_owned() {
         let a = |id, v: &str| crate::ipatool::output::OwnedApp { id, bundle_id: "com.example.a".into(), name: "A".into(), version: v.into(), platforms: vec![] };
         let got = from_purchases(&[a(1, "2.0"), a(2, "")], NOW);
-        assert_eq!(got, vec![(1, Entry { owned: true, checked_at: NOW, version: Some("2.0".into()), gone: false }), (2, e(true, NOW))]);
+        assert_eq!(got, vec![(1, Entry { owned: true, checked_at: NOW, version: Some("2.0".into()), gone: false, gone_gen: 0 }), (2, e(true, NOW))]);
     }
 
     #[test]
     fn answers_to_entries_and_back() {
         use crate::errors::AppError;
         let ok = Entry::from_result(&Ok((true, Some("1.0".into()))), NOW).unwrap();
-        assert_eq!(ok, Entry { owned: true, checked_at: NOW, version: Some("1.0".into()), gone: false });
+        assert_eq!(ok, Entry { owned: true, checked_at: NOW, version: Some("1.0".into()), gone: false, gone_gen: 0 });
         assert_eq!(ok.as_result(), Ok((true, Some("1.0".into()))));
         // пропавшее у Apple кэшируется как «нет прав» с тем же TTL, но помнит причину
         let gone = Entry::from_result(&Err(AppError::AppGone), NOW).unwrap();
-        assert_eq!(gone, Entry { owned: false, checked_at: NOW, version: None, gone: true });
+        assert_eq!(gone, Entry { owned: false, checked_at: NOW, version: None, gone: true, gone_gen: GONE_GEN });
         assert_eq!(gone.as_result(), Err(AppError::AppGone));
         assert!(fresh(&gone, NOW + TTL_SECS - 1) && !fresh(&gone, NOW + TTL_SECS));
+        // «gone» от ipatool без исправления для убранных приложений (до 0.3.3) — перепроверить сразу
+        let old = parse(r#"{"a@example.com":{"1":{"owned":false,"checked_at":5,"gone":true}}}"#);
+        assert!(!fresh(&old["a@example.com"][&1], 6), "прежний «gone» устарел");
+        assert!(serde_json::to_string(&gone).unwrap().contains(&format!("\"gone_gen\":{GONE_GEN}")));
+        assert_eq!(parse(&format!(r#"{{"a":{{"1":{}}}}}"#, serde_json::to_string(&gone).unwrap()))["a"][&1], gone);
         // сбой не кэшируется
         assert_eq!(Entry::from_result(&Err(AppError::Timeout), NOW), None);
         // старый файл без поля `gone` читается; обычный ответ пишется без него

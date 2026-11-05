@@ -1304,7 +1304,7 @@ pub async fn add_by_link(state: State<'_, AppState>, link: String) -> Result<Row
     state.owned.lock().unwrap().insert(id, true);
     if let Some(e) = state.current_email() {
         let now = owned_cache::now();
-        state.owned_cache.put(&e, [(id, Entry { owned: true, checked_at: now, version: latest.clone(), gone: false })], now);
+        state.owned_cache.put(&e, [(id, Entry { owned: true, checked_at: now, version: latest.clone(), gone: false, gone_gen: 0 })], now);
     }
     if let Some(v) = latest {
         state.latest.lock().unwrap().insert(id, v);
