@@ -67,6 +67,11 @@ pub struct Session {
     limits: Limits,
     /// Файл cookies ipatool: испорченный (ipatool падает на старте) откладываем и повторяем вызов.
     cookies: Option<PathBuf>,
+    /// Вход мёртв: токен истёк, и тихий перевход ipatool по сохранённому паролю не вышел (нужен код
+    /// 2FA или пароль сменили). Каждый такой перевход — вход в Apple ID, и Apple шлёт «Попытка
+    /// входа» на все устройства аккаунта, поэтому дальше запросы к Apple не запускаются
+    /// (`NotLoggedIn`) до входа человеком или смены записи входа (`exclusive*`).
+    login_dead: AtomicBool,
 }
 
 /// Какой срок у запуска (`Limits`).
@@ -79,7 +84,7 @@ enum Kind {
 
 impl Session {
     pub fn new(runner: Arc<dyn IpaRunner>, extra_args: Vec<String>) -> Self {
-        Self { runner, extra_args, delays: APPLE_DELAYS.to_vec(), one_at_a_time: Arc::default(), limits: LIMITS, cookies: None }
+        Self { runner, extra_args, delays: APPLE_DELAYS.to_vec(), one_at_a_time: Arc::default(), limits: LIMITS, cookies: None, login_dead: AtomicBool::new(false) }
     }
 
     pub fn with_cookies(mut self, path: PathBuf) -> Self {
@@ -140,14 +145,24 @@ impl Session {
         args.extend(["--non-interactive", "--format", "json"].map(String::from));
         args.extend(self.extra_args.iter().cloned());
         let args = Args(args);
+        // `auth …` (вход человека, проверка записи, выход): тихого перевхода в них нет — не держим
+        let store = args.0[0] != "auth";
+        let login = args.0.len() >= 2 && args.0[0] == "auth" && args.0[1] == "login";
+        if store && self.login_dead.load(Ordering::SeqCst) {
+            return Err(AppError::NotLoggedIn);
+        }
         let l = self.limits;
         let (wait, run) = match kind {
             Kind::Quick => (l.quick_wait, l.quick_run),
             Kind::Login => (l.login_wait, l.login_run),
             Kind::Download => (l.quick_wait.max(l.download_run), l.download_run),
         };
+        // Решение о мёртвом входе — под замком: смена записи входа (`exclusive*`) его не перебьёт.
+        let _turn = self.turn(wait).await?;
+        if store && self.login_dead.load(Ordering::SeqCst) {
+            return Err(AppError::NotLoggedIn);
+        }
         let res = {
-            let _turn = self.turn(wait).await?;
             // флаг поднят только на время этого запуска: пауза повтора и очередь — не простой
             struct Running<'a>(Option<&'a AtomicBool>);
             impl Drop for Running<'_> {
@@ -180,7 +195,18 @@ impl Session {
         if res.stdout.trim().is_empty() && !res.stderr.trim().is_empty() {
             return Err(AppError::Unknown { detail: res.stderr.trim().chars().take(300).collect() });
         }
-        parse_output(&res.stdout, res.exit_code)
+        match parse_output(&res.stdout, res.exit_code) {
+            Err(AppError::AuthCodeRequired | AppError::WrongCredentials) if store => {
+                self.login_dead.store(true, Ordering::SeqCst);
+                crate::log::write("ipatool", &format!("{}: login expired, silent re-login refused; Apple calls stopped until sign-in", args.0[0]));
+                Err(AppError::NotLoggedIn)
+            }
+            r @ Ok(IpaOutcome::LoggedIn { .. }) if login => {
+                self.login_dead.store(false, Ordering::SeqCst);
+                r
+            }
+            r => r,
+        }
     }
 
     /// `f` в отдельном потоке, пока ни один запуск ipatool не идёт и не начнётся: для смены
@@ -219,6 +245,8 @@ impl Session {
         on_slow: &(dyn Fn() + Send + Sync),
     ) -> Result<T, AppError> {
         let turn = self.turn(self.limits.keychain_wait).await?;
+        // запись входа меняется (другой Apple ID, откат, «забыть») — прежний вердикт не про неё
+        self.login_dead.store(false, Ordering::SeqCst);
         let cancel = Arc::new(AtomicBool::new(false));
         let c = cancel.clone();
         let mut job = tokio::task::spawn_blocking(move || f(&c));
@@ -900,5 +928,82 @@ mod tests {
         let r = Arc::new(FakeRunner::new(vec![busy.clone(), busy, fx("auth-info")]));
         assert!(session(&r, &[]).info().await.unwrap().is_some());
         assert_eq!(r.calls().len(), 3);
+    }
+
+    /// Ответ ipatool, когда токен истёк и его тихий перевход по сохранённому паролю упёрся в 2FA.
+    /// Каждый такой запуск — вход в Apple ID: Apple шлёт «Попытка входа» на все устройства.
+    fn relogin_needs_code() -> RunResult {
+        RunResult { stdout: "{\"level\":\"error\",\"error\":\"auth code is required\",\"success\":false}\n".into(), exit_code: 1, stderr: String::new() }
+    }
+    fn relogin_wrong_password() -> RunResult {
+        RunResult {
+            stdout: "{\"level\":\"error\",\"error\":\"failed to login: invalid credentials\",\"success\":false}\n".into(),
+            exit_code: 1,
+            stderr: String::new(),
+        }
+    }
+
+    /// Проверка прав по каталогу: тихий перевход не вышел — дальше ipatool к Apple не ходит,
+    /// иначе каждое следующее приложение — ещё одна «Попытка входа» на телефонах.
+    #[tokio::test]
+    async fn failed_silent_relogin_stops_further_apple_calls() {
+        let r = Arc::new(FakeRunner::new(vec![relogin_needs_code()]));
+        let s = session(&r, &[]);
+        assert_eq!(s.latest_version(1).await, Err(AppError::NotLoggedIn), "интерфейс просит войти снова");
+        assert_eq!(s.latest_version(2).await, Err(AppError::NotLoggedIn));
+        assert_eq!(s.versions(3).await, Err(AppError::NotLoggedIn));
+        assert_eq!(s.download(4, Path::new("/tmp/out")).await, Err(AppError::NotLoggedIn));
+        assert_eq!(s.all_purchases(&|_, _| {}, &|| true).await, Err(AppError::NotLoggedIn));
+        assert_eq!(s.check_token().await, Err(AppError::NotLoggedIn));
+        assert_eq!(r.calls().len(), 1, "вход в Apple ID был один");
+    }
+
+    #[tokio::test]
+    async fn wrong_saved_password_stops_further_apple_calls() {
+        let r = Arc::new(FakeRunner::new(vec![relogin_wrong_password()]));
+        let s = session(&r, &[]);
+        assert_eq!(s.download(4, Path::new("/tmp/out")).await, Err(AppError::NotLoggedIn));
+        assert_eq!(s.download(5, Path::new("/tmp/out")).await, Err(AppError::NotLoggedIn));
+        assert_eq!(r.calls().len(), 1, "неверный пароль не перебирается приложение за приложением");
+    }
+
+    /// Локальные шаги без Apple (`auth info`, выход) не держатся.
+    #[tokio::test]
+    async fn dead_login_still_allows_info_and_logout() {
+        let r = Arc::new(FakeRunner::new(vec![relogin_needs_code(), fx("auth-info"), fx("auth-revoke")]));
+        let s = session(&r, &[]);
+        assert_eq!(s.versions(1).await, Err(AppError::NotLoggedIn));
+        assert!(matches!(s.info().await, Ok(Some(_))));
+        assert_eq!(s.logout().await, Ok(()));
+        assert_eq!(r.calls().len(), 3);
+    }
+
+    /// Человек вошёл снова — запросы к Apple идут.
+    #[tokio::test]
+    async fn successful_login_revives_session() {
+        let r = Arc::new(FakeRunner::new(vec![relogin_needs_code(), fx("login-ok"), fx("list-versions-owned")]));
+        let s = session(&r, &[]);
+        assert_eq!(s.versions(1).await, Err(AppError::NotLoggedIn));
+        s.login("user@example.com", "pw", Some("123456".into())).await.unwrap();
+        assert!(s.versions(1).await.is_ok());
+        assert_eq!(r.calls().len(), 3);
+    }
+
+    /// Вход без кода, который Apple попросил, сессию не оживляет и сам ничего не держит.
+    #[tokio::test]
+    async fn login_asking_for_code_keeps_its_own_error() {
+        let r = Arc::new(FakeRunner::new(vec![fx("login-no-code")]));
+        assert_eq!(session(&r, &[]).login("user@example.com", "pw", None).await, Err(AppError::AuthCodeRequired));
+    }
+
+    /// Смена записи входа (другой Apple ID из снимка) — новый вход, запросы снова идут.
+    #[tokio::test]
+    async fn keychain_swap_revives_session() {
+        let r = Arc::new(FakeRunner::new(vec![relogin_needs_code(), fx("list-versions-owned")]));
+        let s = session(&r, &[]);
+        assert_eq!(s.versions(1).await, Err(AppError::NotLoggedIn));
+        s.exclusive(|| ()).await.unwrap();
+        assert!(s.versions(1).await.is_ok());
+        assert_eq!(r.calls().len(), 2);
     }
 }
