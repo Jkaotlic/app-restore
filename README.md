@@ -45,11 +45,11 @@
 
 ## Сборка из исходников
 
-Понадобятся Rust 1.88+, Node 20+ и Xcode Command Line Tools (на macOS).
+Понадобятся Rust 1.88+, Node 20+, Go 1.21+ (нужная версия скачается сама) и Xcode Command Line Tools (на macOS).
 
 ```bash
 npm ci
-scripts/fetch-ipatool.sh   # закреплённая версия ipatool, проверка sha256
+scripts/fetch-ipatool.sh   # собирает ipatool: закреплённый коммит + исправления из scripts/ipatool-patches
 npm run tauri build        # .dmg в src-tauri/target/release/bundle
 ```
 
@@ -64,7 +64,7 @@ python3 -m unittest scripts/test_catalog_check.py
 ## Как устроено
 
 - **Tauri 2.** Логика на Rust (`src-tauri/src`), интерфейс на TypeScript без фреймворков (`src`).
-- **[ipatool](https://github.com/majd/ipatool) (MIT)** — вложенный бинарник, через него идёт общение с App Store. Протокол Apple программа сама не реализует. Когда Apple что-то меняет, достаточно обновить ipatool.
+- **[ipatool](https://github.com/majd/ipatool) (MIT)** — вложенный бинарник, через него идёт общение с App Store. Протокол Apple программа сама не реализует. Собирается из закреплённого коммита с исправлениями из `scripts/ipatool-patches` (их ещё нет в выпуске ipatool). Когда Apple что-то меняет, достаточно обновить ipatool и пересмотреть эти исправления.
 - **[idevice](https://github.com/jkcoxson/idevice).** С его помощью программа устанавливает на iPhone через usbmux (AFC и installation_proxy) и читает список установленного.
 - **Каталог** (`catalog/`). Список приложений с id App Store. Программа подтягивает свежую версию при запуске, а еженедельный GitHub Actions проверяет записи, ищет новые выпуски под другими именами в новостях и у тех же разработчиков и присылает pull request или issue с кандидатами. Формат описан в [`catalog/schema.md`](catalog/schema.md).
 

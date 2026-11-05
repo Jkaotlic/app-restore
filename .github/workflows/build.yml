@@ -27,10 +27,16 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # any Go starts the build: GOTOOLCHAIN in fetch-ipatool.sh pins the exact one
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.5"
+          cache: false
+
       - name: Dependencies
         run: npm ci
 
-      - name: ipatool (pinned, sha256-checked)
+      - name: ipatool (pinned commit + patches, built from source)
         run: scripts/fetch-ipatool.sh
 
       - name: Tests
@@ -73,7 +79,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --draft --prerelease --title "$TAG" --notes "Сборка $TAG. Описание добавляется перед публикацией."
+            || gh release create "$TAG" --draft --title "$TAG" --notes "Сборка $TAG. Описание добавляется перед публикацией."
           gh release upload "$TAG" "${{ steps.dmg.outputs.path }}" --clobber
 
   # Windows build is a compile/bundle check only until majd/ipatool#637 is fixed; never released
