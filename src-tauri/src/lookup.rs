@@ -133,7 +133,7 @@ pub async fn app_name(fetch: &dyn Fetch, track_id: i64) -> Option<(String, Strin
 
 const SEARCH_URL: &str = "https://itunes.apple.com/search";
 /// Сколько результатов Search API просим за раз.
-pub const SEARCH_LIMIT: usize = 25;
+pub const SEARCH_LIMIT: usize = 50;
 /// Короче — запроса нет: группы «В App Store» тоже.
 pub const SEARCH_MIN: usize = 3;
 
@@ -376,7 +376,7 @@ mod tests {
     fn search_url_encodes_term() {
         assert_eq!(
             search_url("https://search.example.com/search", "Сбер & Ко"),
-            "https://search.example.com/search?term=%D0%A1%D0%B1%D0%B5%D1%80%20%26%20%D0%9A%D0%BE&country=ru&entity=software&limit=25"
+            "https://search.example.com/search?term=%D0%A1%D0%B1%D0%B5%D1%80%20%26%20%D0%9A%D0%BE&country=ru&entity=software&limit=50"
         );
     }
 
@@ -387,7 +387,7 @@ mod tests {
         assert!(f.urls.lock().unwrap().is_empty());
         let got = search(&f, " пример ").await.unwrap();
         assert_eq!(got.len(), 4);
-        assert_eq!(f.urls.lock().unwrap().as_slice(), [format!("{SEARCH_URL}?term=%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%80&country=ru&entity=software&limit=25")]);
+        assert_eq!(f.urls.lock().unwrap().as_slice(), [format!("{SEARCH_URL}?term=%D0%BF%D1%80%D0%B8%D0%BC%D0%B5%D1%80&country=ru&entity=software&limit=50")]);
         let f = FakeFetch { body: Err(AppError::AppleUnavailable { status: None }), urls: Mutex::new(vec![]) };
         assert_eq!(search(&f, "пример").await, Err(AppError::AppleUnavailable { status: None }));
     }

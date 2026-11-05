@@ -141,6 +141,22 @@ describe("matchesRow", () => {
     expect(matchesRow(sbol, "втб")).toBe(false);
     expect(matchesRow(sbol, "   ")).toBe(true);
   });
+
+  // то же правило, что `search_matches` в Rust (спека 2026-11-05-search-by-words)
+  it("matches each word separately, hyphen as space, and in transliteration", () => {
+    expect(matchesQuery("СберБанк Онлайн", "сбер онлайн")).toBe(true);
+    expect(matchesQuery("Тинькофф (Т-Банк)", "т банк")).toBe(true);
+    expect(matchesQuery("Тинькофф (Т-Банк)", "т-банк")).toBe(true);
+    expect(matchesQuery("Альфа-Банк Мобайл Плюс", "т банк")).toBe(false);
+    expect(matchesQuery("Тинькофф (Т-Банк)", "tinkoff")).toBe(true);
+    expect(matchesQuery("Telegram Messenger", "телеграм")).toBe(true);
+    expect(matchesQuery("Yandex Maps", "яндекс")).toBe(true);
+    expect(matchesQuery("СберБанк Онлайн", "банк")).toBe(true);
+    expect(matchesQuery("Telegram Messenger", "сбер")).toBe(false);
+    expect(matchesQuery("Госуслуги", "-")).toBe(true);
+    // буквы вне \p{L} (Other_Alphabetic) — буквы, как `is_alphanumeric` в Rust
+    expect(matchesQuery("Госуслуги", "ⓐⓑⓒ")).toBe(false);
+  });
 });
 
 describe("chips", () => {

@@ -529,15 +529,46 @@ pub fn link_row(track_id: i64, ctx: &RowCtx, looked_up: Option<(String, String)>
 }
 
 /// Как `fold` в rows.ts: без регистра, ё = е, пробелы схлопнуты.
-fn fold(s: &str) -> String {
-    s.to_lowercase().replace('ё', "е").split_whitespace().collect::<Vec<_>>().join(" ")
+/// Для поиска: нижний регистр, ё → е, всё, кроме букв и цифр, — пробел, пробелы схлопнуты.
+fn norm(s: &str) -> String {
+    let s: String = s.to_lowercase().replace('ё', "е").chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Search API нечёткий («сбер» → Госуслуги, Telegram…): оставляем только то, где запрос есть в
-/// названии или в имени продавца.
+/// Кириллица латиницей, x = ks: «телеграм» = «telegram», «яндекс» = «yandex».
+fn translit(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            'а' => "a", 'б' => "b", 'в' => "v", 'г' => "g", 'д' => "d", 'е' => "e", 'ж' => "zh",
+            'з' => "z", 'и' => "i", 'й' => "y", 'к' => "k", 'л' => "l", 'м' => "m", 'н' => "n",
+            'о' => "o", 'п' => "p", 'р' => "r", 'с' => "s", 'т' => "t", 'у' => "u", 'ф' => "f",
+            'х' => "h", 'ц' => "ts", 'ч' => "ch", 'ш' => "sh", 'щ' => "sch", 'ъ' | 'ь' => "",
+            'ы' => "y", 'э' => "e", 'ю' => "yu", 'я' => "ya", 'x' => "ks",
+            _ => return c.to_string(),
+        }
+        .to_string())
+        .collect()
+}
+
+/// Каждое слово запроса есть в строке: из 3+ символов — где угодно, короче — с начала слова.
+fn has_words(hay: &str, query: &str) -> bool {
+    query.split(' ').all(|w| if w.chars().count() >= 3 { hay.contains(w) } else { hay.split(' ').any(|h| h.starts_with(w)) })
+}
+
+/// Совпадение по словам: как есть или транслитом. Правило то же, что `matchesQuery` в
+/// `src/rows.ts` (спека 2026-11-05-search-by-words). Пустой запрос совпадает со всем.
+pub fn search_matches(hay: &str, query: &str) -> bool {
+    let (h, q) = (norm(hay), norm(query));
+    q.is_empty() || has_words(&h, &q) || has_words(&translit(&h), &translit(&q))
+}
+
+/// Search API нечёткий («сбер» → Госуслуги, Telegram…): оставляем только то, где слова запроса
+/// есть в названии и имени продавца. Запрос без букв и цифр не оставляет ничего.
 pub fn relevant(found: Vec<crate::lookup::StoreApp>, term: &str) -> Vec<crate::lookup::StoreApp> {
-    let t = fold(term);
-    found.into_iter().filter(|a| fold(&a.name).contains(&t) || fold(&a.seller).contains(&t)).collect()
+    if norm(term).is_empty() {
+        return vec![];
+    }
+    found.into_iter().filter(|a| search_matches(&format!("{} {}", a.name, a.seller), term)).collect()
 }
 
 /// Что уже есть на «Выборе» и в группу «В App Store» не идёт: каталог, копии, строки после
@@ -2421,6 +2452,35 @@ mod tests {
         let yo = crate::lookup::StoreApp { name: "Ёлка".into(), ..found[0].clone() };
         assert_eq!(relevant(vec![yo], "елк").len(), 1, "ё = е");
         assert!(relevant(found, "нет такого").is_empty());
+    }
+
+    #[test]
+    fn relevant_matches_each_word_and_translit() {
+        let app = |name: &str, seller: &str| crate::lookup::StoreApp {
+            track_id: 1,
+            name: name.into(),
+            bundle_id: String::new(),
+            version: String::new(),
+            size: None,
+            ipad_only: false,
+            seller: seller.into(),
+            min_os: None,
+        };
+        let hit = |name: &str, seller: &str, term: &str| !relevant(vec![app(name, seller)], term).is_empty();
+        // слова по отдельности, дефис — как пробел
+        assert!(hit("СберБанк Онлайн", "", "сбер онлайн"));
+        assert!(hit("Т-Банк: кэшбэк", "", "т банк"));
+        assert!(hit("Т-Банк: кэшбэк", "", "т-банк"));
+        // короткое слово — только начало слова: «т» не находит «Альфа-Банк»… с «т» внутри слов
+        assert!(!hit("Альфа-Банк Мобайл Плюс", "", "т банк"));
+        // транслит в обе стороны, x = кс
+        assert!(hit("Telegram Messenger", "Telegram FZ-LLC", "телеграм"));
+        assert!(hit("Тинькофф Инвестиции", "", "tinkoff"));
+        assert!(hit("Yandex Maps", "", "яндекс"));
+        // прежнее поведение
+        assert!(hit("СберБанк Онлайн", "", "банк"));
+        assert!(!hit("Telegram Messenger", "Telegram FZ-LLC", "сбер"));
+        assert!(!hit("Госуслуги", "Минцифры России", "сбер"));
     }
 
     #[test]

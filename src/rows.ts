@@ -15,14 +15,40 @@ function fold(s: string): string {
   return s.toLocaleLowerCase("ru").replace(/ё/g, "е").trim();
 }
 
+/** Для поиска: нижний регистр, ё → е, всё, кроме букв и цифр, — пробел, пробелы схлопнуты. */
+function norm(s: string): string {
+  return fold(s).replace(/[^\p{Alphabetic}\p{N}]+/gu, " ").trim();
+}
+
+const LATIN: Record<string, string> = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ж: "zh", з: "z", и: "i", й: "y", к: "k", л: "l", м: "m",
+  н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "h", ц: "ts", ч: "ch", ш: "sh",
+  щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya", x: "ks",
+};
+
+/** Кириллица латиницей, x = ks: «телеграм» = «telegram», «яндекс» = «yandex». */
+function translit(s: string): string {
+  return [...s].map((c) => LATIN[c] ?? c).join("");
+}
+
+/** Каждое слово запроса есть в строке: из 3+ символов — где угодно, короче — с начала слова. */
+function hasWords(hay: string, query: string): boolean {
+  const words = hay.split(" ");
+  return query.split(" ").every((w) => ([...w].length >= 3 ? hay.includes(w) : words.some((h) => h.startsWith(w))));
+}
+
+/** Совпадение по словам: как есть или транслитом. Правило то же, что `search_matches` в Rust
+ * (спека 2026-11-05-search-by-words). Пустой запрос совпадает со всем. */
 export function matchesQuery(name: string, query: string): boolean {
-  const q = fold(query);
-  return q === "" || fold(name).includes(q);
+  const q = norm(query);
+  if (q === "") return true;
+  const h = norm(name);
+  return hasWords(h, q) || hasWords(translit(h), translit(q));
 }
 
 /** Поиск по имени и по любому другому названию записи каталога. */
 export function matchesRow(r: RowDto, query: string): boolean {
-  return matchesQuery(r.name, query) || r.aliases.some((a) => fold(a).includes(fold(query)));
+  return matchesQuery(r.name, query) || r.aliases.some((a) => matchesQuery(a, query));
 }
 
 /** Короче — в App Store не ищем, группы «В App Store» нет. */
