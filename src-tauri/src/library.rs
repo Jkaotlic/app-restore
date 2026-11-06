@@ -400,11 +400,12 @@ fn read_small<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>, name: &str)
 fn info_from_zip<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>) -> Result<plist::Dictionary, String> {
     let name = zip
         .file_names()
+        .filter_map(|name| name.ok())
         .find(|n| {
             let parts: Vec<_> = n.split('/').collect();
             parts.len() == 3 && parts[0] == "Payload" && parts[1].ends_with(".app") && parts[2] == "Info.plist"
         })
-        .map(String::from)
+        .map(|name| name.into_owned())
         .ok_or("в ipa нет Info.plist")?;
     let buf = read_small(zip, &name)?;
     let v = Value::from_reader(Cursor::new(buf)).map_err(|e| e.to_string())?;
@@ -421,7 +422,7 @@ fn info_plist(ipa: &Path) -> Result<plist::Dictionary, String> {
 fn is_ipa_zip(path: &Path) -> bool {
     let Ok(f) = std::fs::File::open(path) else { return false };
     let Ok(zip) = zip::ZipArchive::new(f) else { return false };
-    zip.file_names().any(|n| {
+    zip.file_names().filter_map(|name| name.ok()).any(|n| {
         let mut it = n.split('/');
         it.next() == Some("Payload")
             && it.next().is_some_and(|a| a.len() > ".app".len() && a.ends_with(".app"))

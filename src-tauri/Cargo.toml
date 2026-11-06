@@ -1,6 +1,6 @@
 [package]
 name = "app-restore"
-version = "0.3.4"
+version = "0.3.5"
 description = "Restores removed iPhone apps from your own Apple ID purchases"
 authors = ["Jkaotlic"]
 repository = "https://github.com/Jkaotlic/app-restore"
@@ -30,7 +30,7 @@ tauri-plugin-shell = "2"
 async-trait = "0.1"
 tokio = { version = "1", features = ["time", "macros", "rt", "sync", "fs", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 plist = "1"
 fs2 = "0.4"
 dirs = "6"
