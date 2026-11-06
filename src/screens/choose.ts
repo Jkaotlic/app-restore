@@ -186,6 +186,17 @@ register("choose", () => {
     const t = (e.target as HTMLElement | null)?.closest?.<HTMLElement>(".tile");
     if (t?.dataset.id) setCurrent(Number(t.dataset.id));
   });
+  // стрелки вверх/вниз, Home/End — между строками таблицы (видимыми сейчас)
+  list.addEventListener("keydown", (e: KeyboardEvent) => {
+    const t = e.target as HTMLElement | null;
+    if (!t?.classList.contains("tile") || e.altKey || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    const all = [...list.querySelectorAll<HTMLElement>(".tile")];
+    const i = all.length ? rovingIndex(e.key, all.indexOf(t), all.length) : null;
+    if (i === null || e.key === "ArrowLeft" || e.key === "ArrowRight") return;
+    e.preventDefault();
+    all[i].focus();
+    all[i].scrollIntoView({ block: "nearest" });
+  });
   const found = h("span", { class: "found", attrs: { role: "status" } });
   // боковая панель: карточка телефона и разделы (бывшие чипсы)
   const phoneCard = h("div", { class: "side-phone" });
@@ -488,7 +499,8 @@ register("choose", () => {
       "button",
       {
         class: r.track_id === curId ? "tile cur" : "tile",
-        attrs: { type: "button", title: [r.name, own.text, sub.text, sub.note].filter(Boolean).join(" · ") },
+        // tabindex явно: WebKit без него пропускает кнопки по Tab (macOS «Навигация с клавиатуры» выключена по умолчанию)
+        attrs: { type: "button", tabindex: "0", title: [r.name, own.text, sub.text, sub.note].filter(Boolean).join(" · ") },
         on: {
           // `aria-disabled`, не `disabled`: строка в порядке Tab и называет причину; нажатие ничего не делает
           click: safe(async () => {

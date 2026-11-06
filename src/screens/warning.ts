@@ -39,7 +39,7 @@ register("warning", () => {
     { class: "body" },
     h("h2", { text: "Прежде чем начать" }),
     h("p", {
-      class: "warn",
+      class: "warn-note",
       text: "Программа работает с App Store не так, как официальное приложение Apple. Apple может временно заблокировать вход. Используйте Apple ID, к которому у вас есть доверенный телефон.",
     }),
     h("div", { class: "push" }, ok),

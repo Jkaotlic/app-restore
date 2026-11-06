@@ -557,8 +557,8 @@ label.app {
   margin-top: 14px;
 }
 
-/* Предупреждение */
-.warn {
+/* Предупреждение (экран «Прежде чем начать»); не `.warn`: это тон ячеек и подстрок «Выбора» */
+.warn-note {
   font-size: 16px;
   line-height: 1.55;
   max-width: 52ch;
@@ -722,6 +722,8 @@ label.app {
   margin-right: -28px;
 }
 .tiles-list {
+  /* строка под фокусом не прячется под закреплённой шапкой колонок */
+  scroll-padding-top: 44px;
   flex: 1;
   min-width: 0;
   overflow-x: auto;
