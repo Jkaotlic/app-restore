@@ -7,6 +7,7 @@ mod dropped;
 mod errors;
 mod ios_compat;
 mod history;
+mod history_store;
 mod ipatool;
 mod library;
 mod log;

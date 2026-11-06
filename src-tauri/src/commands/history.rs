@@ -8,8 +8,8 @@
 //! События (только главному окну): `history_progress` {found}, `history` {rows, found, error}.
 //! Окно ходит только на https *.apple.com; всплывающих окон не открывает (ссылка Apple — в нём же).
 use super::AppState;
-use super::logic::{RowCtx, RowDto, UiError};
-use crate::history::{Collected, Found, PageBatch, Problem, allowed_navigation, allowed_url, fresh, timed_out};
+use super::logic::{RowDto, UiError, history_row};
+use crate::history::{Collected, PageBatch, Problem, allowed_navigation, allowed_url, fresh, timed_out};
 use serde::Serialize;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -27,6 +27,8 @@ const DONE_PAUSE: Duration = Duration::from_secs(3);
 
 struct Run {
     round: u64,
+    /// Apple ID, при котором окно открыли: найденное запоминается только за ним.
+    email: Option<String>,
     collected: Collected,
     opened: Instant,
     last_batch: Option<Instant>,
@@ -52,36 +54,6 @@ struct Outcome {
     error: Option<String>,
 }
 
-/// Строка «Из истории покупок»: права проверит `check_owned`, сама не отмечается.
-fn history_row(f: &Found, ctx: &RowCtx) -> RowDto {
-    let track_id = f.id;
-    let available_version = ctx.latest.get(&track_id).cloned();
-    let installed_version = ctx.installed.and_then(|list| crate::catalog::find_installed(list, track_id, "")).map(|a| a.version.clone());
-    RowDto {
-        track_id,
-        has_saved_copy: crate::catalog::find_saved(ctx.saved, track_id, "").is_some(),
-        bundle_id: String::new(),
-        name: f.name.clone().unwrap_or_else(|| format!("Приложение {track_id}")),
-        version: String::new(),
-        removed_from_ru: false,
-        owned: ctx.owned.get(&track_id).copied(),
-        source: "history",
-        letter: None,
-        color: None,
-        install_state: crate::catalog::install_state(installed_version.as_deref(), available_version.as_deref()),
-        installed_version,
-        available_version,
-        ipad_only: false,
-        unknown_account: false,
-        aliases: vec![],
-        category: None,
-        size_bytes: ctx.sizes.get(&track_id).copied(),
-        other_account: false,
-        purchaser_masked: None,
-        min_ios: None,
-    }
-}
-
 /// Открыть окно истории (или показать уже открытое).
 #[tauri::command]
 pub async fn open_history(app: AppHandle) -> Result<(), UiError> {
@@ -95,7 +67,8 @@ pub async fn open_history(app: AppHandle) -> Result<(), UiError> {
         *g += 1;
         *g
     };
-    *hr.run.lock().unwrap() = Some(Run { round, collected: Collected::default(), opened: Instant::now(), last_batch: None });
+    let email = app.state::<AppState>().current_email();
+    *hr.run.lock().unwrap() = Some(Run { round, email, collected: Collected::default(), opened: Instant::now(), last_batch: None });
     // хранилище окна не сохраняется (nonPersistent на macOS): закрыли — сессии сайта нет
     let built = URL.parse().map_err(|e| format!("{e}")).and_then(|url| {
         WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::External(url))
@@ -220,6 +193,12 @@ async fn finish(app: &AppHandle, round: u64, problem: Option<Problem>) {
     let new = fresh(&run.collected.items, &known);
     // всё найденное теперь на «Выборе»: повтор не посчитает его новым, устаревшее перепроверится
     st.screen_extra.lock().unwrap().extend(run.collected.items.iter().map(|f| f.id));
+    // и между запусками: за тем Apple ID, при котором окно открыли (сменили вход посреди — не пишем)
+    if let (Some(at), Some(now)) = (run.email.as_deref(), st.current_email())
+        && crate::accounts::same_id(at, &now)
+    {
+        st.history_store.remember(at, &run.collected.items);
+    }
     // в журнал — только счётчики и вид ошибки, без названий и номеров
     crate::log::write("history", &format!("найдено {found}, новых {}, итог {problem:?}", new.len()));
     let rows = st.with_ctx(|ctx| new.iter().map(|f| history_row(f, ctx)).collect()).await;

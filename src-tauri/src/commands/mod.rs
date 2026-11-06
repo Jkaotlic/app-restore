@@ -106,6 +106,8 @@ pub struct AppState {
     owned: Mutex<HashMap<i64, bool>>,
     /// Те же итоги между запусками, по Apple ID (`owned-cache.json`).
     owned_cache: OwnedCache,
+    /// Найденное в истории покупок прошлыми заходами, по Apple ID (`history-found.json`).
+    history_store: crate::history_store::HistoryStore,
     /// trackId строк, видимых при текущем поиске/фильтре (`owned_visible`): их проверяют первыми.
     visible: Mutex<HashSet<i64>>,
     /// Иконки из Lookup: None — спрашивали, иконки нет.
@@ -215,6 +217,7 @@ impl AppState {
             notified: NotifiedStore::open(data_dir.join("notified-releases.json")),
             owned: Mutex::new(HashMap::new()),
             owned_cache: OwnedCache::open(data_dir.join("owned-cache.json")),
+            history_store: crate::history_store::HistoryStore::open(data_dir.join("history-found.json")),
             visible: Mutex::new(HashSet::new()),
             icons: Mutex::new(HashMap::new()),
             icons_backoff_until: Mutex::new(None),
@@ -921,6 +924,7 @@ pub async fn logout(state: State<'_, AppState>) -> Result<(), UiError> {
     // вышел сам — ответы этого Apple ID на диске больше не храним
     if let Some(e) = email {
         state.owned_cache.forget(&e);
+        state.history_store.forget(&e);
     }
     Ok(())
 }
@@ -996,7 +1000,10 @@ pub fn open_in_store(app: AppHandle, track_id: i64) -> Result<(), UiError> {
 /// Каталог и сохранённые копии — сразу, без обращения к Apple. Покупки догружает `load_purchases`.
 #[tauri::command]
 pub async fn load_catalog_rows(state: State<'_, AppState>) -> Result<RowsDto, ()> {
-    Ok(state.with_ctx(catalog_rows).await)
+    // найденное в истории покупок прошлыми заходами — снова на «Выборе», и повторный заход не посчитает его новым
+    let found = state.current_email().map(|e| state.history_store.found(&e)).unwrap_or_default();
+    state.screen_extra.lock().unwrap().extend(found.iter().map(|f| f.id));
+    Ok(state.with_ctx(|ctx| with_history(catalog_rows(ctx), &found, ctx)).await)
 }
 
 /// Покупки в фоне: `purchases_progress` после каждой страницы, в конце `purchases` (весь список).
@@ -1673,6 +1680,7 @@ pub async fn forget_account(state: State<'_, AppState>, email: String) -> Result
     }
     let s = state.sessions.clone();
     state.owned_cache.forget(&email);
+    state.history_store.forget(&email);
     // забытый Apple ID — и его незавершённые задания
     state.pending.forget(&email);
     state.sync_pending();

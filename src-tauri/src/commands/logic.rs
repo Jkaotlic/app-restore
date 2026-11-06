@@ -3,6 +3,7 @@ use crate::catalog::{AppRow, InstallState, RowSource, Rows, SavedIpa, apply_vers
 use crate::device::{AccountMatch, InstalledApp, PhoneInfo, mask_email, pick_default};
 use crate::ipatool::output::OwnedApp;
 use crate::errors::AppError;
+use crate::history::Found;
 use crate::queue::JobState;
 use crate::removed_catalog::RemovedApp;
 use serde::Serialize;
@@ -488,6 +489,44 @@ fn catalog_row(track_id: i64, ctx: &RowCtx) -> Option<AppRow> {
     let mut rows = crate::catalog::build_rows(std::slice::from_ref(r), ctx.owned, vec![], Some(&HashSet::new()), ctx.saved);
     apply_versions(&mut rows.rows, ctx.installed, ctx.latest, ctx.saved);
     rows.rows.into_iter().next()
+}
+
+/// Строка «Из истории покупок»: права проверит `check_owned`, сама не отмечается.
+pub fn history_row(f: &Found, ctx: &RowCtx) -> RowDto {
+    let track_id = f.id;
+    let available_version = ctx.latest.get(&track_id).cloned();
+    let installed_version = ctx.installed.and_then(|list| crate::catalog::find_installed(list, track_id, "")).map(|a| a.version.clone());
+    RowDto {
+        track_id,
+        has_saved_copy: crate::catalog::find_saved(ctx.saved, track_id, "").is_some(),
+        bundle_id: String::new(),
+        name: f.name.clone().unwrap_or_else(|| format!("Приложение {track_id}")),
+        version: String::new(),
+        removed_from_ru: false,
+        owned: ctx.owned.get(&track_id).copied(),
+        source: "history",
+        letter: None,
+        color: None,
+        install_state: crate::catalog::install_state(installed_version.as_deref(), available_version.as_deref()),
+        installed_version,
+        available_version,
+        ipad_only: false,
+        unknown_account: false,
+        aliases: vec![],
+        category: None,
+        size_bytes: ctx.sizes.get(&track_id).copied(),
+        other_account: false,
+        purchaser_masked: None,
+        min_ios: None,
+    }
+}
+
+/// Строки «Из истории покупок», найденные этим Apple ID в прошлые заходы (`history_store`):
+/// в конец списка, кроме уже стоящих в нём (каталог, копии).
+pub fn with_history(mut d: RowsDto, found: &[Found], ctx: &RowCtx) -> RowsDto {
+    let have: HashSet<i64> = d.rows.iter().map(|r| r.track_id).collect();
+    d.rows.extend(found.iter().filter(|f| !have.contains(&f.id)).map(|f| history_row(f, ctx)));
+    d
 }
 
 /// Строка «добавлено по ссылке». Запись каталога с тем же trackId важнее (у неё буква и цвет).
@@ -1480,6 +1519,19 @@ mod tests {
     }
     fn inst(bundle: &str, version: &str, item: Option<i64>) -> InstalledApp {
         InstalledApp { bundle_id: bundle.into(), name: bundle.into(), version: version.into(), item_id: item, purchaser: None }
+    }
+
+    #[test]
+    fn with_history_appends_remembered_rows_not_already_listed() {
+        let mut c = Ctx::new(vec![removed(900, "Сбер")]);
+        c.owned = [(555555, true)].into();
+        let d = catalog_rows(&c.get());
+        let found = [Found { id: 900, name: Some("Сбер".into()) }, Found { id: 555555, name: Some("Почта".into()) }, Found { id: 666666, name: None }];
+        let d = with_history(d, &found, &c.get());
+        assert_eq!(d.rows.iter().filter(|r| r.track_id == 900).count(), 1);
+        assert_eq!(d.rows.iter().find(|r| r.track_id == 900).unwrap().source, "removed");
+        let h: Vec<(i64, &str, &str, Option<bool>)> = d.rows.iter().filter(|r| r.source == "history").map(|r| (r.track_id, r.name.as_str(), r.source, r.owned)).collect();
+        assert_eq!(h, vec![(555555, "Почта", "history", Some(true)), (666666, "Приложение 666666", "history", None)]);
     }
 
     #[test]
