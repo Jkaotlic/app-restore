@@ -434,6 +434,11 @@ describe("progressive purchases", () => {
     const m = mergePurchases(now, [cat(1, "Сбер"), row(13, "Покупка")]);
     expect(m.map((r) => [r.track_id, r.source])).toEqual([[1, "removed"], [13, "purchase"], [12, "saved"]]);
   });
+  it("remembered history rows stay unless the purchases list them (hidden ones stay)", () => {
+    const now = [cat(1, "Сбер"), row(20, "Скрытое", { source: "history" }), row(21, "Видимое", { source: "history" })];
+    const m = mergePurchases(now, [cat(1, "Сбер"), row(21, "Видимое")]);
+    expect(m.map((r) => [r.track_id, r.source])).toEqual([[1, "removed"], [21, "purchase"], [20, "history"]]);
+  });
   it("a link row that also came as a purchase is not listed twice", () => {
     const m = mergePurchases([row(50, "Ссылка", { source: "link" })], [row(50, "Ссылка"), row(11, "Telegram")]);
     expect(m.map((r) => r.track_id)).toEqual([50, 11]);

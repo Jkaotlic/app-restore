@@ -2,7 +2,7 @@
 //! только номер и название приложения, ни cookie, ни токенов сайта. Файл `history-found.json`
 //! пишется целиком через временный; битый — пропускается и пересобирается следующей записью.
 //! «Выйти» и «Забыть» убирают записи своего Apple ID, как ответы `owned-cache.json`.
-use crate::history::{Found, MAX_ITEMS, MAX_NAME, valid_id};
+use crate::history::{Found, MAX_ITEMS, clean_name, valid_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -46,7 +46,7 @@ fn checked(list: Vec<Saved>) -> Vec<Found> {
     list.into_iter()
         .filter(|s| valid_id(&s.id.to_string()).is_some() && seen.insert(s.id))
         .take(MAX_ITEMS)
-        .map(|s| Found { id: s.id, name: s.name.filter(|n| !n.trim().is_empty() && n.chars().count() <= MAX_NAME && !n.chars().any(char::is_control)) })
+        .map(|s| Found { id: s.id, name: s.name.as_deref().and_then(clean_name) })
         .collect()
 }
 
@@ -190,9 +190,10 @@ mod tests {
     #[test]
     fn hand_edited_bad_entries_are_dropped() {
         let dir = tempfile::tempdir().unwrap();
-        let long = "я".repeat(MAX_NAME + 1);
-        let text = format!(r#"{{"a@example.com":[{{"id":12}},{{"id":111111,"name":"{long}"}},{{"id":111111}},{{"id":222222,"name":"ok\u0007"}},{{"id":333333,"name":"Почта"}}]}}"#);
+        let long = "я".repeat(crate::history::MAX_NAME + 1);
+        let text = format!(r#"{{"a@example.com":[{{"id":12}},{{"id":111111,"name":"{long}"}},{{"id":111111}},{{"id":222222,"name":"ok\u0007"}},{{"id":333333,"name":"\u202eПочта"}},{{"id":444444,"name":"  "}}]}}"#);
         std::fs::write(dir.path().join("history-found.json"), text).unwrap();
-        assert_eq!(store(&dir).found("a@example.com"), vec![f(111111, None), f(222222, None), f(333333, Some("Почта"))]);
+        let short = "я".repeat(crate::history::MAX_NAME);
+        assert_eq!(store(&dir).found("a@example.com"), vec![f(111111, Some(&short)), f(222222, Some("ok")), f(333333, Some("Почта")), f(444444, None)]);
     }
 }
