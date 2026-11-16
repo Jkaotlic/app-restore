@@ -68,10 +68,15 @@ pub struct Session {
     /// Файл cookies ipatool: испорченный (ipatool падает на старте) откладываем и повторяем вызов.
     cookies: Option<PathBuf>,
     /// Вход мёртв: токен истёк, и тихий перевход ipatool по сохранённому паролю не вышел (нужен код
-    /// 2FA или пароль сменили). Каждый такой перевход — вход в Apple ID, и Apple шлёт «Попытка
+    /// 2FA или пароль сменили). Каждый такой перевход — вход в Apple ID, и Apple шлёт «Попытку
     /// входа» на все устройства аккаунта, поэтому дальше запросы к Apple не запускаются
     /// (`NotLoggedIn`) до входа человеком или смены записи входа (`exclusive*`).
     login_dead: AtomicBool,
+    /// Отметка «вход мёртв» между запусками (`login-dead` в папке данных): без неё каждый запуск
+    /// программы начинался бы ещё одним перевходом сохранённым паролем — и ещё одной «Попыткой
+    /// входа» на все устройства. Стирается успешным входом и сменой записи входа.
+    /// `None` — не persists (тесты).
+    dead_marker: Option<PathBuf>,
 }
 
 /// Какой срок у запуска (`Limits`).
@@ -84,12 +89,49 @@ enum Kind {
 
 impl Session {
     pub fn new(runner: Arc<dyn IpaRunner>, extra_args: Vec<String>) -> Self {
-        Self { runner, extra_args, delays: APPLE_DELAYS.to_vec(), one_at_a_time: Arc::default(), limits: LIMITS, cookies: None, login_dead: AtomicBool::new(false) }
+        Self {
+            runner,
+            extra_args,
+            delays: APPLE_DELAYS.to_vec(),
+            one_at_a_time: Arc::default(),
+            limits: LIMITS,
+            cookies: None,
+            login_dead: AtomicBool::new(false),
+            dead_marker: None,
+        }
     }
 
     pub fn with_cookies(mut self, path: PathBuf) -> Self {
         self.cookies = Some(path);
         self
+    }
+
+    /// Отметка мёртвого входа между запусками; её наличие на старте = вход мёртв сразу,
+    /// без единого обращения к Apple.
+    pub fn with_dead_marker(mut self, path: PathBuf) -> Self {
+        if path.exists() {
+            self.login_dead.store(true, Ordering::SeqCst);
+        }
+        self.dead_marker = Some(path);
+        self
+    }
+
+    /// Вход мёртв: Apple отверг сохранённый пароль, вручную входить заново.
+    pub fn login_dead(&self) -> bool {
+        self.login_dead.load(Ordering::SeqCst)
+    }
+
+    /// Вердикт «вход мёртв»/«вход жив» — и в памяти, и в отметке на диске (между запусками).
+    fn set_dead(&self, v: bool) {
+        self.login_dead.store(v, Ordering::SeqCst);
+        let Some(p) = &self.dead_marker else { return };
+        let res = if v { std::fs::write(p, b"") } else { std::fs::remove_file(p) };
+        // удалить уже отсутствующую отметку — не ошибка
+        if let Err(e) = res
+            && !(!v && e.kind() == std::io::ErrorKind::NotFound)
+        {
+            crate::log::write("login-dead marker", &e.to_string());
+        }
     }
 
     /// ipatool не читает свой файл cookies (`cannot load cookies`) — откладываем файл рядом.
@@ -197,12 +239,12 @@ impl Session {
         }
         match parse_output(&res.stdout, res.exit_code) {
             Err(AppError::AuthCodeRequired | AppError::WrongCredentials) if store => {
-                self.login_dead.store(true, Ordering::SeqCst);
+                self.set_dead(true);
                 crate::log::write("ipatool", &format!("{}: login expired, silent re-login refused; Apple calls stopped until sign-in", args.0[0]));
                 Err(AppError::NotLoggedIn)
             }
             r @ Ok(IpaOutcome::LoggedIn { .. }) if login => {
-                self.login_dead.store(false, Ordering::SeqCst);
+                self.set_dead(false);
                 r
             }
             r => r,
@@ -246,7 +288,7 @@ impl Session {
     ) -> Result<T, AppError> {
         let turn = self.turn(self.limits.keychain_wait).await?;
         // запись входа меняется (другой Apple ID, откат, «забыть») — прежний вердикт не про неё
-        self.login_dead.store(false, Ordering::SeqCst);
+        self.set_dead(false);
         let cancel = Arc::new(AtomicBool::new(false));
         let c = cancel.clone();
         let mut job = tokio::task::spawn_blocking(move || f(&c));
@@ -956,6 +998,41 @@ mod tests {
         assert_eq!(s.all_purchases(&|_, _| {}, &|| true).await, Err(AppError::NotLoggedIn));
         assert_eq!(s.check_token().await, Err(AppError::NotLoggedIn));
         assert_eq!(r.calls().len(), 1, "вход в Apple ID был один");
+    }
+
+    #[tokio::test]
+    async fn dead_login_marker_survives_restart_and_blocks_the_first_call() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("login-dead");
+        let r = Arc::new(FakeRunner::new(vec![relogin_needs_code()]));
+        let s = session(&r, &[]).with_dead_marker(marker.clone());
+        assert_eq!(s.latest_version(1).await, Err(AppError::NotLoggedIn));
+        assert!(marker.exists(), "отметка на диске: следующий запуск должен знать про мёртвый вход");
+        // «перезапуск программы»: новая сессия с той же отметкой — ни одного вызова ipatool,
+        // иначе Мак снова стучался бы в Apple с сохранённым паролем при каждом запуске
+        let r2 = Arc::new(FakeRunner::new(vec![]));
+        let s2 = session(&r2, &[]).with_dead_marker(marker.clone());
+        assert_eq!(s2.latest_version(1).await, Err(AppError::NotLoggedIn));
+        assert_eq!(r2.calls().len(), 0, "ни одного обращения к Apple после перезапуска");
+        // вход человеком снимает отметку: дальше работаем как обычно
+        let r3 = Arc::new(FakeRunner::new(vec![fx("login-ok"), fx("list-versions-owned")]));
+        let s3 = session(&r3, &[]).with_dead_marker(marker.clone());
+        s3.login("user@example.com", "pw", Some("123456".into())).await.unwrap();
+        assert!(!marker.exists(), "успешный вход стирает отметку");
+        assert!(s3.versions(1).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn keychain_swap_clears_dead_login_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("login-dead");
+        let r = Arc::new(FakeRunner::new(vec![relogin_needs_code(), fx("list-versions-owned")]));
+        let s = session(&r, &[]).with_dead_marker(marker.clone());
+        assert_eq!(s.versions(1).await, Err(AppError::NotLoggedIn));
+        assert!(marker.exists());
+        s.exclusive(|| ()).await.unwrap();
+        assert!(!marker.exists(), "смена записи входа стирает отметку: вердикт был про прежнюю запись");
+        assert!(s.versions(1).await.is_ok());
     }
 
     #[tokio::test]

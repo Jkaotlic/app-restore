@@ -549,6 +549,13 @@ pub async fn prepare_login(
     on_slow: &(dyn Fn() + Send + Sync),
 ) -> Result<(), AppError> {
     let Some(cur) = current else { return Ok(()) };
+    // Вход мёртв (защёлка с отметкой между запусками): снимать нечего — снимок мёртвой записи
+    // при возврате на адрес лишь породил бы лишний перевход сохранённым паролем.
+    if session.login_dead() {
+        crate::log::write("login", &format!("previous session of {} is dead, not saved", crate::device::mask_email(cur)));
+        sessions.mark_unsaved(cur);
+        return Ok(());
+    }
     if skip_save {
         crate::log::write("login", &format!("previous session of {} not saved (user chose to go on)", crate::device::mask_email(cur)));
         sessions.mark_unsaved(cur);
@@ -1207,6 +1214,25 @@ mod tests {
         let e = env(None, CHUNK_MAC);
         assert_eq!(prepare_login(&session(&r), &e.s, Some(ME), OTHER, false, &|| {}).await, Ok(()));
         assert!(r.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn prepare_login_skips_dead_login_without_snapshot() {
+        // вход мёртв (например, после смены движка): снимок мёртвой записи не нужен —
+        // при возврате на адрес он лишь породил бы лишний стук в Apple сохранённым паролем
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("login-dead");
+        std::fs::write(&marker, b"").unwrap();
+        let r = Arc::new(FakeRunner::new(vec![]));
+        let s = session(&r).with_dead_marker(marker);
+        assert!(s.login_dead(), "отметка на диске = вход мёртв с самого старта");
+        let e = env(None, CHUNK_MAC);
+        e.ipatool_as(b"dead-2.7-token", None);
+        e.s.remember(ME);
+        assert_eq!(prepare_login(&s, &e.s, Some(ME), OTHER, false, &|| {}).await, Ok(()));
+        assert!(!e.has_blob(ME), "мёртвый вход не снимается");
+        assert_eq!(e.s.known(), vec![(ME.to_string(), false)], "адрес честно «нужен вход»");
+        assert!(r.calls().is_empty(), "к Apple не ходили");
     }
 
     #[tokio::test]
