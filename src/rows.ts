@@ -462,6 +462,15 @@ export function showSweepButton(p: SweepDto | null, loggedIn: boolean): boolean 
   return loggedIn && (!p || (!p.running && p.checked < p.total));
 }
 
+/** Обновившимся с 0.3.5: аккаунт сохранён, но вход мёртв на новом движке ipatool —
+ * вместо россыпи ошибок показываем один баннер «войти заново». Сбой сети — не про вход. */
+export function needsRelogin(email: string | null, purchasesCode: string | null, map: OwnedMap): boolean {
+  if (!email) return false;
+  if (purchasesCode === "not_logged_in") return true;
+  for (const s of map.values()) if (s.kind === "error" && s.error.code === "not_logged_in") return true;
+  return false;
+}
+
 /** Бейдж «Новое»: запись каталога, о выпуске которой сказал Rust (`release_badges`). */
 export function isNewRow(r: RowDto, newIds: Set<number>): boolean {
   return r.source === "removed" && newIds.has(r.track_id);

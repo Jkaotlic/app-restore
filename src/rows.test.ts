@@ -46,6 +46,7 @@ import {
   isNewRow,
   retryCatalogErrors,
   showSweepButton,
+  needsRelogin,
   sweepText,
 } from "./rows";
 import type { OwnedEvent, PhoneDto, RowDto } from "./types";
@@ -330,6 +331,21 @@ describe("owned states", () => {
     let m = initialOwned([cat(1, "А"), cat(2, "Б")]);
     m = applyOwned(m, ev(1, null, softErr));
     expect(m.get(2)).toEqual({ kind: "checking" });
+  });
+  // обновившиеся с 0.3.5: вход сохранён, но мёртв на новом движке — им один баннер вместо россыпи ошибок
+  it("needsRelogin: saved account with a dead login, not a network failure", () => {
+    const dead = { code: "not_logged_in", text: "Вы не вошли в Apple ID. Войдите снова.", retryable: false };
+    let m = initialOwned([cat(1, "А"), cat(2, "Б")]);
+    m = applyOwned(m, ev(1, null, dead));
+    expect(needsRelogin("ma***@example.com", null, m)).toBe(true);
+    expect(needsRelogin("ma***@example.com", "not_logged_in", initialOwned([cat(1, "А")]))).toBe(true);
+    // входа не было сохранено — это не «войти заново», а обычный первый вход
+    expect(needsRelogin(null, "not_logged_in", m)).toBe(false);
+    // сбой сети — не про вход
+    expect(needsRelogin("ma***@example.com", null, applyOwned(initialOwned([cat(1, "А")]), ev(1, null, softErr)))).toBe(false);
+    expect(needsRelogin("ma***@example.com", "connection_failed", initialOwned([cat(1, "А")]))).toBe(false);
+    // всё в порядке
+    expect(needsRelogin("ma***@example.com", null, initialOwned([cat(1, "А")]))).toBe(false);
   });
   it("after purchases arrive the waiting catalog rows go again together with the new phone rows", () => {
     const list = [cat(1, "А"), cat(2, "Б", { owned: true }), row(60, "О", { source: "phone", owned: null }), row(61, "Ч", { source: "phone", owned: null, other_account: true }), row(10, "Покупка")];

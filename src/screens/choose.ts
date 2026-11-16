@@ -3,7 +3,7 @@ import { h } from "../dom";
 import { resumeBanner } from "./resume";
 import { batchText, dropMessages, mergePending, runBatch } from "../drop";
 import { HELP_STEPS, HISTORY_NOTE, LINK_NOTE, type HelpAction } from "../help";
-import { purchasesProgressText, errorText } from "../labels";
+import { purchasesProgressText, errorText, RELOGIN_NOTE } from "../labels";
 import {
   addLinkRow,
   applyOwned,
@@ -23,6 +23,7 @@ import {
   initialOwned,
   isLight,
   mergePurchases,
+  needsRelogin,
   pendingChecks,
   recheckIds,
   purchasesForSource,
@@ -876,9 +877,11 @@ register("choose", () => {
 
   function banners(): HTMLElement[] {
     const parts: HTMLElement[] = [];
+    // обновившимся с 0.3.5: сохранённый вход мёртв на новом движке — один понятный баннер вместо ошибок в строках
+    const relogin = needsRelogin(state.account?.email ?? null, dto?.purchases_error?.code ?? null, owned);
     if (installedError) parts.push(h("p", { class: "note", text: "Не удалось прочитать, что стоит на iPhone" }));
     const pe = dto?.purchases_error;
-    if (pe) {
+    if (pe && !(relogin && pe.code === "not_logged_in")) {
       const b = h("div", { class: "banner" }, h("span", { text: pe.text }));
       if (pe.code === "not_logged_in" || pe.code === "apple_changed_login") {
         b.append(h("button", { class: "btn ghost small", text: "Войти снова", attrs: { type: "button" }, on: { click: () => go("login") } }));
@@ -906,6 +909,16 @@ register("choose", () => {
         }),
       );
       parts.unshift(b);
+    }
+    if (relogin) {
+      parts.unshift(
+        h(
+          "div",
+          { class: "banner", attrs: { role: "status" } },
+          h("span", { text: RELOGIN_NOTE }),
+          h("button", { class: "btn go small", text: "Войти заново", attrs: { type: "button" }, on: { click: () => go("login") } }),
+        ),
+      );
     }
     return parts;
   }

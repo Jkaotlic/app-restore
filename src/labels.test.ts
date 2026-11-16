@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { waitLeft, CODE_HINT, CODE_MISSING_AFTER_S, CODE_REJECTED_TEXT, PASSWORD_NOTE, codeStepText, RESEND_AFTER_S, resendLabel, errorText, loginNote, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
+import { waitLeft, CODE_HINT, CODE_MISSING_AFTER_S, CODE_REJECTED_TEXT, PASSWORD_NOTE, RELOGIN_NOTE, codeStepText, RESEND_AFTER_S, resendLabel, errorText, loginNote, loginWaitNote, accountBlock, afterLoginScreen, askAppleIdOnDone, sameFromMatch, canProceed, chooserNote, installsToIphone, showSkip, doneText, isFinished, jobView, otherIdText, phoneView, purchasesProgressText } from "./labels";
 import type { JobDto, PhoneDto } from "./types";
 
 const err = { code: "device_locked", text: "Разблокируйте iPhone и нажмите «Доверять»", retryable: false };
@@ -219,8 +219,16 @@ describe("errorText", () => {
   });
 });
 
-describe("login waiting", () => {
-  it("says preparation immediately, after ~10 s explains a slow first sign-in", () => {
+describe("relogin note", () => {
+  it("for upgraders: sign in once, nothing is lost", () => {
+    expect(RELOGIN_NOTE).toContain("один раз");
+    expect(RELOGIN_NOTE).toContain("копии");
+    expect(RELOGIN_NOTE).toContain("остались");
+    expect(RELOGIN_NOTE).not.toContain("ошибк");
+  });
+});
+
+describe("login waiting", () => {  it("says preparation immediately, after ~10 s explains a slow first sign-in", () => {
     expect(loginWaitNote(3)).toBe("Подготавливаем вход в Apple ID…");
     expect(loginWaitNote(10)).toContain("компоненты Apple");
   });
