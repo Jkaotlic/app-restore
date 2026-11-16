@@ -6,8 +6,13 @@ import { downloadOnlyNote, tooOldNote, type ChosenVersion } from "./versions";
 export type OwnedState = { kind: "checking" } | { kind: "yes" } | { kind: "no" } | { kind: "gone" } | { kind: "error"; error: UiError };
 export type OwnedMap = Map<number, OwnedState>;
 
-/** После этих ошибок Rust прекращает `check_owned` (см. `stops_owned_check`). */
-const STOPS_CHECK = new Set(["not_logged_in", "account_disabled", "apple_changed_login"]);
+/** После этих ошибок Rust прекращает `check_owned` (см. `stops_owned_check`):
+ * вход мёртв, аккаунт закрыт, Apple сменил вход, нет сети, Apple не отвечает на вход,
+ * аккаунт требует действия. */
+const STOPS_CHECK = new Set([
+  "not_logged_in", "account_disabled", "apple_changed_login",
+  "connection_failed", "apple_auth_rejected", "account_action_required",
+]);
 
 const isFirstGroup = (r: RowDto) => r.source === "removed" || r.source === "link";
 

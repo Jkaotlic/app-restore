@@ -31,6 +31,9 @@ fn code(e: &AppError) -> &'static str {
         AppError::AppGone => "app_gone",
         AppError::AppleUnavailable { .. } => "apple_unavailable",
         AppError::AppleChangedLogin => "apple_changed_login",
+        AppError::ConnectionFailed { .. } => "connection_failed",
+        AppError::AppleAuthRejected { .. } => "apple_auth_rejected",
+        AppError::AccountActionRequired { .. } => "account_action_required",
         AppError::NotLoggedIn => "not_logged_in",
         AppError::AccountDisabled => "account_disabled",
         AppError::DeviceNotFound { drivers_missing: true } => "drivers_missing",
@@ -733,7 +736,7 @@ pub struct PurchasesProgress {
 
 /// Ошибки, после которых проверять остальные записи бессмысленно: ответ будет тот же.
 pub fn stops_owned_check(e: &AppError) -> bool {
-    matches!(e, AppError::NotLoggedIn | AppError::AccountDisabled | AppError::AppleChangedLogin)
+    matches!(e, AppError::NotLoggedIn | AppError::AccountDisabled | AppError::AppleChangedLogin | AppError::ConnectionFailed { .. } | AppError::AppleAuthRejected { .. } | AppError::AccountActionRequired { .. })
 }
 
 /// Состояние задания для интерфейса. `kind`: queued, downloading, saved, installing, installed,
@@ -842,7 +845,7 @@ pub fn copy_device(phones: &[PhoneInfo], udid: &str) -> Result<String, AppError>
 
 /// Ошибки скачивания, при которых вместо свежей версии ставится сохранённая копия.
 fn copy_helps(e: &AppError) -> bool {
-    matches!(e, AppError::AppleChangedLogin | AppError::AppleUnavailable { .. } | AppError::NotLoggedIn | AppError::Timeout | AppError::DownloadStalled)
+    matches!(e, AppError::AppleChangedLogin | AppError::AppleUnavailable { .. } | AppError::NotLoggedIn | AppError::Timeout | AppError::DownloadStalled | AppError::ConnectionFailed { .. } | AppError::AppleAuthRejected { .. } | AppError::AccountActionRequired { .. })
 }
 
 /// Запасной путь для покупки: скачать не вышло из-за входа или серверов Apple, а копия есть.
@@ -1940,7 +1943,7 @@ mod tests {
     #[test]
     fn fallback_copy_only_for_login_and_server_errors() {
         let lib = [SavedIpa { version: "9.1".into(), ..saved(5, "/x/5_b_9.1.ipa") }];
-        for e in [AppError::AppleChangedLogin, AppError::AppleUnavailable { status: Some(503) }, AppError::NotLoggedIn, AppError::Timeout, AppError::DownloadStalled] {
+        for e in [AppError::AppleChangedLogin, AppError::AppleUnavailable { status: Some(503) }, AppError::NotLoggedIn, AppError::Timeout, AppError::DownloadStalled, AppError::ConnectionFailed { detail: "dns".into() }, AppError::AppleAuthRejected { detail: "204".into() }, AppError::AccountActionRequired { detail: "terms".into() }] {
             assert_eq!(fallback_copy(&e, 5, &lib), Some((PathBuf::from("/x/5_b_9.1.ipa"), "9.1".into())), "{e:?}");
         }
         assert_eq!(fallback_copy(&AppError::NotLoggedIn, 6, &lib), None, "копии нет");

@@ -17,7 +17,7 @@ pub struct Limits {
     pub quick_run: Duration,
     /// Очередь коротких: дольше обычно значит зависшую связку ключей у предыдущего шага.
     pub quick_wait: Duration,
-    /// Вход: ipatool ходит к Apple дважды.
+    /// Вход: включает холодную подготовку компонентов Apple и проверку аккаунта.
     pub login_run: Duration,
     /// Вход ждёт своей очереди недолго: человек смотрит на «Входим…».
     pub login_wait: Duration,
@@ -35,7 +35,7 @@ pub struct Limits {
 pub const LIMITS: Limits = Limits {
     quick_run: Duration::from_secs(90),
     quick_wait: Duration::from_secs(15 * 60),
-    login_run: Duration::from_secs(180),
+    login_run: Duration::from_secs(10 * 60),
     login_wait: Duration::from_secs(30),
     download_run: Duration::from_secs(4 * 3600),
     keychain_run: Duration::from_secs(180),

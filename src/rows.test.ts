@@ -309,6 +309,16 @@ describe("owned states", () => {
     expect(m.get(2)).toEqual({ kind: "error", error: stopErr });
     expect(m.get(3)).toEqual({ kind: "yes" });
   });
+  // те же коды, что stops_owned_check в Rust: новые классы ошибок ipatool 2.8 тоже останавливают проход
+  it("network, auth-rejected and account-action errors stop the check like a dead login", () => {
+    for (const code of ["connection_failed", "apple_auth_rejected", "account_action_required"]) {
+      const err = { code, text: "текст", retryable: false };
+      let m = initialOwned([cat(1, "А"), cat(2, "Б")]);
+      m = applyOwned(m, ev(1, null, err));
+      expect(m.get(1), code).toEqual({ kind: "error", error: err });
+      expect(m.get(2), code).toEqual({ kind: "error", error: err });
+    }
+  });
   it("app_gone is a final answer: not owned, with its own state, others keep waiting", () => {
     const gone = { code: "app_gone", text: "Apple больше не отдаёт это приложение для скачивания", retryable: false, ref_code: null };
     let m = initialOwned([cat(1, "А"), cat(2, "Б")]);

@@ -79,7 +79,10 @@ impl<R: tauri::Runtime> IpaRunner for SidecarRunner<R> {
             Err(e) => return fail(format!("не удалось подготовить ipatool: {e}")),
         };
         // Как `Command::output`, но процесс в `KillOnDrop`: брошенный вызов не оставляет ipatool жить.
-        let (mut rx, child) = match cmd.args(args).spawn() {
+        // Account snapshots and cookie recovery use ~/.ipatool. ipatool 2.8
+        // otherwise migrates it when it inherits absolute XDG state/data paths.
+        // Limit this override to our child; leave the user's environment alone.
+        let (mut rx, child) = match cmd.env("XDG_STATE_HOME", "").env("XDG_DATA_HOME", "").args(args).spawn() {
             Ok(x) => x,
             Err(e) => return fail(format!("не удалось запустить ipatool: {e}")),
         };

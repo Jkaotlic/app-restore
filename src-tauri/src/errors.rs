@@ -20,6 +20,13 @@ pub enum AppError {
     AppGone,
     #[error("apple unavailable ({status:?})")]
     AppleUnavailable { status: Option<u16> },
+    /// Diagnostics stay in the scrubbed log, never in the UI text.
+    #[error("connection failed: {detail}")]
+    ConnectionFailed { detail: String },
+    #[error("apple authentication response rejected: {detail}")]
+    AppleAuthRejected { detail: String },
+    #[error("apple account action required: {detail}")]
+    AccountActionRequired { detail: String },
     #[error("apple changed login")]
     AppleChangedLogin,
     #[error("not logged in")]
@@ -83,6 +90,15 @@ impl AppError {
             AppError::AppGone => "Apple больше не отдаёт это приложение для скачивания".into(),
             AppError::AppleUnavailable { .. } => {
                 "Серверы Apple сейчас не отвечают. Попробуйте через 10–15 минут.".into()
+            }
+            AppError::ConnectionFailed { .. } => {
+                "Не удалось связаться с Apple. Проверьте подключение к интернету, DNS и VPN; при необходимости попробуйте другую сеть.".into()
+            }
+            AppError::AppleAuthRejected { .. } => {
+                "Apple не вернул ответ для входа. Это не подтверждает ошибку пароля или кода. Попробуйте другую сеть или повторите позже; не отправляйте запросы подряд.".into()
+            }
+            AppError::AccountActionRequired { .. } => {
+                "Apple просит выполнить действие с аккаунтом. Откройте App Store на устройстве Apple, войдите в этот Apple ID и выполните указания, затем вернитесь сюда.".into()
             }
             AppError::AppleChangedLogin => {
                 "Apple изменил вход, ждём обновления. Скачанные ранее копии ставятся как обычно.".into()

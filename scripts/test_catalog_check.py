@@ -7,6 +7,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from urllib.parse import urlparse, parse_qs
 
@@ -560,8 +561,12 @@ class NewsMainTests(unittest.TestCase):
 
     def run_main(self, *argv):
         out = io.StringIO()
-        cc.main(["--catalog", self.path, *argv], http_get=self.apple, text_get=self.web,
-                sleep=lambda s: None, out=out)
+        # RSS fixtures have a fixed date. Keep the integration clock fixed too,
+        # otherwise these tests silently lose all news after fourteen days.
+        with patch.object(cc.datetime, "datetime", wraps=datetime) as clock:
+            clock.now.return_value = NOW
+            cc.main(["--catalog", self.path, *argv], http_get=self.apple, text_get=self.web,
+                    sleep=lambda s: None, out=out)
         return out.getvalue()
 
     def test_candidates_never_written_to_catalog(self):

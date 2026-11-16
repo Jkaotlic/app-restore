@@ -5,11 +5,13 @@
 # checksum database) and Xcode command line tools (cgo, lipo). Module downloads are
 # checked against ipatool's go.sum.
 set -euo pipefail
+shopt -s nullglob
 DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOCK="$ROOT/scripts/ipatool.lock"
 PATCHES="$ROOT/scripts/ipatool-patches"
 OUT="$ROOT/src-tauri/binaries"
+PATCH_FILES=("$PATCHES"/*.patch)
 
 lock() { grep -E "^$1=" "$LOCK" | head -n1 | cut -d= -f2-; }
 REPO="$(lock SOURCE_REPO)"
@@ -20,7 +22,8 @@ BUILD_VERSION="$(lock BUILD_VERSION)"
 # Everything that defines the build; the stamp next to the binaries records it.
 recipe() {
   printf '%s\n' "$REPO" "$COMMIT" "$GO_VERSION" "$BUILD_VERSION"
-  cat "$0" "$PATCHES"/*.patch
+  cat "$0"
+  if [ "${#PATCH_FILES[@]}" -gt 0 ]; then cat "${PATCH_FILES[@]}"; fi
 }
 want="$(recipe | shasum -a 256 | cut -d' ' -f1)"
 STAMP="$OUT/.ipatool-build"
@@ -41,9 +44,11 @@ git init -q "$SRC"
 git -C "$SRC" fetch -q --depth 1 "$REPO" "$COMMIT"
 git -C "$SRC" -c advice.detachedHead=false checkout -q FETCH_HEAD
 [ "$(git -C "$SRC" rev-parse HEAD)" = "$COMMIT" ] || { echo "commit mismatch: wanted $COMMIT" >&2; exit 1; }
-for p in "$PATCHES"/*.patch; do
-  git -C "$SRC" apply --whitespace=nowarn "$p" || { echo "patch does not apply: $(basename "$p")" >&2; exit 1; }
-done
+if [ "${#PATCH_FILES[@]}" -gt 0 ]; then
+  for p in "${PATCH_FILES[@]}"; do
+    git -C "$SRC" apply --whitespace=nowarn "$p" || { echo "patch does not apply: $(basename "$p")" >&2; exit 1; }
+  done
+fi
 
 export GOTOOLCHAIN="go$GO_VERSION" GOFLAGS="-mod=readonly -trimpath"
 export CGO_ENABLED=1 CGO_CFLAGS="-mmacosx-version-min=10.15" CGO_LDFLAGS="-mmacosx-version-min=10.15"

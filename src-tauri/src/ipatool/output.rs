@@ -69,20 +69,42 @@ fn map_error(raw: &str) -> AppError {
     if has(&["failed to parse release date", "invalid release date", "failed to read remote file size"]) {
         return AppError::VersionMetaBroken { released: broken_date(raw) };
     }
+    // Inspect failure shape before words such as "2FA verification" or
+    // "password": these also occur in stage labels and recovery instructions.
+    if has(&["no usable authentication response", "authentication redirect is missing location", "empty or non-plist authentication response"]) {
+        return match status_of(&e) {
+            Some(st) => AppError::AppleUnavailable { status: Some(st) },
+            None => AppError::AppleAuthRejected { detail: raw.to_string() },
+        };
+    }
+    if has(&["no such host", "temporary failure in name resolution", "connection reset by peer", "broken pipe", "connection refused", "network is unreachable", "no route to host", "i/o timeout", "context deadline exceeded", "tls handshake timeout", "client.timeout", "unexpected eof", "x509:"])
+        || (has(&["request failed", "failed to send http request"]) && has(&["timeout", "timed out", "eof"]))
+    {
+        return AppError::ConnectionFailed { detail: raw.to_string() };
+    }
+    if has(&["authentication", "sign-in request failed", "2fa verification request failed"])
+        && let Some(st) = status_of(&e)
+    {
+        return AppError::AppleUnavailable { status: Some(st) };
+    }
+    if has(&["account is disabled", "account has been disabled", "account has been locked", "account is locked"]) {
+        return AppError::AccountDisabled;
+    }
+    if has(&["apple requires action before sign-in", "terms and conditions", "reset your password", "review your account", "authentication machine action"]) {
+        return AppError::AccountActionRequired { detail: raw.to_string() };
+    }
     if has(&["auth code is required", "2fa code is required"]) {
         AppError::AuthCodeRequired
     } else if has(&["2fa", "verification", "auth code", "authcode"]) {
         AppError::CodeRejected
-    } else if has(&["keyring", "not logged in"]) {
+    } else if has(&["keyring", "not logged in", "state is not provisioned"]) {
         AppError::NotLoggedIn
     } else if has(&["license is required"]) {
         AppError::NotPurchased
-    } else if has(&["account is disabled", "account has been disabled"]) {
-        AppError::AccountDisabled
     } else if has(&["something went wrong", "unsupported authentication redirect"]) {
         AppError::AppleChangedLogin
     } else if has(&["platform version lookup returned no app", "catalog lookup returned http 404"])
-        // патч 0001: повторное скачивание убранного приложения без версии, Apple отказал (403)
+        // убранное приложение без закреплённой версии: повторное скачивание, Apple отказал (403)
         || (has(&["redownload request"]) && has(&["http 403"]))
     {
         // до `status_of`: пропавшее у Apple — не «серверы не отвечают», даже с кодом в тексте
@@ -221,6 +243,13 @@ mod tests {
     }
 
     #[test]
+    fn unprovisioned_store_state_is_not_logged_in() {
+        // ipatool 2.8.1 (9df35a6): в связке нет состояния магазина — тот же «войдите снова»
+        let l = err_line("store AMD state is not provisioned; run 'ipatool auth login' to authenticate");
+        assert_eq!(parse_output(&l, 1), Err(AppError::NotLoggedIn));
+    }
+
+    #[test]
     fn account_disabled() {
         assert_eq!(parse_output(&err_line("account is disabled"), 1), Err(AppError::AccountDisabled));
     }
@@ -243,6 +272,35 @@ mod tests {
     fn apple_changed_login() {
         for t in ["something went wrong", "unsupported authentication redirect status"] {
             assert_eq!(parse_output(&err_line(t), 1), Err(AppError::AppleChangedLogin), "{t}");
+        }
+    }
+
+    // Real failure shapes from the 0.3.5 log; a transport failure at the 2FA
+    // stage must never tell the user that their code was rejected.
+    #[test]
+    fn login_network_and_empty_responses_have_actionable_errors() {
+        use crate::commands::logic::{UiError, stops_owned_check};
+        let cases = [
+            ("failed to get bag: dial tcp: lookup init.itunes.apple.com: no such host", "connection_failed"),
+            ("2FA verification request failed: request failed: connection reset by peer", "connection_failed"),
+            ("sign-in request failed: apple returned no usable authentication response: unexpected response from Apple (HTTP 301): authentication redirect is missing Location", "apple_auth_rejected"),
+            ("2FA verification request failed: authentication request failed after 3 attempts (transport error, transport error, transport error): request failed: write: broken pipe", "connection_failed"),
+            ("2FA verification request failed: apple rate limited authentication; try again later: unexpected response from Apple (HTTP 429): rate limited by Apple", "apple_unavailable"),
+            ("2FA verification request failed: apple requested a wait longer than 30s; try again later: unexpected response from Apple (HTTP 204): empty or non-plist authentication response", "apple_auth_rejected"),
+            ("2FA verification request failed: authentication request failed after 3 attempts (HTTP 204, 404, 204): apple returned no usable authentication response", "apple_auth_rejected"),
+            ("sign-in request failed: apple returned no usable authentication response: unexpected response from Apple (HTTP 503): empty or non-plist authentication response", "apple_unavailable"),
+            ("This Apple Account has been locked for security reasons.: Reset your password to continue.", "account_disabled"),
+            ("Apple requires action before sign-in can continue: Terms and Conditions", "account_action_required"),
+        ];
+        for (raw, want) in cases {
+            let err = parse_output(&err_line(raw), 1).unwrap_err();
+            let ui = UiError::from(err.clone());
+            assert_eq!(ui.code, want, "{raw}");
+            assert!(!serde_json::to_string(&ui).unwrap().contains(raw), "raw diagnostics must stay out of UI");
+            if matches!(want, "connection_failed" | "apple_auth_rejected" | "account_action_required") {
+                assert!(!ui.retryable, "do not multiply authentication attempts");
+                assert!(stops_owned_check(&err));
+            }
         }
     }
 

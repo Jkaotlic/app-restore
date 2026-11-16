@@ -220,9 +220,9 @@ describe("errorText", () => {
 });
 
 describe("login waiting", () => {
-  it("after ~10 s says Apple can be slow, before that nothing", () => {
-    expect(loginWaitNote(3)).toBeNull();
-    expect(loginWaitNote(10)).toBe("Apple иногда долго отвечает при первом входе — подождите до двух–трёх минут.");
+  it("says preparation immediately, after ~10 s explains a slow first sign-in", () => {
+    expect(loginWaitNote(3)).toBe("Подготавливаем вход в Apple ID…");
+    expect(loginWaitNote(10)).toContain("компоненты Apple");
   });
   it("code hint: where the code comes from, how to get it without the window, no SMS", () => {
     expect(CODE_HINT).toEqual([
@@ -255,7 +255,7 @@ describe("login waiting", () => {
 describe("loginNote", () => {
   it("Keychain hint wins; when it clears, the slow-Apple note comes back after 10 s", () => {
     expect(loginNote("окно", 3)).toBe("окно");
-    expect(loginNote(null, 3)).toBeNull();
+    expect(loginNote(null, 3)).toBe(loginWaitNote(3));
     expect(loginNote(null, 12)).toBe(loginWaitNote(12));
   });
 });

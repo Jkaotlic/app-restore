@@ -175,6 +175,7 @@ register("login", () => {
     const since = Date.now();
     let keychain: string | null = null;
     const show = () => note(waitText(keychain, (Date.now() - since) / 1000));
+    show();
     const slow = setTimeout(show, LOGIN_SLOW_AFTER_S * 1000);
     const unlisten = await listen<string | null>("keychain_note", ({ payload }) => {
       keychain = payload;

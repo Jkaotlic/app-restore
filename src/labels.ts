@@ -130,9 +130,11 @@ export function errorText(e: UiError): string {
 /** Через сколько секунд «Входим…» показать, что Apple бывает медленным. */
 export const LOGIN_SLOW_AFTER_S = 10;
 
-/** Подпись под «Входим…», когда ждём дольше `LOGIN_SLOW_AFTER_S`; раньше — ничего. */
-export function loginWaitNote(seconds: number): string | null {
-  return seconds >= LOGIN_SLOW_AFTER_S ? "Apple иногда долго отвечает при первом входе — подождите до двух–трёх минут." : null;
+/** Подготовка сразу, затем объяснение долгого первого входа; точный этап ipatool не сообщает. */
+export function loginWaitNote(seconds: number): string {
+  return seconds >= LOGIN_SLOW_AFTER_S
+    ? "При первом входе программа может загружать компоненты Apple. Подготовка и вход могут занять несколько минут, максимум 10. Не закрывайте программу."
+    : "Подготавливаем вход в Apple ID…";
 }
 
 /** Шаг кода 2FA: откуда придёт код и как получить его без окна (абзацы). В iOS 18+ кнопка

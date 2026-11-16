@@ -147,7 +147,9 @@ impl IpatoolAuth for RealAuth {
     }
 }
 
-/// Вход ipatool целиком: запись `account` и cookies (`None` — нет).
+/// Снимок аккаунта: запись `account` и cookies (`None` — нет).
+/// ipatool 2.8 хранит `anisette-v4` отдельно: это общая идентичность машины,
+/// её не копируем, не переключаем и не удаляем вместе с отдельным Apple ID.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Raw {
     pub account: Option<Vec<u8>>,
@@ -561,7 +563,7 @@ pub async fn prepare_login(
 /// Ошибки, при которых вход из снимка мёртв: Apple просит войти заново.
 fn stale(e: &crate::errors::AppError) -> bool {
     use crate::errors::AppError::*;
-    matches!(e, NotLoggedIn | AccountDisabled | AppleChangedLogin | WrongCredentials | CodeRejected | AuthCodeRequired)
+    matches!(e, NotLoggedIn | AccountDisabled | AppleChangedLogin | WrongCredentials | CodeRejected | AuthCodeRequired | AccountActionRequired { .. })
 }
 
 /// Вход ipatool после шага со связкой ключей, доделанного в фоне: `auth info` (ждёт своей
@@ -1057,6 +1059,24 @@ mod tests {
         let r = Arc::new(FakeRunner::new(vec![info(ME), token_ok()]));
         assert!(switch_to(&session(&r), &e.s, Some(OTHER), ME).await.restored);
         assert_eq!(e.auth.state(), raw(b"token-me", Some(b"c-me")));
+    }
+
+    #[tokio::test]
+    async fn restored_account_requires_action_but_survives_connection_failure() {
+        for (detail, keep) in [
+            ("Apple requires action before sign-in can continue: Terms and Conditions", false),
+            ("failed to get bag: lookup init.itunes.apple.com: no such host", true),
+            ("sign-in request failed: apple returned no usable authentication response (HTTP 204)", true),
+        ] {
+            let e = env(None, CHUNK_MAC);
+            e.ipatool_as(b"token-me", Some(b"c-me"));
+            e.s.save(ME).unwrap();
+            let failure = RunResult { stdout: serde_json::json!({"success": false, "error": detail}).to_string(), exit_code: 1, stderr: String::new() };
+            let r = Arc::new(FakeRunner::new(vec![info(ME), failure]));
+            let result = settled_login(&session(&r), &e.s).await;
+            assert_eq!(result.is_some(), keep, "{detail}");
+            assert_eq!(e.s.known(), vec![(ME.to_string(), keep)], "snapshot availability: {detail}");
+        }
     }
 
     #[tokio::test]
