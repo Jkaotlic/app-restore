@@ -64,6 +64,11 @@ input {
   grid-template-columns: 220px 1fr;
 }
 
+/* Экран iPhone: устройств может быть несколько — колонка прокручивается, «Дальше» не уезжает */
+.body.phone {
+  overflow-y: auto;
+}
+
 /* Левая колонка: где человек сейчас */
 .steps {
   background: var(--ink);
@@ -122,6 +127,27 @@ input {
   background: var(--go);
   border-color: var(--go);
   color: var(--ink);
+}
+/* доступный шаг — кнопка на всю строку; счётчик и «✓» остаются у li */
+.steps li.go button.step-link {
+  all: unset;
+  cursor: pointer;
+  flex: 1;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+}
+.steps li.go:hover {
+  opacity: 0.85;
+  color: #fff;
+}
+.steps li.go button.step-link:focus-visible {
+  outline: 2px solid var(--go);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 .steps .foot {
   margin-top: auto;
@@ -245,6 +271,12 @@ input {
   text-underline-offset: 2px;
   font-size: 12.5px;
   cursor: pointer;
+}
+/* занято другой строкой («Забыть», «Продолжить»…): без подчёркивания-приглашения */
+.link:disabled {
+  color: var(--muted);
+  text-decoration: none;
+  cursor: default;
 }
 .note {
   font-size: 12.5px;

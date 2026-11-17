@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, showCopiesLink, staysOnRefusal, copiesWord, copyInstallButton, copyNotes, copyPhone, markCopyPhone, offersSkipSave, skipSaveNote, copyWarning, groupCopies, stepIndex } from "./copies";
+import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, showCopiesLink, staysOnRefusal, copiesWord, copyInstallButton, copyNotes, copyPhone, markCopyPhone, offersSkipSave, skipSaveNote, copyWarning, groupCopies, stepIndex, stepAvailable, stepScreen } from "./copies";
 import type { CopyDto, PhoneDto } from "./types";
 
 const c = (name: string, purchaser: string | null, extra: Partial<CopyDto> = {}): CopyDto => ({
@@ -90,6 +90,26 @@ describe("stepIndex", () => {
     expect(stepIndex("done")).toBe(3);
     expect(stepIndex("copies")).toBe(-1);
     expect(stepIndex("warning")).toBe(-1);
+  });
+});
+
+describe("stepAvailable", () => {
+  // шаги кликабельны: вернуться можно на любой, до которого есть смысл доходить.
+  // «iPhone» спрашивает про тот же Apple ID — без входа вопрос бессмысленный.
+  it("Apple ID always; iPhone and Выбор need a login; Готово needs jobs", () => {
+    expect(stepAvailable(0, { loggedIn: false, jobs: 0 })).toBe(true);
+    expect(stepAvailable(1, { loggedIn: false, jobs: 0 })).toBe(false);
+    expect(stepAvailable(1, { loggedIn: true, jobs: 0 })).toBe(true);
+    expect(stepAvailable(2, { loggedIn: false, jobs: 0 })).toBe(false);
+    expect(stepAvailable(2, { loggedIn: true, jobs: 0 })).toBe(true);
+    expect(stepAvailable(3, { loggedIn: true, jobs: 0 })).toBe(false);
+    expect(stepAvailable(3, { loggedIn: true, jobs: 2 })).toBe(true);
+  });
+  it("stepScreen maps a step back to its screen", () => {
+    expect(stepScreen(0)).toBe("accounts");
+    expect(stepScreen(1)).toBe("phone");
+    expect(stepScreen(2)).toBe("choose");
+    expect(stepScreen(3)).toBe("done");
   });
 });
 

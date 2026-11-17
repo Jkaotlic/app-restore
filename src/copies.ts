@@ -81,6 +81,20 @@ export function stepIndex(screen: string): number {
   return steps[screen] ?? -1;
 }
 
+/** Экран шага: куда ведёт клик по нему в левой колонке. */
+export function stepScreen(step: number): "accounts" | "phone" | "choose" | "done" {
+  return (["accounts", "phone", "choose", "done"] as const)[step] ?? "accounts";
+}
+
+/** Шаг кликабелен — вернуться на него имеет смысл: «Apple ID» всегда, «iPhone» и «Выбор» —
+ * с входом (шаг iPhone спрашивает про тот же Apple ID), «Готово» — когда есть задания.
+ * Недоступный шаг остаётся надписью, как раньше. */
+export function stepAvailable(step: number, opts: { loggedIn: boolean; jobs: number }): boolean {
+  if (step === 0) return true;
+  if (step === 3) return opts.jobs > 0;
+  return opts.loggedIn;
+}
+
 /** Строка-заготовка для значка и job-ряда («Готово»): у копии нет строки «Выбора». */
 export function copyRow(c: CopyDto): RowDto {
   return {

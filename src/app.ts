@@ -2,7 +2,7 @@
 // и получают уведомления о событиях Rust через `notify`.
 import { invoke } from "@tauri-apps/api/core";
 import { h } from "./dom";
-import { showCopiesLink, stepIndex } from "./copies";
+import { showCopiesLink, stepAvailable, stepIndex, stepScreen } from "./copies";
 import { pendingNote } from "./drop";
 import { errorText, installsToIphone } from "./labels";
 import type { ChosenVersion } from "./versions";
@@ -48,6 +48,8 @@ export interface State {
   beforeCopies: Screen;
   phones: PhoneDto[];
   phonesError: UiError | null;
+  /** Первый список телефонов пришёл: до этого «пусто» — это «ещё ищем», а не «не подключён». */
+  phonesLoaded: boolean;
   update: string | null;
   /** macOS ждёт разрешения Связки ключей (`keychain_note`): подсказка в боковой панели. */
   keychainNote: string | null;
@@ -90,6 +92,7 @@ export const state: State = {
   beforeCopies: "accounts",
   phones: [],
   phonesError: null,
+  phonesLoaded: false,
   update: null,
   keychainNote: null,
   newIds: new Set(),
@@ -195,7 +198,17 @@ export function setSidebarExtra(el: HTMLElement | null): void {
 
 function sidebar(screen: Screen): HTMLElement {
   const idx = stepIndex(screen);
-  const items = STEPS.map((label, i) => h("li", { class: idx < 0 ? "" : i < idx ? "done" : i === idx ? "now" : "", text: label }));
+  // вернуться можно на любой доступный шаг: вход и телефон — всегда, «Выбор» — с входом,
+  // «Готово» — когда есть задания; текущий шаг и недоступные остаются надписями.
+  // Первое предупреждение не обходим и через шаги.
+  const items = STEPS.map((label, i) => {
+    const cls = idx < 0 ? "" : i < idx ? "done" : i === idx ? "now" : "";
+    const on = screen !== "warning" && i !== idx && stepAvailable(i, { loggedIn: !!state.account, jobs: state.jobs.size });
+    const content = on
+      ? h("button", { class: "step-link", text: label, attrs: { type: "button" }, on: { click: () => go(stepScreen(i)) } })
+      : label;
+    return h("li", { class: `${cls}${on ? " go" : ""}`, attrs: i === idx ? { "aria-current": "step" } : {} }, content);
+  });
   // «Все копии» — всегда, и без входа
   const copies = !showCopiesLink(screen)
     ? null
@@ -253,11 +266,18 @@ export function go(screen: Screen): void {
 /** Перерисовать только левую колонку (появился аккаунт или новая версия). */
 export function refreshSidebar(): void {
   const old = document.querySelector(".steps");
-  // содержимое экрана переезжает в новую колонку: перенос снимает фокус — вернуть его туда же
+  // содержимое экрана переезжает в новую колонку: перенос снимает фокус — вернуть его туда же.
+  // Фокус был на шаге или «Все копии» — на кнопку в том же месте новой колонки.
   const active = document.activeElement;
   const keep = active instanceof HTMLElement && sidebarExtra?.contains(active) ? active : null;
-  old?.replaceWith(sidebar(state.screen));
-  keep?.focus();
+  let btnIdx = -1;
+  if (!keep && active instanceof HTMLElement && active.tagName === "BUTTON" && old?.contains(active)) {
+    btnIdx = [...old.querySelectorAll("button")].indexOf(active as HTMLButtonElement);
+  }
+  const fresh = sidebar(state.screen);
+  old?.replaceWith(fresh);
+  if (keep) keep.focus();
+  else if (btnIdx >= 0) (fresh.querySelectorAll("button")[btnIdx] as HTMLButtonElement | undefined)?.focus();
 }
 
 /** Ошибка из Rust или что-то неожиданное → UiError с понятным текстом. */
