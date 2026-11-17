@@ -8,7 +8,7 @@ import { jobInbox } from "../jobs";
 import { jobView, errorText } from "../labels";
 import type { AccountMatchDto, CopyDto, DropDto } from "../types";
 import { appIcon } from "./choose";
-import { jobRow, phoneStatus, refreshPhones, retryJob } from "./phone";
+import { jobRow, phoneStatus, refreshPhones, retryJobVisible } from "./phone";
 
 register("copies", () => {
   let copies: CopyDto[] | null = null;
@@ -26,7 +26,7 @@ register("copies", () => {
   msg.hidden = true;
   const warning = h("div", { attrs: { "aria-live": "polite" } });
   const jobsBox = h("div");
-  const installBtn = h("button", { class: "btn", on: { click: safe(install) } });
+  const installBtn = h("button", { class: "btn", attrs: { type: "button" }, on: { click: safe(install) } });
   /** Свой телефон экрана: установка копии не меняет, куда ставит главный поток. */
   let chosenPhone: string | null = null;
   const targetPhone = () => copyPhone(state.phones, chosenPhone);
@@ -204,11 +204,7 @@ register("copies", () => {
         jobRow(
           j,
           jobView(j.state, j.fromSaved).text,
-          safe(async () => {
-            j.state = { kind: "queued" };
-            renderJobs();
-            await retryJob(j.track_id);
-          }),
+          safe(() => retryJobVisible(j, renderJobs)),
         ),
       ),
     );

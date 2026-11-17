@@ -74,6 +74,7 @@ async function wire(): Promise<void> {
   await listen<PhonesEvent>("phones", ({ payload }) => {
     state.phones = payload.phones;
     state.phonesError = payload.error;
+    state.phonesLoaded = true;
     currentScreen()?.onPhones?.();
   });
 }

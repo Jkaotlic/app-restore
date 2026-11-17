@@ -23,7 +23,7 @@ export function mergePending(pending: number[], ids: number[]): number[] {
 /** Итог добавления нескольких ссылок. */
 export function addedText(added: number, total: number): string {
   if (added === 0) return `Не добавлено ни одного из ${total}`;
-  return added === total ? `Добавлено: ${added}` : `Добавлено ${added} из ${total}`;
+  return added === total ? `Добавлено ${added} из ${total}` : `Добавлено ${added} из ${total}`;
 }
 
 /** Подсказка в боковой панели, пока номера ждут «Выбора»; `null` — ждать нечего. */

@@ -33,7 +33,7 @@ register("login", () => {
   const whoEmail = h("b");
   const change = h("button", { class: "link", text: "Изменить", attrs: { type: "button" }, on: { click: () => setCodeStep(false, true) } });
   const who = h("p", { class: "codewho" }, h("span", { text: "Вход в " }), whoEmail, change);
-  const resend = h("button", { class: "link", attrs: { type: "button" }, on: { click: (e: Event) => void submitWith(e, true) } });
+  const resend = h("button", { class: "link", attrs: { type: "button" }, on: { click: safe((e: Event) => submitWith(e, true)) } });
   const codeLabel = h("span", { text: "Код подтверждения" });
   const codeBlock = h(
     "div",
@@ -54,7 +54,7 @@ register("login", () => {
   function watchCode() {
     clearTimeout(missingTimer);
     missingTimer = setTimeout(() => {
-      if (codeStep && !button.disabled && !boxes.some((b) => b.value)) say(codeStepText(CODE_MISSING_AFTER_S), true);
+      if (codeStep && !button.disabled && !boxes.some((b) => b.value)) say(codeStepText(CODE_MISSING_AFTER_S), false);
     }, CODE_MISSING_AFTER_S * 1000);
   }
   function tickResend() {

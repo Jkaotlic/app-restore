@@ -15,7 +15,7 @@ const deviceIcon = (p: PhoneDto) => (phoneView(p).isIpad ? ipadIcon() : phoneIco
 export function jobRow(job: Job, text: string, onRetry: (e: Event) => void, downloadOnly = false): HTMLElement {
   const v = jobView(job.state, job.fromSaved, downloadOnly, waitLeft(job.waitUntil, Date.now()));
   const failed = job.state.kind === "failed";
-  const retry = v.retry ? h("button", { class: "btn ghost small", text: "Повторить", on: { click: onRetry } }) : null;
+  const retry = v.retry ? h("button", { class: "btn ghost small", text: "Повторить", attrs: { type: "button" }, on: { click: onRetry } }) : null;
   let bar: HTMLElement | null = null;
   if (v.bar !== null) {
     bar =
@@ -33,6 +33,20 @@ export async function retryJob(id: number): Promise<void> {
   await call("retry", { trackId: id });
 }
 
+/** «Повторить» из строки задания: сразу «В очереди», а если сам вызов не прошёл — строка
+ * возвращается к ошибке с её текстом, а не висит «В очереди» навсегда. */
+export async function retryJobVisible(j: Job, render: () => void): Promise<void> {
+  const prev = j.state;
+  j.state = { kind: "queued" };
+  render();
+  try {
+    await retryJob(j.track_id);
+  } catch (e) {
+    j.state = { kind: "failed", error: asUiError(e), saved: prev.kind === "saved" || j.fromSaved !== null };
+    render();
+  }
+}
+
 export async function refreshPhones(): Promise<void> {
   try {
     state.phones = await call<PhoneDto[]>("list_phones");
@@ -40,6 +54,8 @@ export async function refreshPhones(): Promise<void> {
   } catch (e) {
     state.phonesError = asUiError(e);
   }
+  // первый ответ пришёл: дальше пустой список — правда «не подключён», а не «ещё ищем»
+  state.phonesLoaded = true;
 }
 
 /** Свой выбор телефона экрана вместо общего (`choose_phone`): «Все копии». */
@@ -52,6 +68,8 @@ export interface PhonePick {
  * С `pick` выбор остаётся у экрана и не меняет, куда ставит главный поток. */
 export function phoneStatus(onChange: () => void, pick?: PhonePick): { el: HTMLElement; render(): void } {
   const el = h("div", { attrs: { "aria-live": "polite" } });
+  /** Сбой выбора устройства («Доверять»? кабель?) — показать, а не молча оставить карточку невыбранной. */
+  let pickErr: string | null = null;
 
   function deviceCard(p: PhoneDto): HTMLElement {
     const v = phoneView(p);
@@ -62,9 +80,14 @@ export function phoneStatus(onChange: () => void, pick?: PhonePick): { el: HTMLE
         attrs: { type: "button", "aria-pressed": p.target ? "true" : "false" },
         on: {
           click: safe(async () => {
-            if (pick) pick.choose(p.udid);
-            else await call("choose_phone", { udid: p.udid });
-            await refreshPhones();
+            pickErr = null;
+            try {
+              if (pick) pick.choose(p.udid);
+              else await call("choose_phone", { udid: p.udid });
+              await refreshPhones();
+            } catch (e) {
+              pickErr = errorText(asUiError(e));
+            }
             render();
             onChange();
           }),
@@ -94,6 +117,11 @@ export function phoneStatus(onChange: () => void, pick?: PhonePick): { el: HTMLE
     } else if (phones.length > 0) {
       if (note) parts.push(h("p", { class: "note", text: note }));
       parts.push(h("div", { class: "devices" }, ...phones.map(deviceCard)));
+    } else if (!pick && !state.phonesLoaded) {
+      // первый запрос ещё не ответил: «не подключён» было бы поспешным выводом
+      parts.push(
+        h("div", { class: "phone" }, phoneIcon(), h("div", { class: "t" }, h("b", { text: "Ищем устройства…" }), h("br"), h("span", { class: "note", text: "Пара секунд" })), h("span", { class: "spin", attrs: { "aria-hidden": "true" } })),
+      );
     } else {
       const text = err ? errorText(err) : "Подключите iPhone кабелем";
       const card = h(
@@ -107,13 +135,15 @@ export function phoneStatus(onChange: () => void, pick?: PhonePick): { el: HTMLE
           h("button", {
             class: "btn ghost small",
             text: "Открыть Microsoft Store",
+            attrs: { type: "button" },
             on: { click: () => void openUrl(APPLE_DEVICES_URL).catch(() => undefined) },
           }),
         );
       }
       parts.push(card);
     }
-    if (phones.length > 0 && err) parts.push(h("p", { class: "error", text: err.text }));
+    if (phones.length > 0 && err) parts.push(h("p", { class: "error", text: errorText(err) }));
+    if (pickErr) parts.push(h("p", { class: "error", attrs: { role: "alert" }, text: pickErr }));
     el.replaceChildren(...parts);
   }
 
@@ -133,13 +163,13 @@ export function appleIdQuestion(onAnswer: () => void): { el: HTMLElement; render
     const yes = h("button", {
       class: "btn ghost small",
       text: "Да, тот же",
-      attrs: { "aria-pressed": state.sameAppleId === true ? "true" : "false" },
+      attrs: { type: "button", "aria-pressed": state.sameAppleId === true ? "true" : "false" },
       on: { click: () => answer(true) },
     });
     const no = h("button", {
       class: "btn ghost small",
       text: "Нет, другой",
-      attrs: { "aria-pressed": state.sameAppleId === false ? "true" : "false" },
+      attrs: { type: "button", "aria-pressed": state.sameAppleId === false ? "true" : "false" },
       on: { click: () => answer(false) },
     });
     const other = state.sameAppleId === false ? h("p", { text: otherIdText(state.run?.email ?? state.account?.email ?? null) }) : null;
@@ -217,7 +247,7 @@ function accountBox(onChange: () => void): { el: HTMLElement; render(): void; ch
       const mine = h("button", {
         class: "btn ghost small",
         text: "Поставить с моего Apple ID",
-        attrs: { "aria-pressed": state.sameAppleId === false ? "true" : "false" },
+        attrs: { type: "button", "aria-pressed": state.sameAppleId === false ? "true" : "false" },
         on: {
           click: () => {
             state.sameAppleId = false;
@@ -229,6 +259,7 @@ function accountBox(onChange: () => void): { el: HTMLElement; render(): void; ch
       const login = h("button", {
         class: "btn small",
         text: "Войти в Apple ID этого iPhone",
+        attrs: { type: "button" },
         on: {
           click: safe(async () => {
             refusal = null;
@@ -273,6 +304,7 @@ register("phone", () => {
   const nextBtn = h("button", {
     class: "btn",
     text: "Дальше",
+    attrs: { type: "button" },
     on: {
       click: () => {
         if (!canProceed(state.phones, state.sameAppleId)) return;
@@ -285,6 +317,7 @@ register("phone", () => {
     class: "btn ghost",
     // без телефона «Вернуть» неактивна: на «Выборе» доступно только «Только скачать»
     text: "Без iPhone — только скачать",
+    attrs: { type: "button" },
     on: {
       click: () => {
         state.withPhone = false;
@@ -315,7 +348,7 @@ register("phone", () => {
 
   const el = h(
     "div",
-    { class: "body" },
+    { class: "body phone" },
     h("h2", { text: "Подключите iPhone" }),
     h("p", { class: "lead", text: "Кабелем. На телефоне нажмите «Доверять»." }),
     status.el,

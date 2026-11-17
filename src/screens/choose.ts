@@ -884,7 +884,7 @@ register("choose", () => {
     if (pe && !(relogin && pe.code === "not_logged_in")) {
       const b = h("div", { class: "banner" }, h("span", { text: pe.text }));
       if (pe.code === "not_logged_in" || pe.code === "apple_changed_login") {
-        b.append(h("button", { class: "btn ghost small", text: "Войти снова", attrs: { type: "button" }, on: { click: () => go("login") } }));
+        b.append(h("button", { class: "btn ghost small", text: "Войти заново", attrs: { type: "button" }, on: { click: () => go("login") } }));
       } else {
         b.append(h("button", { class: "btn ghost small", text: "Загрузить снова", attrs: { type: "button" }, on: { click: safe(loadPurchases) } }));
       }

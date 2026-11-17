@@ -2,7 +2,7 @@ import { call, go, openLibraryButton, register, safe, state, targetPhone, type J
 import { h } from "../dom";
 import { askAppleIdOnDone, doneText, isFinished, waitLeft } from "../labels";
 import { etaMinutes, overallText, remainingBytes, speedMeter, togglePause } from "../queue";
-import { appleIdQuestion, jobRow, phoneStatus, retryJob } from "./phone";
+import { appleIdQuestion, jobRow, phoneStatus, retryJobVisible } from "./phone";
 
 register("done", () => {
   const big = h("div", { class: "big-ok" });
@@ -16,6 +16,7 @@ register("done", () => {
   const again = h("button", {
     class: "btn ghost",
     text: "Вернуть ещё",
+    attrs: { type: "button" },
     on: {
       click: () => {
         state.jobs = new Map();
@@ -61,8 +62,9 @@ register("done", () => {
     const waiting = jobs.some((j) => !isFinished(j.state, j.downloadOnly));
     phoneBox.replaceChildren(...(waiting && !targetPhone() ? [status.el] : []));
     const ask = askAppleIdOnDone(state.withPhone, state.sameAppleId, state.phones);
-    // после ответа вопрос остаётся на виду: можно передумать
-    if (ask || (!state.withPhone && state.sameAppleId !== null)) questionBox.replaceChildren(question.el);
+    // после ответа вопрос остаётся на виду: можно передумать; без телефона — убирается
+    if (ask || (!state.withPhone && state.sameAppleId !== null && state.phones.length > 0)) questionBox.replaceChildren(question.el);
+    else questionBox.replaceChildren();
     // без ответа подпись нейтральная: «Установлено»
     const same = state.sameAppleId;
     const email = state.run?.email ?? null;
@@ -72,11 +74,7 @@ register("done", () => {
         const row = jobRow(
           j,
           doneText(j.state, j.fromSaved, same, email, j.downloadOnly, waitLeft(j.waitUntil, now)),
-          safe(async () => {
-            j.state = { kind: "queued" };
-            render();
-            await retryJob(j.track_id);
-          }),
+          safe(() => retryJobVisible(j, render)),
           j.downloadOnly,
         );
         if (j.downloadOnly && j.state.kind === "saved") row.querySelector(".right")?.append(openLibraryButton("btn ghost small", "Открыть папку"));
@@ -103,7 +101,8 @@ register("done", () => {
     "div",
     { class: "body" },
     overall,
-    h("h2", { text: "Приложения на iPhone" }),
+    // «Только скачать» и «Без iPhone» — на телефон ничего не ставится, заголовок честный
+    h("h2", { text: state.withPhone || targetPhone() ? "Приложения на iPhone" : "Скачанные копии" }),
     phoneBox,
     questionBox,
     list,

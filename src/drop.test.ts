@@ -23,7 +23,7 @@ describe("drop", () => {
   });
 
   it("texts", () => {
-    expect(addedText(3, 3)).toBe("Добавлено: 3");
+    expect(addedText(3, 3)).toBe("Добавлено 3 из 3");
     expect(addedText(1, 3)).toBe("Добавлено 1 из 3");
     expect(addedText(0, 2)).toBe("Не добавлено ни одного из 2");
     expect(pendingNote(0)).toBeNull();

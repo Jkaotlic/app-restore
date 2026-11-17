@@ -1,6 +1,6 @@
 // Шаг «Apple ID»: все, кто входил в программу или чьи копии лежат в «Мои приложения».
 import { asUiError, call, go, refreshSidebar, register, safe, state } from "../app";
-import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, skipSaveNote, staysOnRefusal } from "../copies";
+import { accountCopiesText, accountStatus, afterUseAccount, pickStatusText, skipSaveNote } from "../copies";
 import { errorText } from "../labels";
 import { h } from "../dom";
 import type { AccountEntry, ForgetDto, UseAccountDto } from "../types";
@@ -18,7 +18,7 @@ export function resetForAccount(dropped: number[]): void {
 const sameId = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 register("accounts", () => {
-  const list = h("div", { class: "scroll", attrs: { "aria-live": "polite" } });
+  const list = h("div", { class: "scroll" });
   const msg = h("p", { class: "error", attrs: { role: "alert", "aria-live": "polite" } });
   msg.hidden = true;
   /** Снимок нынешнего входа не сохранился: перейти в выбранный аккаунт без него. */
@@ -34,9 +34,20 @@ register("accounts", () => {
   async function load(): Promise<void> {
     try {
       accounts = await call<AccountEntry[]>("list_accounts");
+      msg.hidden = true;
+      msg.replaceChildren();
     } catch (e) {
       accounts = [];
-      msg.textContent = errorText(asUiError(e));
+      msg.replaceChildren(
+        errorText(asUiError(e)),
+        " ",
+        h("button", {
+          class: "link",
+          text: "Повторить",
+          attrs: { type: "button" },
+          on: { click: safe(() => load()) },
+        }),
+      );
       msg.hidden = false;
     }
     render();
@@ -59,8 +70,8 @@ register("accounts", () => {
       res = await call<UseAccountDto>("use_account", { email: a.email, skipSave });
     } catch (e) {
       const ui = asUiError(e);
-      // идёт скачивание — ничего не меняли, остаёмся; прочее — войдём с адресом
-      if (staysOnRefusal(ui)) res = { ...res, prefill: null, error: ui };
+      // что-то не вышло (скачивание идёт, сеть…) — ничего не меняли, остаёмся и показываем почему
+      res = { ...res, prefill: null, error: ui };
     }
     clearTimeout(timer);
     busy = null;
@@ -108,16 +119,21 @@ register("accounts", () => {
 
   async function forget(a: AccountEntry): Promise<void> {
     if (busy) return;
+    busy = a.email;
     msg.hidden = true;
+    render();
     let res: ForgetDto;
     try {
       res = await call<ForgetDto>("forget_account", { email: a.email });
     } catch (e) {
+      busy = null;
       // до выхода: ничего не меняли (идёт скачивание, выйти не вышло)
       msg.textContent = errorText(asUiError(e));
       msg.hidden = false;
+      render();
       return;
     }
+    busy = null;
     if (res.signed_out) {
       resetForAccount(res.dropped);
       state.account = null;
@@ -158,12 +174,18 @@ register("accounts", () => {
       list.replaceChildren(h("p", { class: "loading" }, "Открываем…", h("span", { class: "spin", attrs: { "aria-hidden": "true" } })));
       return;
     }
+    if (accounts.length === 0) {
+      // все «Забыли» или первый запуск: не пустое место, а внятная строка
+      list.replaceChildren(h("p", { class: "empty", text: "Здесь пока пусто — добавьте Apple ID кнопкой ниже." }));
+      return;
+    }
     list.replaceChildren(...accounts.map(row));
   }
 
   const add = h("button", {
     class: "btn",
     text: "Добавить Apple ID",
+    attrs: { type: "button" },
     on: {
       click: () => {
         state.loginPrefill = null;

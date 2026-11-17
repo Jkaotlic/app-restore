@@ -12,19 +12,21 @@ export function resumeBanner(): HTMLElement {
   const box = h("div", { attrs: { "aria-live": "polite" } });
   let busy = false;
 
-  function show(jobs: PendingJobDto[], error: string | null = null): void {
+  /** `working` — идёт «Продолжить»/«Забыть»: кнопки выключены, «Продолжить» меняет текст. */
+  function show(jobs: PendingJobDto[], error: string | null = null, working = false): void {
     if (!jobs.length) {
       box.replaceChildren();
       return;
     }
     const resume = h("button", {
       class: "btn small",
-      text: "Продолжить",
-      attrs: { type: "button" },
+      text: working ? "Продолжаем…" : "Продолжить",
+      attrs: { type: "button", disabled: working },
       on: {
         click: safe(async () => {
           if (busy) return;
           busy = true;
+          show(jobs, null, true);
           try {
             const res = await call<ResumeDto>("resume_pending", { sameAppleId: state.sameAppleId ?? true });
             for (const p of res.jobs) jobInbox.register(state.jobs, resumedJob(p));
@@ -41,11 +43,20 @@ export function resumeBanner(): HTMLElement {
     const forget = h("button", {
       class: "btn ghost small",
       text: "Забыть",
-      attrs: { type: "button" },
+      attrs: { type: "button", disabled: working },
       on: {
         click: safe(async () => {
-          await call("forget_pending");
-          box.replaceChildren();
+          if (busy) return;
+          busy = true;
+          show(jobs, null, true);
+          try {
+            await call("forget_pending");
+            box.replaceChildren();
+          } catch (e) {
+            show(jobs, errorText(asUiError(e)));
+          } finally {
+            busy = false;
+          }
         }),
       },
     });
@@ -56,6 +67,9 @@ export function resumeBanner(): HTMLElement {
 
   void call<PendingJobDto[]>("pending_jobs")
     .then((jobs) => show(jobs))
-    .catch(() => undefined);
+    .catch((e) => {
+      // не узнали, что не закончено: молчать — как будто всё в порядке
+      box.replaceChildren(h("p", { class: "error", attrs: { role: "alert" }, text: errorText(asUiError(e)) }));
+    });
   return box;
 }

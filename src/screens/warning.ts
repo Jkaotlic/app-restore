@@ -24,11 +24,12 @@ register("warning", () => {
   const ok = h("button", {
     class: "btn",
     text: "Понятно",
-    attrs: { autofocus: true },
+    attrs: { autofocus: true, type: "button" },
     on: {
       click: safe(async () => {
         remember();
         ok.disabled = true;
+        ok.textContent = "Открываем…";
         await sessionReady;
         go(await startScreen());
       }),
