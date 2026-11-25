@@ -66,7 +66,7 @@ fn map_error(raw: &str) -> AppError {
     let e = raw.to_lowercase();
     let has = |p: &[&str]| p.iter().any(|x| e.contains(x));
     // метаданные версии не разобрались — это не сбой входа и не «Apple не отвечает»
-    if has(&["failed to parse release date", "invalid release date", "failed to read remote file size"]) {
+    if has(&["failed to parse release date", "invalid release date", "failed to read remote file size", "info plist does not contain a display version"]) {
         return AppError::VersionMetaBroken { released: broken_date(raw) };
     }
     // Inspect failure shape before words such as "2FA verification" or
@@ -395,6 +395,7 @@ mod tests {
         assert_eq!(parse_output(&date, 1), Err(AppError::VersionMetaBroken { released: Some("2022-04-04T11:59:04".into()) }));
         let size = err_line("failed to read remote file size");
         assert_eq!(parse_output(&size, 1), Err(AppError::VersionMetaBroken { released: None }));
+        assert_eq!(parse_output(&err_line("info plist does not contain a display version"), 1), Err(AppError::VersionMetaBroken { released: None }));
         let odd = err_line("failed to parse release date: invalid release date: soon");
         assert_eq!(parse_output(&odd, 1), Err(AppError::VersionMetaBroken { released: None }));
     }

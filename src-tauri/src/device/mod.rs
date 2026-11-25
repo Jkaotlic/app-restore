@@ -7,6 +7,7 @@ use std::path::Path;
 use tokio::sync::mpsc::Sender;
 
 pub mod idevice_impl;
+pub mod home_screen;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PhoneInfo {

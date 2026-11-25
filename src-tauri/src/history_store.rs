@@ -1,7 +1,7 @@
 //! Найденное в «Истории покупок Apple» — между запусками, по Apple ID (ключ как в accounts.json):
 //! только номер и название приложения, ни cookie, ни токенов сайта. Файл `history-found.json`
 //! пишется целиком через временный; битый — пропускается и пересобирается следующей записью.
-//! «Выйти» и «Забыть» убирают записи своего Apple ID, как ответы `owned-cache.json`.
+//! История переживает выход. «Забыть» удаляет её для выбранного Apple ID.
 use crate::history::{Found, MAX_ITEMS, clean_name, valid_id};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -85,7 +85,7 @@ impl HistoryStore {
         self.save(&d);
     }
 
-    /// «Выйти» и «Забыть»: найденное этим Apple ID больше не храним.
+    /// «Забыть»: найденное этим Apple ID больше не храним.
     pub fn forget(&self, email: &str) {
         let mut d = self.data.lock().unwrap();
         if d.remove(&crate::accounts::key(email)).is_some() {

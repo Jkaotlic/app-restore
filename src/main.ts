@@ -57,6 +57,7 @@ async function wire(): Promise<void> {
   await listen<HistoryProgress>("history_progress", ({ payload }) => currentScreen()?.onHistoryProgress?.(payload));
   // итог истории — в состояние программы: не теряется, если «Выбор» сейчас не открыт
   await listen<HistoryOutcome>("history", ({ payload }) => {
+    if ((payload.email ?? "").trim().toLowerCase() !== (state.account?.email ?? "").trim().toLowerCase()) return;
     state.history = rememberHistory(state.history, state.account?.email ?? null, payload.rows);
     currentScreen()?.onHistory?.(payload);
   });

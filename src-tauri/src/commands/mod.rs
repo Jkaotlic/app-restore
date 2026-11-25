@@ -198,7 +198,10 @@ impl AppState {
         let session = Arc::new(session);
         let home = dirs::home_dir().unwrap_or_else(|| data_dir.clone());
         let sessions = Arc::new(Sessions::real(data_dir.join("accounts.json"), &home));
-        let root = Library::default_root().unwrap_or_else(|| data_dir.join("Мои приложения"));
+        #[cfg(target_os = "macos")]
+        let root = data_dir.join("Мои приложения");
+        #[cfg(not(target_os = "macos"))]
+        let root = dirs::document_dir().as_deref().unwrap_or(&data_dir).join("Мои приложения");
         let library = Arc::new(Library::new(root));
         library.sweep_partials();
         // Копии, скачанные до папок по аккаунтам, — в папки их покупателей. Повтор безопасен.
@@ -927,7 +930,6 @@ pub async fn logout(state: State<'_, AppState>) -> Result<(), UiError> {
     // вышел сам — ответы этого Apple ID на диске больше не храним
     if let Some(e) = email {
         state.owned_cache.forget(&e);
-        state.history_store.forget(&e);
     }
     Ok(())
 }
@@ -1090,6 +1092,19 @@ pub async fn load_purchases(app: AppHandle, state: State<'_, AppState>) -> Resul
 #[tauri::command]
 pub async fn installed_apps(state: State<'_, AppState>, udid: String) -> Result<Vec<InstalledDto>, UiError> {
     state.installed_for(&udid).await.map_err(|e| ui("installed_apps", e))
+}
+
+#[tauri::command]
+pub async fn lookup_icon(state: State<'_, AppState>, bundle_id: String) -> Result<Option<i64>, UiError> {
+    crate::lookup::bundle_item(state.fetch.as_ref(), &bundle_id).await.map_err(|e| ui("lookup_icon", e))
+}
+
+#[tauri::command]
+pub async fn home_screen_apps(state: State<'_, AppState>, udid: String) -> Result<Vec<crate::device::home_screen::HomeIcon>, UiError> {
+    if !should_probe(&state.jobs.lock().unwrap()) {
+        return Err(ui("home_screen_apps", AppError::DownloadsRunning));
+    }
+    IdeviceHub::home_icons(&udid).await.map_err(|e| ui("home_screen_apps", e))
 }
 
 /// Чей Apple ID на телефоне против Apple ID программы (по покупателям установленных приложений).
@@ -1318,12 +1333,18 @@ pub async fn app_icons(state: State<'_, AppState>, track_ids: Vec<i64>) -> Resul
 /// «Выборе»; права проверяет `check_owned`. Скачивание — по trackId, покупки (`--purchase`) нет.
 #[tauri::command]
 pub async fn search_store(state: State<'_, AppState>, term: String) -> Result<Vec<RowDto>, UiError> {
-    let found = crate::lookup::search(state.fetch.as_ref(), &term).await.map_err(|e| ui("search_store", e))?;
-    let found = relevant(found, &term);
+    let numeric = term.len() >= 6 && term.len() <= 12 && term.bytes().all(|b| b.is_ascii_digit());
+    let bundle = term.contains('.') && term.split('.').all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+    let exact = numeric || bundle;
+    let found = if exact {
+        crate::lookup::identifier_apps(state.fetch.as_ref(), &term, numeric).await.map_err(|e| ui("search_store", e))?
+    } else {
+        relevant(crate::lookup::search(state.fetch.as_ref(), &term).await.map_err(|e| ui("search_store", e))?, &term)
+    };
     state.sizes.lock().unwrap().extend(found.iter().filter_map(|a| Some((a.track_id, a.size?))));
     state.min_os.lock().unwrap().extend(found.iter().filter_map(|a| Some((a.track_id, a.min_os.clone()?))));
     let screen = state.phone_taken.lock().unwrap().clone();
-    let rows = state.with_ctx(|ctx| store_rows(found, &store_taken(ctx, screen.as_ref()), ctx)).await;
+    let rows = state.with_ctx(|ctx| store_rows(found, &if exact { HashSet::new() } else { store_taken(ctx, screen.as_ref()) }, ctx)).await;
     *state.store_ids.lock().unwrap() = rows.iter().map(|r| r.track_id).collect();
     Ok(rows)
 }

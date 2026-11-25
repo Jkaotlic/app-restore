@@ -269,6 +269,21 @@ pub fn url_encode(s: &str) -> String {
     out
 }
 
+/// Match the exact bundle identifier. A name alone is insufficient for automatic selection.
+pub async fn bundle_item(fetch: &dyn Fetch, bundle: &str) -> Result<Option<i64>, AppError> {
+    if bundle.is_empty() || bundle.len() > 255 {
+        return Ok(None);
+    }
+    Ok(identifier_apps(fetch, bundle, false).await?.first().map(|app| app.track_id))
+}
+
+pub async fn identifier_apps(fetch: &dyn Fetch, term: &str, numeric: bool) -> Result<Vec<StoreApp>, AppError> {
+    let field = if numeric { "id" } else { "bundleId" };
+    let url = format!("{LOOKUP_URL}?{field}={}&country=ru&entity=software", url_encode(term));
+    let results = parse_search(&fetch.get(&url).await?)?;
+    Ok(results.into_iter().filter(|app| if numeric { app.track_id.to_string() == term } else { app.bundle_id.eq_ignore_ascii_case(term) }).collect())
+}
+
 fn search_url(base: &str, term: &str) -> String {
     format!("{base}?term={}&country=ru&entity=software&limit={SEARCH_LIMIT}", url_encode(term))
 }

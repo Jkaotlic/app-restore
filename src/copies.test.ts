@@ -39,7 +39,7 @@ describe("copyWarning", () => {
   const copy = c("Сбер", "me***@example.com");
   it("only when the phone's Apple ID is different", () => {
     expect(copyWarning(copy, { kind: "different", phone_masked: "ow***@example.com" })).toBe(
-      "При первом запуске iPhone попросит войти в me***@example.com: нужен пароль этого Apple ID",
+      "Покупатель файла — me***@example.com. Копию можно перенести. Если iPhone запросит данные покупателя, отмените запрос.",
     );
     expect(copyWarning(copy, { kind: "same" })).toBeNull();
     expect(copyWarning(copy, { kind: "unknown" })).toBeNull();

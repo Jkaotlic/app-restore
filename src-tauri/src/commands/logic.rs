@@ -116,6 +116,9 @@ pub struct RowDto {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct RowsDto {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub history_rows: Vec<RowDto>,
+    pub purchase_ids: Option<Vec<i64>>,
     pub rows: Vec<RowDto>,
     pub ru_check_failed: bool,
     /// Покупки не загрузились (например, сломан вход): в списке каталог и сохранённые копии.
@@ -154,7 +157,7 @@ pub fn row_dto(r: AppRow) -> RowDto {
 }
 
 pub fn rows_dto(r: Rows) -> RowsDto {
-    RowsDto { rows: r.rows.into_iter().map(row_dto).collect(), ru_check_failed: r.ru_check_failed, purchases_error: None, source_udid: None }
+    RowsDto { history_rows: vec![], rows: r.rows.into_iter().map(row_dto).collect(), ru_check_failed: r.ru_check_failed, purchases_error: None, purchase_ids: None, source_udid: None }
 }
 
 /// Приложение на телефоне для интерфейса: {bundle_id, name, version, item_id}.
@@ -347,7 +350,7 @@ pub fn catalog_rows(ctx: &RowCtx) -> RowsDto {
             d
         })
         .collect();
-    RowsDto { rows: with_sizes(with_unknown(rows, ctx), ctx), ru_check_failed: false, purchases_error: None, source_udid: None }
+    RowsDto { history_rows: vec![], rows: with_sizes(with_unknown(rows, ctx), ctx), ru_check_failed: false, purchases_error: None, purchase_ids: None, source_udid: None }
 }
 
 /// Дописывает строки копий неизвестного Apple ID: только с trackId, которого нет ни в строках,
@@ -386,6 +389,7 @@ pub fn rows_without_purchases(ctx: &RowCtx, error: AppError) -> RowsDto {
 /// Полный список после загрузки покупок. Если Lookup ответил, в конце — группа «С этого iPhone»
 /// (`phone_rows`); `present_ru` должен покрывать и `phone_candidates`.
 pub fn purchase_rows(ctx: &RowCtx, purchases: Vec<OwnedApp>, present_ru: Option<&HashSet<i64>>) -> RowsDto {
+    let purchase_ids = Some(purchases.iter().map(|app| app.id).collect());
     let mut rows = crate::catalog::build_rows(ctx.catalog, ctx.owned, purchases, present_ru, ctx.saved);
     apply_versions(&mut rows.rows, ctx.installed, ctx.latest, ctx.saved);
     let d = rows_dto(rows);
@@ -394,7 +398,7 @@ pub fn purchase_rows(ctx: &RowCtx, purchases: Vec<OwnedApp>, present_ru: Option<
         let taken: HashSet<i64> = list.iter().map(|r| r.track_id).collect();
         list.extend(phone_rows(ctx, &taken, present));
     }
-    RowsDto { rows: with_sizes(list, ctx), source_udid: present_ru.and(ctx.source_udid.map(String::from)), ..d }
+    RowsDto { purchase_ids, rows: with_sizes(list, ctx), source_udid: present_ru.and(ctx.source_udid.map(String::from)), ..d }
 }
 
 /// Кандидаты в «С этого iPhone»: установленные приложения с App Store id, которых нет в `taken`
@@ -525,10 +529,9 @@ pub fn history_row(f: &Found, ctx: &RowCtx) -> RowDto {
 }
 
 /// Строки «Из истории покупок», найденные этим Apple ID в прошлые заходы (`history_store`):
-/// в конец списка, кроме уже стоящих в нём (каталог, копии).
+/// отдельный источник для поиска даже при пересечении с каталогом и покупками.
 pub fn with_history(mut d: RowsDto, found: &[Found], ctx: &RowCtx) -> RowsDto {
-    let have: HashSet<i64> = d.rows.iter().map(|r| r.track_id).collect();
-    d.rows.extend(found.iter().filter(|f| !have.contains(&f.id)).map(|f| history_row(f, ctx)));
+    d.history_rows = found.iter().map(|f| history_row(f, ctx)).collect();
     d
 }
 
@@ -1525,7 +1528,7 @@ mod tests {
     }
 
     #[test]
-    fn with_history_appends_remembered_rows_not_already_listed() {
+    fn with_history_keeps_all_entries_separate_from_catalog() {
         let mut c = Ctx::new(vec![removed(900, "Сбер")]);
         c.owned = [(555555, true)].into();
         let d = catalog_rows(&c.get());
@@ -1533,8 +1536,8 @@ mod tests {
         let d = with_history(d, &found, &c.get());
         assert_eq!(d.rows.iter().filter(|r| r.track_id == 900).count(), 1);
         assert_eq!(d.rows.iter().find(|r| r.track_id == 900).unwrap().source, "removed");
-        let h: Vec<(i64, &str, &str, Option<bool>)> = d.rows.iter().filter(|r| r.source == "history").map(|r| (r.track_id, r.name.as_str(), r.source, r.owned)).collect();
-        assert_eq!(h, vec![(555555, "Почта", "history", Some(true)), (666666, "Приложение 666666", "history", None)]);
+        let h: Vec<(i64, &str, &str, Option<bool>)> = d.history_rows.iter().map(|r| (r.track_id, r.name.as_str(), r.source, r.owned)).collect();
+        assert_eq!(h, vec![(900, "Сбер", "history", None), (555555, "Почта", "history", Some(true)), (666666, "Приложение 666666", "history", None)]);
     }
 
     #[test]

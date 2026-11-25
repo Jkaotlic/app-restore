@@ -1,6 +1,6 @@
 [package]
 name = "app-restore"
-version = "0.3.7"
+version = "0.3.8"
 description = "Restores removed iPhone apps from your own Apple ID purchases"
 authors = ["Jkaotlic"]
 repository = "https://github.com/Jkaotlic/app-restore"
@@ -34,7 +34,7 @@ zip = { version = "9", default-features = false, features = ["deflate"] }
 plist = "1"
 fs2 = "0.4"
 dirs = "6"
-idevice = { version = "=0.1.68", features = ["usbmuxd", "afc", "installation_proxy"] }
+idevice = { version = "=0.1.68", features = ["usbmuxd", "afc", "installation_proxy", "springboardservices"] }
 # Снимки сессий ipatool: Keychain на Mac, Credential Manager на Windows.
 keyring = { version = "3", features = ["apple-native", "windows-native"] }
 base64 = "0.22"

@@ -126,6 +126,17 @@ impl DeviceHub for IdeviceHub {
 }
 
 impl IdeviceHub {
+    pub async fn home_icons(udid: &str) -> Result<Vec<super::home_screen::HomeIcon>, AppError> {
+        deadline(BROWSE_LIMIT, "home screen", async {
+            let mut mux = connect_mux().await?;
+            let dev = mux.get_device(udid).await.map_err(app_err)?;
+            let provider = dev.to_provider(UsbmuxdAddr::default(), LABEL);
+            let mut service = idevice::springboardservices::SpringBoardServicesClient::connect(&provider).await.map_err(app_err)?;
+            let state = service.get_icon_state(Some("2")).await.map_err(app_err)?;
+            super::home_screen::app_icons(&state).ok_or_else(|| AppError::DeviceRejected { reason: "iPhone вернул неизвестный формат экрана Домой".into() })
+        }).await
+    }
+
     async fn browse(&self, udid: &str) -> Result<Vec<InstalledApp>, AppError> {
         let mut mux = connect_mux().await?;
         let dev = mux.get_device(udid).await.map_err(app_err)?;

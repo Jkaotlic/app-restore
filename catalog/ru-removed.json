@@ -67,7 +67,7 @@
   {
     "track_id": 1166642457,
     "name": "СберМаркет",
-    "aliases": [],
+    "aliases": ["Купер", "Kuper", "Instamart"],
     "letter": "С",
     "color": "#21A038",
     "category": "travel",
@@ -2190,5 +2190,41 @@
     "source": "https://github.com/kda2495/IPA_Downloader/blob/c137feeb43b46e01db79d001f9d52da3c85774ed/Files/AppsList.txt#L312 https://web.archive.org/web/20231211035856/https://apps.apple.com/ru/app/%D0%B2%D1%81%D0%BA-%D0%B0%D1%83%D0%BA%D1%86%D0%B8%D0%BE%D0%BD/id1478264893",
     "status": "removed",
     "confidence": "medium"
+  },
+  {
+    "track_id": 6739530834,
+    "name": "MAX",
+    "aliases": ["МАКС", "Мессенджер MAX"],
+    "letter": "M",
+    "color": "#2852CB",
+    "category": "social",
+    "source": "https://sirius-bridge.ru/apps/max/ https://apps.apple.com/ru/app/id6739530834"
+  },
+  {
+    "track_id": 6762630283,
+    "name": "Купер — доставка супер",
+    "aliases": ["Kuper", "СберМаркет"],
+    "letter": "К",
+    "color": "#16864B",
+    "category": "travel",
+    "source": "https://t.me/s/kuper_ru/4829 https://apps.apple.com/ru/app/id6762630283"
+  },
+  {
+    "track_id": 6505025679,
+    "name": "Купер: заказать еду и продукты",
+    "aliases": ["Kuper", "СберМаркет"],
+    "letter": "К",
+    "color": "#16864B",
+    "category": "travel",
+    "source": "https://t.me/kuper_ru/3139 https://sirius-bridge.ru/apps/kuper-dostavka-super/"
+  },
+  {
+    "track_id": 6446631659,
+    "name": "СуперМаркет",
+    "aliases": ["Купер", "Kuper", "СберМаркет"],
+    "letter": "С",
+    "color": "#16864B",
+    "category": "travel",
+    "source": "https://www.sberbank.ru/sberprime/static/partners_docs/partners_12.05.2026.pdf"
   }
 ]

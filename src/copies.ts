@@ -28,7 +28,7 @@ export function groupCopies(copies: CopyDto[], query: string): CopyGroup[] {
 /** Предупреждение под выбранной копией: покупатель не тот, что на телефоне. */
 export function copyWarning(c: CopyDto, m: AccountMatchDto | null): string | null {
   if (m?.kind !== "different" || !c.purchaser_masked) return null;
-  return `При первом запуске iPhone попросит войти в ${c.purchaser_masked}: нужен пароль этого Apple ID`;
+  return `Покупатель файла — ${c.purchaser_masked}. Копию можно перенести. Если iPhone запросит данные покупателя, отмените запрос.`;
 }
 
 /** Кнопка «Поставить на {телефон}». Без телефона или копии — выключена; «только для iPad» на iPhone — тоже. */

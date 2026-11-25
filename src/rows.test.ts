@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import catalog from "../catalog/ru-removed.json";
 import { downloadOnlyNote } from "./versions";
 import {
   addLinkRow,
@@ -137,6 +138,20 @@ describe("foundText", () => {
 });
 
 describe("matchesRow", () => {
+  it("finds the exact App Store or bundle ID", () => {
+    const row = cat(349863564, "Пример", { bundle_id: "ru.example.App" });
+    for (const q of ["349863564", "id349863564", "https://apps.apple.com/ru/app/test/id349863564?l=ru", "ru.example.app"]) expect(matchesRow(row, q)).toBe(true);
+    expect(matchesRow(row, "349863565")).toBe(false);
+  });
+  it("finds MAX and the historical Купер releases by either spelling", () => {
+    const rows = catalog.map((app) => cat(app.track_id, app.name, { aliases: app.aliases }));
+    const ids = (query: string) => rows.filter((r) => matchesRow(r, query)).map((r) => r.track_id);
+    for (const query of ["Max", "Макс"]) expect(ids(query)).toContain(6739530834);
+    for (const query of ["Купер", "Kuper", "СберМаркет"]) {
+      expect(ids(query)).toEqual(expect.arrayContaining([1166642457, 6446631659, 6505025679, 6762630283]));
+    }
+  });
+
   const sbol = cat(2, "СБОЛ", { aliases: ["Сбер", "СберБанк Онлайн"] });
   it("matches the name or any alias, ignoring case and ё", () => {
     expect(matchesRow(sbol, "сбер")).toBe(true);
@@ -257,7 +272,7 @@ describe("groupPick", () => {
 
 describe("emptySearchText", () => {
   it("points to the App Store link", () => {
-    expect(emptySearchText(" Сбер ")).toBe("Ничего не нашлось по «Сбер». Попробуйте другое название или вставьте ссылку из App Store ниже.");
+    expect(emptySearchText(" Сбер ")).toBe("Ничего не нашлось по «Сбер». Попробуйте другое название или проверьте историю покупок.");
   });
 });
 

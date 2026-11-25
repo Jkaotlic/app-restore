@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HISTORY_HINT, HISTORY_STEPS, historyProgressText, historyResultText, mergeHistoryRows, rememberHistory, takeHistory, keptHistory } from "./history";
-import { canSelect, idsToCheck, mergePurchases, pendingChecks, ownedCell, visibleGroups, initialOwned } from "./rows";
+import { dropStoreRows, matchesRow, canSelect, idsToCheck, mergePurchases, pendingChecks, ownedCell, visibleGroups, initialOwned } from "./rows";
 import type { RowDto } from "./types";
 
 function row(id: number, name: string, over: Partial<RowDto> = {}): RowDto {
@@ -57,6 +57,21 @@ describe("history group", () => {
   it("survive a later purchases load unless purchases now have them", () => {
     const merged = mergePurchases([hist(20, "Сила"), hist(21, "Б")], [row(21, "Б")]);
     expect(merged.map((r) => [r.track_id, r.source])).toEqual([[21, "purchase"], [20, "history"]]);
+  });
+
+  it("keeps the historical name searchable when purchases supply a new name", () => {
+    const saved = [hist(555555, "Прежнее имя")];
+    const rows = mergeHistoryRows(mergePurchases(saved, [row(555555, "Новое имя")]), saved);
+    expect(rows).toHaveLength(1);
+    expect(["прежнее", "новое", "555555"].every(q => matchesRow(rows[0], q))).toBe(true);
+  });
+
+  it("retains a cached result after clearing an App Store query", () => {
+    const saved = hist(555555, "Из истории");
+    const hit = row(555555, "Из магазина", { source: "store", bundle_id: "ru.example.app" });
+    const rows = dropStoreRows(mergeHistoryRows([hit], [saved]), new Set());
+    expect(rows).toHaveLength(1);
+    expect(["истории", "магазина", "ru.example.app"].every(q => matchesRow(rows[0], q))).toBe(true);
   });
 
   it("adds only rows that are not on screen yet", () => {
@@ -121,11 +136,11 @@ describe("history texts", () => {
     expect(HISTORY_STEPS).toEqual([
       "Войдите своим Apple ID на странице Apple",
       "Пролистайте список покупок вниз до самого конца — так Apple подгружает все приложения",
-      "Окно закроется само. Найденное появится здесь и запомнится — второй раз входить не нужно",
+      "Когда появится «Готово», закройте окно Apple. Найденное сохранится и появится в поиске",
     ]);
   });
 
   it("hint", () => {
-    expect(HISTORY_HINT).toBe("Скрыто или пропало из списка покупок. Скачать можно, если Apple ещё отдаёт приложение");
+    expect(HISTORY_HINT).toBe("Найдено в истории этого Apple ID. Доступность скачивания проверяется отдельно.");
   });
 });

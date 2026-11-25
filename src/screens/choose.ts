@@ -1,4 +1,5 @@
 import { asUiError, call, go, refreshSidebar, register, safe, setSidebarExtra, state, targetIsIphone, targetPhone, type Job } from "../app";
+import { homeIconPicker, type HomeIcon } from "./homeicons";
 import { h } from "../dom";
 import { resumeBanner } from "./resume";
 import { batchText, dropMessages, mergePending, runBatch } from "../drop";
@@ -9,14 +10,16 @@ import {
   applyOwned,
   applyOwnedRow,
   barState,
+  NO_PHONE_HINT,
   canSelect,
   dropStoreRows,
   replaceStoreRows,
   storeTerm,
+  searchId,
   chipCounts,
   chipList,
   emptySearchText,
-  foundText,
+  matchesRow,
   groupPick,
   iconFor,
   idsToCheck,
@@ -113,7 +116,22 @@ register("choose", () => {
   const saved = state.choice;
   const selected = new Set<number>(saved?.selected);
   let started = false;
+  let reviewing = false;
+  let searchRevision = 0;
   let query = "";
+  let historyOnly = false;
+  let historyRows: RowDto[] = [];
+  let historyIds = new Set<number>();
+  let purchaseIds: Set<number> | null = null;
+  const pageSize = 60;
+  const limits = new Map<GroupKey, number>();
+  function indexHistory(entries: RowDto[]) {
+    historyRows = mergeHistoryRows(historyRows, entries);
+    historyIds = new Set(historyRows.map(row => row.track_id));
+  }
+  function withSaved(base: RowDto[]) {
+    return mergeHistoryRows(base, historyRows);
+  }
   let chip: Chip = "all";
   let loaded = false;
   /** Покупки ещё грузятся; `progress` — последняя страница. */
@@ -234,15 +252,17 @@ register("choose", () => {
     class: "input",
     attrs: {
       type: "search",
-      placeholder: "Название, например «Сбер» или «ВК»",
-      "aria-label": "Поиск по каталогу, покупкам и телефону",
+      placeholder: "Название, App Store ID, Bundle ID или ссылка",
+      "aria-label": "Поиск приложений",
       title: "Ищет везде, включая App Store, и по прежним названиям",
       autocomplete: "off",
       spellcheck: "false",
     },
     on: {
       input: () => {
+        searchRevision++;
         query = search.value;
+        limits.clear();
         scheduleStore();
         renderChips();
         renderList();
@@ -287,7 +307,7 @@ register("choose", () => {
   const tips = h(
     "ul",
     { class: "tips", attrs: { id: "find-tips" } },
-    ...HELP_STEPS.map((st) =>
+    ...HELP_STEPS.slice(1).map((st) =>
       h(
         "li",
         {},
@@ -314,7 +334,7 @@ register("choose", () => {
   async function helpGo(a: HelpAction) {
     if (a.kind === "accounts") return go("accounts");
     if (a.kind === "phone") return go("phone");
-    if (!purchasesLoading) await loadPurchases();
+    if (!purchasesLoading) { closeFind(); await loadPurchases(); }
   }
 
   // «Найти всё, что вы скачивали»: окно Apple, вход — сам человек; сюда приходят только номера и названия.
@@ -325,7 +345,7 @@ register("choose", () => {
   let historyNote: { text: string; error: boolean; show: boolean } | null = null;
   const historyBtn = h("button", {
     class: "btn ghost small",
-    text: "Найти всё, что вы скачивали",
+    text: "Загрузить историю Apple",
     attrs: { type: "button", "aria-controls": "history-steps" },
     on: { click: () => setHistoryPhase("explain") },
   });
@@ -350,18 +370,34 @@ register("choose", () => {
     historySteps,
     historyMsg,
   );
-  const findHead = h("h3", { text: "Не нашли приложение?", attrs: { tabindex: "-1" } });
-  const findMore = h("section", { class: "findmore", attrs: { "aria-label": "Не нашли приложение?" } }, findHead, historyRow, linkForm, h("div", { class: "fm-row fm-tips" }, tipsBtn, tips));
+  const findHead = h("h3", { text: "Где искать", attrs: { tabindex: "-1", id: "missing-title" } });
+  const savedShortcut = h("button", { class: "btn ghost small", text: "Открыть сохранённую историю", on: { click: showHistoryGroup } });
+  const findMore = h("section", { class: "findmore scroll", attrs: { id: "missing-app", "aria-labelledby": "missing-title" } },
+    h("div", { class: "workflow-line" }, findHead, h("button", { class: "link", text: "К поиску", on: { click: () => closeFind() } })),
+    savedShortcut, historyRow,
+    h("details", { class: "find-alternative" }, h("summary", { text: "Проверить скрытые покупки на iPhone" }),
+      h("p", { text: HELP_STEPS[0].text }), h("button", { class: "btn ghost small", text: "Обновить покупки", on: { click: safe(() => helpGo({ kind: "refresh", label: "Обновить покупки" })) } })),
+    linkForm, h("div", { class: "fm-row fm-tips" }, tipsBtn, tips));
+  findMore.hidden = true;
+  function openFind() {
+    findMore.hidden = false;
+    main.hidden = chips.hidden = searchTools.hidden = true;
+    heading.textContent = "Поиск пропавшего приложения";
+    footer.hidden = true;
+    findHead.focus();
+    findMore.scrollTop = 0;
+  }
+  function closeFind() {
+    findMore.hidden = true;
+    main.hidden = chips.hidden = searchTools.hidden = reviewing;
+    footer.hidden = false;
+    heading.textContent = "Приложения";
+    chips.hidden = historyOnly || reviewing;
+    if (!reviewing) findLink.focus();
+  }
   const findLink = h("button", {
-    class: "link find-link",
-    text: "Не нашли приложение?",
-    attrs: { type: "button", title: "К блоку под списком: история покупок Apple, ссылка App Store и другие способы" },
-    on: {
-      click: () => {
-        findMore.scrollIntoView({ block: "start", behavior: "smooth" });
-        findHead.focus({ preventScroll: true });
-      },
-    },
+    class: "btn missing-action", text: "Не нашли приложение?",
+    attrs: { type: "button", "aria-controls": "missing-app" }, on: { click: openFind },
   });
 
   function setHistoryPhase(phase: HistoryPhase, focus = false) {
@@ -400,9 +436,11 @@ register("choose", () => {
 
   /** К группе «Из истории покупок»: прокрутка и фокус на первую строку. */
   function showHistoryGroup() {
-    const sec = list.querySelector<HTMLElement>('section[data-group="history"]');
-    sec?.scrollIntoView({ block: "start", behavior: "smooth" });
-    sec?.querySelector<HTMLElement>(".tile")?.focus({ preventScroll: true });
+    closeFind();
+    search.value = query = "";
+    onlyMissing.checked = false;
+    selectCollection(true);
+    search.focus();
   }
 
   async function openHistory() {
@@ -427,12 +465,13 @@ register("choose", () => {
   function onHistory(o: HistoryOutcome) {
     setHistoryPhase("idle");
     historyBtn.textContent = "Найти ещё раз";
-    const t = takeHistory(rows, owned, o.rows);
+    indexHistory(o.rows);
+    const t = takeHistory(rows, owned, historyRows);
     rows = t.rows;
     owned = t.owned;
     const text = o.error ?? historyResultText(o.found, t.added.length);
-    historyStatus(text, { error: o.error !== null, show: t.added.length > 0 });
-    historyNote = { text, error: o.error !== null, show: t.added.length > 0 };
+    historyStatus(text, { error: o.error !== null, show: o.found > 0 });
+    historyNote = { text, error: o.error !== null, show: o.found > 0 };
     if (loaded) {
       renderChips();
       renderList();
@@ -523,6 +562,7 @@ register("choose", () => {
           { class: "tt" },
           h("span", { class: "nm" }, isNewRow(r, state.newIds) ? h("span", { class: "badge-new", text: "Новое" }) : null, r.name),
           h("span", { class: `sub ${sub.tone}`, text: sub.text }),
+          !historyOnly && r.source !== "history" && historyIds.has(r.track_id) ? h("span", { class: "history-origin", text: "Есть в истории Apple ID" }) : null,
           sub.note ? h("span", { class: "rnote", text: sub.note }) : null,
         ),
       ),
@@ -637,7 +677,7 @@ register("choose", () => {
       if (res.source_udid !== udid) throw new Error("source mismatch");
       const incoming = res.rows;
       sourceUdid = udid;
-      rows = replacePhoneRows(rows, incoming);
+      rows = withSaved(replacePhoneRows(rows, incoming));
       for (const r of incoming) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
       // новый вызов отменяет прежний: отправляем всё, что ещё ждёт проверки
       if (idsToCheck(incoming).length) void call("check_owned", { trackIds: pendingChecks(rows, owned) }).catch(() => undefined);
@@ -653,7 +693,7 @@ register("choose", () => {
   /** Пауза 400 мс после ввода; новый ввод отменяет прежний запрос (его ответ не берём). */
   function scheduleStore() {
     clearTimeout(storeTimer);
-    const term = storeTerm(query);
+    const term = historyOnly ? null : storeTerm(query);
     storeReq++;
     if (term === null) {
       storeStatus = "idle";
@@ -667,9 +707,10 @@ register("choose", () => {
   async function searchStore(term: string) {
     const req = ++storeReq;
     try {
-      const found = await call<RowDto[]>("search_store", { term });
+      const found = await call<RowDto[]>("search_store", { term: searchId(term) ?? term });
       if (req !== storeReq) return;
-      rows = replaceStoreRows(rows, found, selected, term);
+      const bundles = new Map(found.filter((a) => a.bundle_id).map((a) => [a.track_id, a.bundle_id]));
+      rows = replaceStoreRows(rows.map((r) => !r.bundle_id && bundles.has(r.track_id) ? { ...r, bundle_id: bundles.get(r.track_id)! } : r), found, selected, term);
       storeAnswered = term;
       for (const r of rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
       storeStatus = "idle";
@@ -760,11 +801,14 @@ register("choose", () => {
       h(
         "dl",
         { class: "insp-facts" },
+        ...(historyIds.has(r.track_id) ? fact("Источник", "История этого Apple ID") : []),
         ...fact("Apple ID", own.text || "—"),
-        ...fact("Доступно", r.available_version || "—"),
-        ...fact(deviceCol(), ph.newer ? `${ph.have} → ${ph.newer}` : ph.have),
-        ...fact("Размер", sizeText(r.size_bytes)),
-        ...fact("Нужна iOS", r.min_ios || "—"),
+        ...(r.available_version ? fact("Версия", r.available_version) : []),
+        ...(withPhone ? fact(deviceCol(), ph.newer ? `${ph.have} → ${ph.newer}` : ph.have) : []),
+        ...(r.size_bytes !== null ? fact("Размер", sizeText(r.size_bytes)) : []),
+        ...(r.track_id > 0 ? fact("App Store ID", String(r.track_id)) : []),
+        ...(r.bundle_id ? fact("Bundle ID", r.bundle_id) : []),
+        ...(r.min_ios ? fact("Нужна iOS", r.min_ios) : []),
       ),
     ];
     if (sub.note) parts.push(h("p", { class: "note", text: sub.note }));
@@ -830,6 +874,8 @@ register("choose", () => {
           on: {
             click: () => {
               chip = c.key;
+              limits.clear();
+              list.scrollTop = 0;
               renderChips();
               renderList();
             },
@@ -857,7 +903,8 @@ register("choose", () => {
     });
     groupLinks.push({ key, rows: items, btn });
     const grid = h("div", { class: "trows" });
-    for (const r of items) {
+    const limit = limits.get(key) ?? pageSize;
+    for (const r of items.slice(0, limit)) {
       const t = tileEl(r);
       tiles.set(r.track_id, t);
       const cell = r.source === "phone" ? phoneTile(r, t) : isNewRow(r, state.newIds) ? newTile(r, t) : t;
@@ -871,6 +918,12 @@ register("choose", () => {
       ...extra,
       items.length ? grid : null,
     );
+    if (items.length > limit) sec.append(h("button", { class: "more-results", text: "Показать ещё " + Math.min(pageSize, items.length - limit),
+      on: { click: () => {
+        limits.set(key, limit + pageSize);
+        renderList();
+        tiles.get(items[limit].track_id)?.focus();
+      } } }));
     sec.dataset.group = key;
     return sec;
   }
@@ -1119,21 +1172,31 @@ register("choose", () => {
       return;
     }
     const focusedId = (document.activeElement as HTMLElement | null)?.closest?.<HTMLElement>(".tile")?.dataset.id;
-    const groups = visibleGroups(rows, chip, query, withPhone);
-    reportVisible(visibleChecks(groups, owned));
-    found.textContent = foundText(rows, chip, query, withPhone);
-    const plain = chip === "all" && query.trim() === "";
+    savedShortcut.hidden = historyIds.size === 0;
+    savedShortcut.textContent = "Уже в истории · " + historyIds.size + " — посмотреть";
+    historyTab.textContent = "Из истории Apple ID · " + historyIds.size;
+    allTab.setAttribute("aria-pressed", String(!historyOnly));
+    historyTab.setAttribute("aria-pressed", String(historyOnly));
+    compare.hidden = !historyOnly;
+    onlyMissing.disabled = purchaseIds === null;
+    compareLabel.textContent = purchaseIds === null ? "Сравнение доступно после загрузки покупок" : "Нет в обычных покупках";
+    const groups = historyOnly ? [{ key: "history" as const, title: "Из истории покупок", rows: rows.filter(row =>
+      historyIds.has(row.track_id) && matchesRow(row, query) && !(onlyMissing.checked && purchaseIds?.has(row.track_id)))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru")) }] : visibleGroups(rows, chip, query, withPhone);
+    reportVisible(visibleChecks(groups.map(g => ({ ...g, rows: g.rows.slice(0, limits.get(g.key) ?? pageSize) })), owned));
+    found.textContent = "Найдено " + groups.reduce((total, g) => total + g.rows.length, 0);
+    const plain = !historyOnly && chip === "all" && query.trim() === "";
     const parts: HTMLElement[] = banners();
     // колонки — один закреплённый заголовок над всеми группами
     const table = h(
       "div",
-      { class: "tbl" },
+      { class: withPhone ? "tbl" : "tbl without-device" },
       h("div", { class: "thead", attrs: { "aria-hidden": "true" } }, h("span"), h("span", { text: "Приложение" }), h("span", { text: "На этом Apple ID" }), h("span", { text: deviceCol() }), h("span", { text: "Размер" })),
     );
     parts.push(table);
     for (const g of groups) {
       const extra: HTMLElement[] = [];
-      if (g.key === "catalog" && !g.rows.length && plain) extra.push(h("p", { class: "empty", text: "Пока пусто. Добавьте приложение по ссылке — блок «Не нашли приложение?» ниже." }));
+      if (g.key === "catalog" && !g.rows.length && plain) extra.push(h("p", { class: "empty", text: "В каталоге пока нет приложений." }));
       const head: HTMLElement[] = [];
       if (g.key === "catalog" && g.rows.length && state.account) {
         renderSweep();
@@ -1164,12 +1227,17 @@ register("choose", () => {
       if (g.rows.length || extra.length) table.append(groupSection(g.key, g.title, g.rows, extra, head));
     }
     if (groups.every((g) => !g.rows.length) && !plain) {
-      parts.push(h("p", { class: "empty", text: query.trim() ? emptySearchText(query) : "В этом фильтре пусто." }));
+      parts.push(h("p", { class: "empty", text: query.trim() ? emptySearchText(query) : historyOnly && !historyIds.size ? "История пока пуста. Откройте страницу Apple, чтобы добавить ранее скачанные приложения." : "В этом фильтре нет приложений." }));
+      if ((query.trim() || historyOnly) && storeStatus !== "loading") parts.push(h("button", { class: "btn ghost small", text: "Проверить историю Apple ID", on: { click: openFind } }));
       if (purchasesLoading) parts.push(progressEl());
     }
-    parts.push(findMore);
+
     list.replaceChildren(...parts);
     if (focusedId) tiles.get(Number(focusedId))?.focus();
+    if (curId === null || !tiles.has(curId)) {
+      curId = tiles.keys().next().value ?? null;
+      if (curId !== null) tiles.get(curId)?.classList.add("cur");
+    }
     syncSelection();
     void fetchIcons();
   }
@@ -1205,8 +1273,22 @@ register("choose", () => {
   function renderBar() {
     const items = chosen();
     const { count, size } = selectionSummary(items);
-    const label = selectionLabel(count, hiddenCount(items, chip, query, withPhone));
-    countEl.textContent = label;
+    const hidden = historyOnly ? items.filter(r => !historyIds.has(r.track_id) || !matchesRow(r, query) || (onlyMissing.checked && purchaseIds?.has(r.track_id))).length : hiddenCount(items, chip, query, withPhone);
+    const label = selectionLabel(count, hidden);
+    countEl.textContent = reviewing ? selectionLabel(count, 0) : label;
+    iconsBtn.disabled = !targetPhone();
+    iconsBtn.title = iconsBtn.disabled ? "Выберите подключённый iPhone на предыдущем шаге" : "Прочитать значки экрана Домой";
+    reviewBtn.hidden = reviewing;
+    reviewBtn.disabled = count === 0;
+    startBtn.hidden = onlyBtn.hidden = !reviewing;
+    if (reviewing) {
+      const target = targetPhone()?.name;
+      review.replaceChildren(h("p", { class: "review-target", text: target ? "Установить на " + target + " или сохранить копии на компьютере." : NO_PHONE_HINT }),
+        ...items.map((r) => h("div", { class: "review-item" }, appIcon(r), h("div", {}, h("strong", { text: r.name }),
+          h("small", { text: state.versions.get(r.track_id)?.display || (toIphone() && tooOldNote(r.min_ios, phoneIos()) ? "Только скачивание · требуется более новая iOS" : r.has_saved_copy ? "Есть локальная копия" : "Скачать из покупок Apple ID") })),
+          h("button", { class: "link", text: "Убрать", attrs: { "aria-label": "Убрать " + r.name }, on: { click: () => { setSelected(r.track_id, false); syncSelection(); } } }))));
+      if (!count) review.append(h("p", { class: "empty", text: "Ничего не выбрано. Вернитесь к поиску, чтобы добавить приложение." }));
+    }
     sizeEl.textContent = count && size ? size : "";
     sizeEl.hidden = !sizeEl.textContent;
     clearBtn.hidden = count === 0;
@@ -1216,7 +1298,7 @@ register("choose", () => {
     onlyBtn.disabled = bar.only.disabled;
     onlyBtn.textContent = bar.only.text;
     barHint.textContent = bar.hint ?? "";
-    barHint.hidden = !bar.hint;
+    barHint.hidden = !reviewing || !bar.hint;
   }
 
   function clearAll() {
@@ -1244,6 +1326,7 @@ register("choose", () => {
   }
 
   function onPurchases(d: RowsDto) {
+    purchaseIds = d.purchase_ids ? new Set(d.purchase_ids) : null;
     dto = d;
     // покупки построены для прежнего источника, а человек уже выбрал другой: группу перестроить
     const { rows: incoming, stale } = purchasesForSource(rows, d.rows, d.source_udid, chosenSource);
@@ -1251,7 +1334,7 @@ register("choose", () => {
       sourceUdid = d.source_udid;
       sourceError = null;
     }
-    rows = mergePurchases(rows, incoming);
+    rows = withSaved(mergePurchases(rows, incoming));
     for (const r of rows) if (!owned.has(r.track_id)) owned.set(r.track_id, initialOwned([r]).get(r.track_id)!);
     purchasesLoading = false;
     if (loaded) {
@@ -1319,7 +1402,7 @@ register("choose", () => {
 
   /** Строка из `add_by_link`: наверх, права есть, отмечена. */
   function takeLinkRow(row: RowDto) {
-    rows = addLinkRow(rows, row);
+    rows = withSaved(addLinkRow(rows, row));
     owned = new Map(owned).set(row.track_id, { kind: "yes" });
     setSelected(row.track_id, true);
   }
@@ -1445,6 +1528,7 @@ register("choose", () => {
   }
 
   async function loadPurchases() {
+    purchaseIds = null;
     purchasesLoading = true;
     progress = null;
     if (dto) dto = { ...dto, purchases_error: null };
@@ -1470,13 +1554,18 @@ register("choose", () => {
     try {
       const d = await call<RowsDto>("load_catalog_rows");
       // найденное в истории этим Apple ID раньше — снова на экране (и проверяется вместе со всем)
-      rows = mergeHistoryRows(d.rows, keptHistory(state.history, state.account?.email ?? null));
-    } catch {
-      rows = [];
+      indexHistory(d.history_rows ?? []);
+      indexHistory(keptHistory(state.history, state.account?.email ?? null));
+      rows = withSaved(d.rows);
+    } catch (err) {
+      indexHistory(keptHistory(state.history, state.account?.email ?? null));
+      rows = withSaved([]);
+      dropMsg.textContent = errorText(asUiError(err));
+      dropMsg.hidden = false;
     }
     owned = initialOwned(rows);
     loaded = true;
-    heading.textContent = withPhone && toIphone() ? "Что вернуть на iPhone" : "Что вернуть";
+
     renderPhoneCard();
     renderChips();
     renderList();
@@ -1486,30 +1575,90 @@ register("choose", () => {
     takePending();
   }
 
-  const heading = h("h2", { text: "Что вернуть" });
-  const el = h(
-    "div",
-    { class: "body choose" },
-    h(
-      "div",
-      { class: "choose-top" },
-      h("div", { class: "choose-head" }, heading, h("label", { class: "searchbox" }, searchIcon(), search)),
-      h("div", { class: "hintrow" }, found, findLink, switchId, h("span", { class: "hint search-hint", text: "Ищет везде, включая App Store, и по прежним названиям" })),
-      resumeBanner(),
-      dropMsg,
-    ),
-    h("div", { class: "choose-main" }, list, inspector),
-    h(
-      "div",
-      { class: "selbar" },
+  const iconStatus = h("p", { class: "note", attrs: { role: "status" } });
+  const iconsDialog = homeIconPicker(async (icon: HomeIcon, deviceId) => {
+    closeFind();
+    const revision = ++searchRevision;
+    const show = (term: string) => {
+      query = search.value = term;
+      historyOnly = false;
+      chip = "all";
+      chips.hidden = false;
+      scheduleStore();
+      renderChips();
+      renderList();
+      list.scrollTop = 0;
+    };
+    const local = rows.find((r) => r.bundle_id === icon.bundle_id || r.track_id === deviceId);
+    show(local?.name ?? icon.name);
+    iconStatus.textContent = "";
+    if (local) return;
+    try {
+      const id = deviceId ?? await call<number | null>("lookup_icon", { bundleId: icon.bundle_id });
+      if (!id || left || revision !== searchRevision) return;
+      const known = rows.find((r) => r.track_id === id);
+      if (known) return show(known.name);
+      const row = await call<RowDto>("add_by_link", { link: String(id) });
+      if (left || revision !== searchRevision) return;
+      rows = withSaved(addLinkRow(rows, row));
+      owned.set(id, { kind: "yes" });
+      show(row.name);
+    } catch (e) {
+      if (!left && revision === searchRevision) iconStatus.textContent = errorText(asUiError(e));
+    }
+  });
+  const iconsBtn = h("button", { class: "btn ghost small", text: "Значки с iPhone", on: { click: safe(iconsDialog.open) } });
+  const heading = h("h2", { text: "Приложения" });
+  const searchBox = h("label", { class: "searchbox" }, searchIcon(), search);
+  function selectCollection(saved: boolean) {
+    historyOnly = saved;
+    chip = "all";
+    chips.hidden = saved;
+    limits.clear();
+    list.scrollTop = 0;
+    scheduleStore();
+    renderChips();
+    renderList();
+  }
+  const allTab = h("button", { text: "Все приложения", attrs: { "aria-pressed": "true" }, on: { click: () => selectCollection(false) } });
+  const historyTab = h("button", { text: "Из истории Apple ID", attrs: { "aria-pressed": "false" }, on: { click: () => selectCollection(true) } });
+  const onlyMissing = h("input", { attrs: { type: "checkbox" }, on: { change: () => { limits.clear(); list.scrollTop = 0; renderList(); } } });
+  const compareLabel = h("span");
+  const compare = h("label", { class: "history-compare" }, onlyMissing, compareLabel);
+  compare.hidden = true;
+  const collections = h("div", { class: "collection-nav", attrs: { role: "group", "aria-label": "Источник приложений" } }, allTab, historyTab);
+  const searchTools = h("div", { class: "search-tools" },
+    h("div", { class: "search-entry" }, searchBox, findLink),
+    h("div", { class: "collection-bar" }, collections, compare, found));
+  findMore.insertBefore(h("div", { class: "fm-row" }, h("div", { class: "fm-text" },
+    h("b", { text: "Экран «Домой»" }), h("span", { class: "note", text: "Найдите приложение по значку на подключённом iPhone." })), iconsBtn), linkForm);
+  findMore.append(switchId);
+  const main = h("div", { class: "choose-main" }, list, inspector);
+  const review = h("section", { class: "scroll review-list", attrs: { "aria-label": "Выбранные приложения" } });
+  const reviewBtn = h("button", { class: "btn go", text: "К восстановлению", on: { click: () => setReview(true) } });
+  const back = h("button", { class: "link", text: "Назад", on: { click: () => reviewing ? setReview(false) : !findMore.hidden ? closeFind() : go("phone") } });
+  function setReview(value: boolean) {
+    findMore.hidden = true;
+    reviewing = value;
+    heading.textContent = value ? "К восстановлению" : "Приложения";
+    searchTools.hidden = searchBox.hidden = main.hidden = chips.hidden = iconStatus.hidden = value;
+    chips.hidden = value || historyOnly;
+    review.hidden = !value;
+    back.textContent = value ? "К поиску" : "Назад";
+    renderBar();
+    heading.focus();
+  }
+  const footer = h("div", { class: "selbar" },
       h("div", { class: "selinfo" }, countEl, h("div", { class: "selsub" }, sizeEl, clearBtn)),
-      h("div", { class: "sp" }),
-      h("button", { class: "link", text: "Назад", attrs: { type: "button" }, on: { click: () => go("phone") } }),
-      onlyBtn,
-      startBtn,
-    ),
-    barHint,
-  );
+      h("div", { class: "sp" }), back, reviewBtn, onlyBtn, startBtn);
+  const el = h("div", { class: "body choose" },
+    h("div", { class: "choose-top" },
+      h("div", { class: "choose-head" }, heading),
+      searchTools, iconStatus, resumeBanner(), dropMsg),
+    main, findMore, review, iconsDialog.dialog,
+    footer, barHint);
+  heading.tabIndex = -1;
+  review.hidden = true;
   void load().catch((e) => console.error(e));
   /** Подключили или отключили телефон: выбор источника над группой перерисовать. */
   function onPhones() {
@@ -1538,6 +1687,8 @@ register("choose", () => {
     // Уход с «Выбора» останавливает проверку прав: пустой список отменяет идущую.
     leave: () => {
       left = true;
+      clearTimeout(storeTimer);
+      storeReq++;
       clearTimeout(visibleTimer);
       for (const t of waitTimers.values()) clearInterval(t);
       if (!started) state.choice = { selected: [...selected] };

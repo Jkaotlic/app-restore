@@ -134,6 +134,7 @@ register("accounts", () => {
       return;
     }
     busy = null;
+    if (state.history?.email?.toLowerCase() === a.email.toLowerCase()) state.history = null;
     if (res.signed_out) {
       resetForAccount(res.dropped);
       state.account = null;

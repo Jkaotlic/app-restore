@@ -121,7 +121,7 @@ async fn fetch_catalog_with(fetch: &dyn Fetch, cache_path: &Path, timeout: Durat
             let _ = tokio::fs::create_dir_all(dir).await;
         }
         let _ = tokio::fs::write(cache_path, &body).await;
-        return apps;
+        return with_bundled(apps, fallback);
     }
     cached_or_bundled(cache_path, fallback).await
 }
@@ -139,15 +139,27 @@ async fn cached_or_bundled(cache_path: &Path, fallback: Vec<RemovedApp>) -> Vec<
 /// Годный кэш, дополненный записями `fallback`; без кэша — `Err(fallback)`.
 async fn from_cache(cache_path: &Path, fallback: Vec<RemovedApp>) -> Result<Vec<RemovedApp>, Vec<RemovedApp>> {
     if let Ok(cached) = tokio::fs::read_to_string(cache_path).await
-        && let Some(mut apps) = accept(&cached, fallback.len())
+        && let Some(apps) = accept(&cached, fallback.len())
     {
-        // кэш главнее по полям, но записи, которые есть только во вшитой копии (её могла
-        // дополнить новая версия программы), не теряем
-        let known: std::collections::HashSet<i64> = apps.iter().map(|a| a.track_id).collect();
-        apps.extend(fallback.into_iter().filter(|a| !known.contains(&a.track_id)));
-        return Ok(apps);
+        return Ok(with_bundled(apps, fallback));
     }
     Err(fallback)
+}
+
+fn with_bundled(mut apps: Vec<RemovedApp>, fallback: Vec<RemovedApp>) -> Vec<RemovedApp> {
+    let positions: std::collections::HashMap<_, _> = apps.iter().enumerate().map(|(i, a)| (a.track_id, i)).collect();
+    for entry in fallback {
+        if let Some(&index) = positions.get(&entry.track_id) {
+            for alias in entry.aliases {
+                if !apps[index].aliases.contains(&alias) {
+                    apps[index].aliases.push(alias);
+                }
+            }
+        } else {
+            apps.push(entry);
+        }
+    }
+    apps
 }
 
 /// Каталог, вшитый в бинарник. Файл проверяется тестами, поэтому паника здесь невозможна.
@@ -312,7 +324,7 @@ mod tests {
         let n = bundled().len();
         let f = FakeFetch::new(Mode::Body(catalog_of(n)));
         let got = fetch_catalog(&f, &cache_in(&dir)).await;
-        assert_eq!(got.len(), n);
+        assert_eq!(got.len(), 2 * n);
         assert_eq!(got[0].track_id, 1_000_001);
         assert_eq!(f.calls.lock().unwrap().as_slice(), [CATALOG_URL]);
         assert!(cache_in(&dir).exists());
@@ -344,7 +356,7 @@ mod tests {
         let min = (n * 4).div_ceil(5);
         let dir = tempfile::tempdir().unwrap();
         let f = FakeFetch::new(Mode::Body(catalog_of(min)));
-        assert_eq!(fetch_catalog(&f, &cache_in(&dir)).await.len(), min);
+        assert_eq!(fetch_catalog(&f, &cache_in(&dir)).await.len(), min + n);
     }
 
     #[tokio::test]

@@ -44,10 +44,10 @@ export function isFinished(s: JobDto, downloadOnly = false): boolean {
 }
 
 /** Строка на экране «Готово». С другим Apple ID говорим, в какой ID войти при первом запуске. */
-export function doneText(s: JobDto, fromSaved: string | null, sameAppleId: boolean | null, email: string | null, downloadOnly = false, left?: number): string {
+export function doneText(s: JobDto, fromSaved: string | null, sameAppleId: boolean | null, _email: string | null, downloadOnly = false, left?: number): string {
   const base = jobView(s, fromSaved, downloadOnly, left).text;
   if (s.kind !== "installed" || sameAppleId !== false) return base;
-  return `${base}. При первом запуске войдите в ${email ?? "Apple ID, с которого скачивали"}`;
+  return `${base}. Если iPhone просит чужой Apple ID, отмените запрос.`;
 }
 
 export function phoneView(p: PhoneDto): { title: string; subtitle: string; isIpad: boolean } {
@@ -71,9 +71,8 @@ export function chooserNote(phones: PhoneDto[]): string | null {
 }
 
 /** Ответ «Нет, другой» на вопрос про Apple ID. */
-export function otherIdText(email: string | null): string {
-  const id = email ? `Apple ID ${email}` : "Apple ID, с которого скачивали";
-  return `Приложения установятся. При первом запуске iPhone попросит войти в ${id}. Обновлений через App Store у них не будет — их там больше нет.`;
+export function otherIdText(_email: string | null): string {
+  return "Можно перенести копию на этот iPhone. Если при запуске он запросит пароль или код покупателя, отмените запрос.";
 }
 
 /** «Дальше» на шаге iPhone: устройство выбрано и на вопрос ответили. */
@@ -100,13 +99,12 @@ export function askAppleIdOnDone(withPhone: boolean, sameAppleId: boolean | null
 export type AccountBlock = { kind: "none" } | { kind: "question" } | { kind: "different"; text: string };
 
 /** `m` — итог `phone_account`; null — ещё не проверяли. `program` — Apple ID в программе. */
-export function accountBlock(m: AccountMatchDto | null, program: string | null): AccountBlock {
+export function accountBlock(m: AccountMatchDto | null, _program: string | null): AccountBlock {
   if (m?.kind === "same") return { kind: "none" };
   if (m?.kind === "different") {
-    const id = program ?? "ваш Apple ID";
     return {
       kind: "different",
-      text: `На этом iPhone покупки с ${m.phone_masked}. Приложения с вашего Apple ID при запуске попросят войти в ${id}.`,
+      text: `Среди приложений на телефоне есть покупки с ${m.phone_masked}. Можно продолжить перенос с текущим аккаунтом AppRestore.`,
     };
   }
   return { kind: "question" };

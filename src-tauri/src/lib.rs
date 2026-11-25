@@ -63,7 +63,7 @@ pub fn run() {
         })
         // файлы, перетащенные в окно: пути приходят сюда, интерфейсу доступ к ним не нужен
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+            if window.label() == "main" && let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 commands::on_drop(window.app_handle(), paths.clone());
             }
         })
@@ -77,6 +77,8 @@ pub fn run() {
             commands::load_catalog_rows,
             commands::load_purchases,
             commands::installed_apps,
+            commands::home_screen_apps,
+            commands::lookup_icon,
             commands::phone_account,
             commands::switch_account,
             commands::clear_installed,

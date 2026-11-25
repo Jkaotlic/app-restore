@@ -246,7 +246,7 @@ function accountBox(onChange: () => void): { el: HTMLElement; render(): void; ch
     } else {
       const mine = h("button", {
         class: "btn ghost small",
-        text: "Поставить с моего Apple ID",
+        text: "Перенести с моего Apple ID",
         attrs: { type: "button", "aria-pressed": state.sameAppleId === false ? "true" : "false" },
         on: {
           click: () => {
@@ -258,7 +258,7 @@ function accountBox(onChange: () => void): { el: HTMLElement; render(): void; ch
       });
       const login = h("button", {
         class: "btn small",
-        text: "Войти в Apple ID этого iPhone",
+        text: "Сменить аккаунт в AppRestore",
         attrs: { type: "button" },
         on: {
           click: safe(async () => {

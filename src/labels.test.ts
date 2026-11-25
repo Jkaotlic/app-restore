@@ -61,16 +61,16 @@ describe("doneText", () => {
     expect(doneText({ kind: "installed" }, null, true, email)).toBe("Установлено");
   });
   it("other Apple ID: says which ID to sign in to", () => {
-    expect(doneText({ kind: "installed" }, null, false, email)).toBe(`Установлено. При первом запуске войдите в ${email}`);
+    expect(doneText({ kind: "installed" }, null, false, email)).toBe(`Установлено. Если iPhone просит чужой Apple ID, отмените запрос.`);
   });
   it("other Apple ID without a known email", () => {
     expect(doneText({ kind: "installed" }, null, false, null)).toBe(
-      "Установлено. При первом запуске войдите в Apple ID, с которого скачивали",
+      "Установлено. Если iPhone просит чужой Apple ID, отмените запрос.",
     );
   });
   it("saved copy keeps its version", () => {
     expect(doneText({ kind: "installed" }, "9.1", false, email)).toBe(
-      `Поставлена сохранённая копия 9.1. При первом запуске войдите в ${email}`,
+      `Поставлена сохранённая копия 9.1. Если iPhone просит чужой Apple ID, отмените запрос.`,
     );
   });
   it("Apple ID not answered yet: neutral «Установлено», no hint", () => {
@@ -124,10 +124,10 @@ describe("chooserNote", () => {
 describe("otherIdText", () => {
   it("with the email and without it, no stray space before the comma", () => {
     expect(otherIdText("friend@users.noreply.github.com")).toBe(
-      "Приложения установятся. При первом запуске iPhone попросит войти в Apple ID friend@users.noreply.github.com. Обновлений через App Store у них не будет — их там больше нет.",
+      "Можно перенести копию на этот iPhone. Если при запуске он запросит пароль или код покупателя, отмените запрос.",
     );
     const t = otherIdText(null);
-    expect(t).toContain("войти в Apple ID, с которого скачивали.");
+    expect(t).toContain("отмените запрос.");
     expect(t).not.toContain(" ,");
   });
 });
@@ -178,11 +178,11 @@ describe("accountBlock", () => {
   it("different: warning with masked phone account and the program account", () => {
     expect(accountBlock({ kind: "different", phone_masked: "ow***@example.com" }, "me@example.com")).toEqual({
       kind: "different",
-      text: "На этом iPhone покупки с ow***@example.com. Приложения с вашего Apple ID при запуске попросят войти в me@example.com.",
+      text: "Среди приложений на телефоне есть покупки с ow***@example.com. Можно продолжить перенос с текущим аккаунтом AppRestore.",
     });
     expect(accountBlock({ kind: "different", phone_masked: "ow***@example.com" }, null)).toEqual({
       kind: "different",
-      text: "На этом iPhone покупки с ow***@example.com. Приложения с вашего Apple ID при запуске попросят войти в ваш Apple ID.",
+      text: "Среди приложений на телефоне есть покупки с ow***@example.com. Можно продолжить перенос с текущим аккаунтом AppRestore.",
     });
   });
   it("unknown or not checked yet: the old question", () => {

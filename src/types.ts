@@ -25,6 +25,7 @@ export interface HistoryProgress {
 
 /** Событие `history`: окно закрыто; `rows` — новые строки «Из истории покупок». */
 export interface HistoryOutcome {
+  email: string | null;
   rows: RowDto[];
   found: number;
   error: string | null;
@@ -101,6 +102,8 @@ export interface FoundVersionDto {
 export type InstallState = "not_installed" | "installed" | "update_available" | "unknown";
 
 export interface RowsDto {
+  history_rows?: RowDto[];
+  purchase_ids?: number[] | null;
   rows: RowDto[];
   ru_check_failed: boolean;
   purchases_error: UiError | null;

@@ -3,7 +3,7 @@ import { idsToCheck, initialOwned, pendingChecks, type OwnedMap } from "./rows";
 import type { RowDto } from "./types";
 
 /** Подсказка под группой «Из истории покупок». */
-export const HISTORY_HINT = "Скрыто или пропало из списка покупок. Скачать можно, если Apple ещё отдаёт приложение";
+export const HISTORY_HINT = "Найдено в истории этого Apple ID. Доступность скачивания проверяется отдельно.";
 
 function apps(n: number): string {
   const d = n % 10;
@@ -17,7 +17,7 @@ function apps(n: number): string {
 export const HISTORY_STEPS = [
   "Войдите своим Apple ID на странице Apple",
   "Пролистайте список покупок вниз до самого конца — так Apple подгружает все приложения",
-  "Окно закроется само. Найденное появится здесь и запомнится — второй раз входить не нужно",
+  "Когда появится «Готово», закройте окно Apple. Найденное сохранится и появится в поиске",
 ];
 
 /** Пока окно открыто: до первой пачки ждём входа. */
@@ -34,8 +34,19 @@ export function historyResultText(found: number, fresh: number): string {
 
 /** Новые строки истории в конец; то, что уже на экране, второй раз не добавляется. */
 export function mergeHistoryRows(rows: RowDto[], incoming: RowDto[]): RowDto[] {
-  const ids = new Set(rows.map((r) => r.track_id));
-  return [...rows, ...incoming.filter((r) => !ids.has(r.track_id) && ids.add(r.track_id))];
+  const history = new Map(incoming.map(r => [r.track_id, r]));
+  const merged = rows.map(row => {
+    const saved = history.get(row.track_id);
+    if (!saved) return row;
+    history.delete(row.track_id);
+    // Результат сетевого поиска исчезает при смене запроса. Запись из истории остаётся.
+    if (row.source === "store") return { ...saved, bundle_id: row.bundle_id || saved.bundle_id, aliases: [...new Set([...saved.aliases, row.name])] };
+    const name = row.source === "history" && saved.name !== `Приложение ${row.track_id}` ? saved.name : row.name;
+    const aliases = [...new Set([...row.aliases, ...saved.aliases, row.name, saved.name])].filter(alias => alias !== name);
+    return name === row.name && aliases.length === row.aliases.length && aliases.every((alias, i) => alias === row.aliases[i])
+      ? row : { ...row, name, aliases };
+  });
+  return [...merged, ...history.values()];
 }
 
 /** Итог истории на «Выборе»: строки после слияния, реально добавленные (для «новых N») и что

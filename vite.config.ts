@@ -6,7 +6,7 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(() => ({
   // vitest: тесты только этого дерева, не копий в .claude/worktrees
-  test: { exclude: ["**/node_modules/**", "**/.claude/**", "**/dist/**"] },
+  test: { exclude: ["**/node_modules/**", "**/.claude/**", "**/.worktrees/**", "**/dist/**"] },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

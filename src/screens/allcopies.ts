@@ -176,7 +176,7 @@ register("copies", () => {
       return;
     }
     if (!copies.length) {
-      list.replaceChildren(h("p", { class: "empty", text: "Копий пока нет" }));
+      list.replaceChildren(h("p", { class: "empty", text: "Копий пока нет. Если вы сохраняли их раньше, перетащите файлы .ipa из папки «Документы/Мои приложения» в это окно." }));
       return;
     }
     const groups = groupCopies(copies, query);

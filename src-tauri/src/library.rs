@@ -418,6 +418,21 @@ fn info_plist(ipa: &Path) -> Result<plist::Dictionary, String> {
     info_from_zip(&mut zip)
 }
 
+/// Positive evidence for a single 32-bit ARM Mach-O executable. Other formats are left to iOS.
+pub fn thin_arm32(ipa: &Path) -> Option<bool> {
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(ipa).ok()?).ok()?;
+    let info = info_from_zip(&mut zip).ok()?;
+    let exe = info.get("CFBundleExecutable")?.as_string()?;
+    if exe.contains('/') { return None; }
+    let path = zip.file_names().flatten().find_map(|n| {
+        let mut parts = n.split('/');
+        (parts.next()? == "Payload" && parts.next()?.ends_with(".app") && parts.next()? == exe && parts.next().is_none()).then(|| n.into_owned())
+    })?;
+    let mut header = [0u8; 16];
+    zip.by_name(&path).ok()?.read_exact(&mut header).ok()?;
+    Some(header[..8] == [0xce, 0xfa, 0xed, 0xfe, 12, 0, 0, 0] && header[12..] == [2, 0, 0, 0])
+}
+
 /// Приложение iPhone: zip, в котором есть что-то внутри `Payload/<имя>.app/`.
 fn is_ipa_zip(path: &Path) -> bool {
     let Ok(f) = std::fs::File::open(path) else { return false };
@@ -608,11 +623,6 @@ impl Library {
         let f = read_device_family(path);
         self.families.lock().unwrap().insert(path.to_path_buf(), (mtime, f.clone()));
         f
-    }
-
-    /// `~/Documents/Мои приложения` (на Mac и Windows через `dirs::document_dir`).
-    pub fn default_root() -> Option<PathBuf> {
-        dirs::document_dir().map(|d| d.join("Мои приложения"))
     }
 
     /// Копии текущего аккаунта; без входа — пусто.

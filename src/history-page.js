@@ -16,7 +16,9 @@
 
   function isSearchUrl(url) {
     try {
-      var path = new URL(String(url), "https://reportaproblem.apple.com/").pathname.replace(/\/+$/, "");
+      var parsed = new URL(String(url), "https://reportaproblem.apple.com/");
+      if (parsed.origin !== "https://reportaproblem.apple.com") return false;
+      var path = parsed.pathname.replace(/\/+$/, "");
       return path.slice(-PATH.length) === PATH;
     } catch (e) {
       return false;
@@ -78,7 +80,7 @@
 
   /** Текст плашки. Просьба листать верна и тогда, когда скрипт догружает пачки сам. */
   function bannerText(found, phase) {
-    if (phase === "done") return "Готово, найдено " + found + ". Возвращаемся в программу…";
+    if (phase === "done") return "Готово, найдено " + found + ". Закройте окно, чтобы вернуться к списку.";
     if (phase === "error") return "Дальше история не загрузилась, найдено " + found + ". Возвращаемся в программу…";
     return "Войдите и пролистайте список покупок вниз до конца — так подгрузятся все приложения. Найдено: " + found;
   }
@@ -108,8 +110,8 @@
         }
       }
       var packs = packed(items);
-      for (var j = 0; j < packs.length; j++) await send(packs[j], done && j === packs.length - 1, j === packs.length - 1 ? error : null);
       show(bannerText(found, error ? "error" : done ? "done" : "wait"));
+      for (var j = 0; j < packs.length; j++) await send(packs[j], done && j === packs.length - 1, j === packs.length - 1 ? error : null);
     };
   }
 
@@ -174,6 +176,10 @@
     /** Первый ответ страницы (без batchId): дальше догружаем сами теми же заголовками. */
     function begin(url, method, headers, bodyText, json) {
       if (started) return;
+      if (!json || !Array.isArray(json.purchases)) {
+        show("Ожидаем историю покупок. Завершите вход в Apple или обновите страницу.");
+        return;
+      }
       var pageBody = {};
       try {
         pageBody = JSON.parse(bodyText || "{}") || {};
@@ -189,12 +195,12 @@
         });
       };
       crawl(json, pageBody, fetchPage, send, sleep).catch(function () {
-        send([], true, "http").catch(function () {});
-      });
+        return send([], true, "http").catch(function () {});
+      }).finally(function () { started = false; });
     }
 
     w.fetch = function (input, init) {
-      var p = origFetch(input, init);
+      var observe;
       try {
         var url = typeof input === "string" ? input : input && input.url ? input.url : String(input);
         if (isSearchUrl(url)) {
@@ -202,13 +208,17 @@
           var headers = new Headers((init && init.headers) || (isReq ? input.headers : undefined));
           var method = (init && init.method) || (isReq ? input.method : "POST");
           var bodyP = init && typeof init.body === "string" ? Promise.resolve(init.body) : isReq ? input.clone().text() : Promise.resolve("");
-          Promise.all([bodyP, p.then(function (r) { return r.clone().json(); })])
-            .then(function (v) { begin(url, method, headers, v[0], v[1]); })
-            .catch(function () {});
+          observe = function (p) {
+            Promise.all([bodyP, p.then(function (r) { return r.ok ? r.clone().json() : null; })])
+              .then(function (v) { begin(url, method, headers, v[0], v[1]); })
+              .catch(function () {});
+          };
         }
       } catch (e) {
         // страница работает как обычно
       }
+      var p = origFetch(input, init);
+      if (observe) observe(p);
       return p;
     };
 
@@ -237,6 +247,7 @@
         var xhr = this;
         xhr.addEventListener("load", function () {
           try {
+            if (xhr.status < 200 || xhr.status >= 300) return;
             var json = xhr.responseType === "json" ? xhr.response : JSON.parse(xhr.responseText);
             begin(meta.url, meta.method, meta.headers, typeof body === "string" ? body : "", json);
           } catch (e) {

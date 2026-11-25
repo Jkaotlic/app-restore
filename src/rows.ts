@@ -52,7 +52,17 @@ export function matchesQuery(name: string, query: string): boolean {
 }
 
 /** Поиск по имени и по любому другому названию записи каталога. */
+export function searchId(query: string): string | null {
+  const term = query.trim();
+  const number = /^(?:id)?([1-9]\d{5,11})$/i.exec(term);
+  if (number) return number[1];
+  return /^(?:(?:https?|itms-appss?):\/\/)?(?:apps|itunes)\.apple\.com\/(?:[a-z]{2}\/)?app\/(?:[^/?#]+\/)?id([1-9]\d{5,11})\/?(?:[?#].*)?$/i.exec(term)?.[1] ?? null;
+}
+
 export function matchesRow(r: RowDto, query: string): boolean {
+  const id = searchId(query);
+  if (id) return String(r.track_id) === id;
+  if (r.bundle_id && r.bundle_id.toLowerCase() === query.trim().toLowerCase()) return true;
   return matchesQuery(r.name, query) || r.aliases.some((a) => matchesQuery(a, query));
 }
 
@@ -175,7 +185,7 @@ export function groupPick(rows: RowDto[], selectable: (r: RowDto) => boolean, se
 }
 
 export function emptySearchText(query: string): string {
-  return `Ничего не нашлось по «${query.trim()}». Попробуйте другое название или вставьте ссылку из App Store ниже.`;
+  return `Ничего не нашлось по «${query.trim()}». Попробуйте другое название или проверьте историю покупок.`;
 }
 
 const MB = 1024 * 1024;

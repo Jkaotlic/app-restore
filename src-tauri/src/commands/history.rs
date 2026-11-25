@@ -6,10 +6,10 @@
 //! (`incognito`: nonPersistent на macOS), закрыли окно — сессии сайта нет.
 //!
 //! События (только главному окну): `history_progress` {found}, `history` {rows, found, error}.
-//! Окно ходит только на https *.apple.com; всплывающих окон не открывает (ссылка Apple — в нём же).
+//! Окно ходит только на https *.apple.com; окно авторизации использует ту же проверку переходов.
 use super::AppState;
 use super::logic::{RowDto, UiError, history_row};
-use crate::history::{Collected, PageBatch, Problem, allowed_navigation, allowed_url, fresh, timed_out};
+use crate::history::{Collected, PageBatch, Problem, allowed_navigation, fresh, timed_out};
 use serde::Serialize;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -17,14 +17,11 @@ use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Webview};
 
 pub const LABEL: &str = "history";
+const AUTH_LABEL: &str = "history-auth";
 const URL: &str = "https://reportaproblem.apple.com/";
 const SCRIPT: &str = include_str!("../../../src/history-page.js");
 /// События истории — только сюда, не в окно Apple.
 const MAIN: &str = "main";
-/// Сколько видна плашка «Готово, найдено N. Возвращаемся в программу…» перед закрытием окна:
-/// за полторы секунды её не успевали прочесть, и закрытие выглядело как падение.
-const DONE_PAUSE: Duration = Duration::from_secs(3);
-
 struct Run {
     round: u64,
     /// Apple ID, при котором окно открыли: найденное запоминается только за ним.
@@ -32,6 +29,7 @@ struct Run {
     collected: Collected,
     opened: Instant,
     last_batch: Option<Instant>,
+    ready: bool,
 }
 
 /// Идущий заход (`None` — окна нет или итог уже отдан).
@@ -48,6 +46,7 @@ struct Progress {
 
 #[derive(Clone, Serialize)]
 struct Outcome {
+    email: Option<String>,
     rows: Vec<RowDto>,
     /// Сколько разных приложений iPhone нашлось в истории (и уже известных тоже).
     found: usize,
@@ -57,18 +56,22 @@ struct Outcome {
 /// Открыть окно истории (или показать уже открытое).
 #[tauri::command]
 pub async fn open_history(app: AppHandle) -> Result<(), UiError> {
-    if let Some(w) = app.get_webview_window(LABEL) {
+    if let Some(w) = app.get_webview_window(AUTH_LABEL).or_else(|| app.get_webview_window(LABEL)) {
         let _ = w.set_focus();
         return Ok(());
     }
     let hr = app.state::<HistoryRun>();
+    let email = app.state::<AppState>().current_email();
     let round = {
+        let mut run = hr.run.lock().unwrap();
+        if run.is_some() {
+            return Ok(());
+        }
         let mut g = hr.round.lock().unwrap();
         *g += 1;
+        *run = Some(Run { round: *g, email, collected: Collected::default(), opened: Instant::now(), last_batch: None, ready: false });
         *g
     };
-    let email = app.state::<AppState>().current_email();
-    *hr.run.lock().unwrap() = Some(Run { round, email, collected: Collected::default(), opened: Instant::now(), last_batch: None });
     // хранилище окна не сохраняется (nonPersistent на macOS): закрыли — сессии сайта нет
     let built = URL.parse().map_err(|e| format!("{e}")).and_then(|url| {
         WebviewWindowBuilder::new(&app, LABEL, WebviewUrl::External(url))
@@ -84,20 +87,24 @@ pub async fn open_history(app: AppHandle) -> Result<(), UiError> {
                 }
                 ok
             })
-            // всплывающих окон нет: окно платформы обошло бы on_navigation; ссылку Apple открываем здесь же,
-            // переход снова проходит on_navigation — одна точка фильтра
+            // У входа свой window.opener: страница входа может закрыть своё окно после авторизации.
             .on_new_window({
                 let app = app.clone();
-                move |url, _| {
-                    if allowed_url(&url) {
-                        let app = app.clone();
-                        tauri::async_runtime::spawn(async move {
-                            if let Some(w) = app.get_webview_window(LABEL) {
-                                let _ = w.navigate(url);
-                            }
-                        });
+                move |url, features| {
+                    if !allowed_navigation(&url) {
+                        return NewWindowResponse::Deny;
                     }
-                    NewWindowResponse::Deny
+                    let child = WebviewWindowBuilder::new(&app, AUTH_LABEL, WebviewUrl::External("about:blank".parse().unwrap()))
+                        .window_features(features)
+                        .title("Вход в Apple ID")
+                        .incognito(true)
+                        .on_navigation(allowed_navigation)
+                        .on_new_window(|_, _| NewWindowResponse::Deny)
+                        .build();
+                    match child {
+                        Ok(window) => NewWindowResponse::Create { window },
+                        Err(_) => NewWindowResponse::Deny,
+                    }
                 }
             })
             .build()
@@ -128,6 +135,7 @@ pub async fn open_history(app: AppHandle) -> Result<(), UiError> {
                 let hr = h.state::<HistoryRun>();
                 let run = hr.run.lock().unwrap();
                 match run.as_ref() {
+                    Some(r) if r.round == round && r.ready => None,
                     Some(r) if r.round == round => timed_out(r.opened.elapsed(), r.last_batch.map(|t| t.elapsed())),
                     _ => return,
                 }
@@ -152,6 +160,7 @@ pub async fn items(app: AppHandle, webview: Webview, items: PageBatch, done: boo
     let (round, found, full, over) = {
         let mut run = hr.run.lock().unwrap();
         let Some(r) = run.as_mut() else { return Ok(()) };
+        r.ready = done && error.is_none();
         r.collected.add(items.0);
         r.last_batch = Some(Instant::now());
         (r.round, r.collected.items.len(), r.collected.full(), r.collected.over_limit())
@@ -159,7 +168,7 @@ pub async fn items(app: AppHandle, webview: Webview, items: PageBatch, done: boo
     let _ = app.emit_to(MAIN, "history_progress", Progress { found });
     let problem = error.as_deref().map(Problem::from_page);
     // пачек сверх MAX_BATCHES не читаем — и окно не держим открытым пустыми вызовами
-    if done || full || over || problem.is_some() {
+    if full || over || problem.is_some() {
         finish(&app, round, problem).await;
     }
     Ok(())
@@ -175,11 +184,12 @@ async fn finish(app: &AppHandle, round: u64, problem: Option<Problem>) {
         }
         run.take().unwrap()
     };
-    if let Some(w) = app.get_webview_window(LABEL) {
-        // человек сам закрыл окно — ждать нечего; иначе дать прочесть «Готово, найдено N»
-        if problem != Some(Problem::Closed) {
-            tokio::time::sleep(DONE_PAUSE).await;
-        }
+    if let Some(auth) = app.get_webview_window(AUTH_LABEL) {
+        let _ = auth.close();
+    }
+    let user_closed = problem == Some(Problem::Closed);
+    let problem = if user_closed && run.ready { None } else { problem };
+    if !user_closed && let Some(w) = app.get_webview_window(LABEL) {
         let _ = w.close();
     }
     // итог — в главном окне: оно выходит вперёд, а не остаётся за другими программами
@@ -201,6 +211,6 @@ async fn finish(app: &AppHandle, round: u64, problem: Option<Problem>) {
     }
     // в журнал — только счётчики и вид ошибки, без названий и номеров
     crate::log::write("history", &format!("найдено {found}, новых {}, итог {problem:?}", new.len()));
-    let rows = st.with_ctx(|ctx| new.iter().map(|f| history_row(f, ctx)).collect()).await;
-    let _ = app.emit_to(MAIN, "history", Outcome { rows, found, error: problem.map(|p| p.text(found)) });
+    let rows = st.with_ctx(|ctx| run.collected.items.iter().map(|f| history_row(f, ctx)).collect()).await;
+    let _ = app.emit_to(MAIN, "history", Outcome { email: run.email, rows, found, error: problem.map(|p| p.text(found)) });
 }

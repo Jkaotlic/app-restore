@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import script from "./history-page.js?raw";
 import fixture from "../src-tauri/tests/fixtures/rap/purchase-search.json";
 
@@ -43,6 +43,30 @@ describe("history page script", () => {
     const f = root.fetch;
     new Function("globalThis", script)(root);
     expect(root.fetch).toBe(f);
+  });
+
+  it("keeps waiting through sign-in responses and forwards the first purchase page", async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined);
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(Response.json({ error: "signin" }, { status: 401 }))
+      .mockResolvedValueOnce(Response.json({ status: "signin" }))
+      .mockResolvedValueOnce(Response.json(page(["1234567"], null)));
+    const root = {
+      location: { hostname: "reportaproblem.apple.com" }, fetch, document: {},
+      addEventListener: () => {}, __TAURI_INTERNALS__: { invoke }, get top() { return this; },
+    };
+    new Function("globalThis", "setInterval", script)(root, () => {});
+    for (let i = 0; i < 3; i++) {
+      await root.fetch("/api/purchase/search");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(1));
+    expect(invoke.mock.calls[0][1]).toMatchObject({ items: [{ adamId: "1234567" }], done: true, error: null });
+    fetch.mockResolvedValueOnce(Response.json(page(["2345678"], null)));
+    await root.fetch("/api/purchase/search");
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    expect(invoke.mock.calls[1][1]).toMatchObject({ items: [{ adamId: "2345678" }], done: true });
+    expect(fetch).toHaveBeenCalledTimes(4);
   });
 
   it("extracts only iPhone apps from the synthetic fixture", () => {
@@ -122,7 +146,7 @@ describe("history page script", () => {
     const api = load();
     expect(api.bannerText(0, "wait")).toBe("Войдите и пролистайте список покупок вниз до конца — так подгрузятся все приложения. Найдено: 0");
     expect(api.bannerText(312, "wait")).toBe("Войдите и пролистайте список покупок вниз до конца — так подгрузятся все приложения. Найдено: 312");
-    expect(api.bannerText(1222, "done")).toBe("Готово, найдено 1222. Возвращаемся в программу…");
+    expect(api.bannerText(1222, "done")).toBe("Готово, найдено 1222. Закройте окно, чтобы вернуться к списку.");
     expect(api.bannerText(5, "error")).toBe("Дальше история не загрузилась, найдено 5. Возвращаемся в программу…");
   });
 

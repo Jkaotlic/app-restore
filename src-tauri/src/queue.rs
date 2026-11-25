@@ -121,7 +121,11 @@ async fn run_install(
     // Минимальная iOS из Info.plist копии — до телефона: иначе непонятный отказ installation_proxy.
     if ios.is_some() {
         let p = path.to_path_buf();
-        let need = tokio::task::spawn_blocking(move || crate::library::read_min_os(&p)).await.ok().flatten();
+        let modern = ios.as_deref().and_then(|v| v.split('.').next()?.parse::<u32>().ok()).is_some_and(|v| v >= 11);
+        let (need, arm32) = tokio::task::spawn_blocking(move || (crate::library::read_min_os(&p), modern && crate::library::thin_arm32(&p) == Some(true))).await.unwrap_or_default();
+        if arm32 {
+            return failed(AppError::DeviceRejected { reason: "Эта копия содержит только 32-битное приложение. Для iOS 11 и новее нужна 64-битная версия.".into() });
+        }
         if let Err(e) = crate::ios_compat::check(need.as_deref(), ios.as_deref()) {
             return failed(e);
         }
