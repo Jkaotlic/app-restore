@@ -2,14 +2,22 @@ name: build
 
 on:
   push:
+    branches: [main]
+    paths: ["src-tauri/tauri.conf.json", ".github/workflows/build.yml"]
     tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: build-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   macos:
+    permissions:
+      contents: write
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,15 +80,38 @@ jobs:
           name: macos-dmg
           path: ${{ steps.dmg.outputs.path }}
 
-      - name: Draft release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish verified macOS release
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          DMG: ${{ steps.dmg.outputs.path }}
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --draft --title "$TAG" --notes "Сборка $TAG. Описание добавляется перед публикацией."
-          gh release upload "$TAG" "${{ steps.dmg.outputs.path }}" --clobber
+          set -euo pipefail
+          tag="v$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "$tag" ]]; then
+            echo "Tag and application version differ" >&2
+            exit 1
+          fi
+          if gh release view "$tag" --json isDraft > "$RUNNER_TEMP/release.json"; then
+            if jq -e '.isDraft == false' "$RUNNER_TEMP/release.json" >/dev/null; then
+              echo "$tag already published"
+              exit 0
+            fi
+          fi
+          if git ls-remote --exit-code origin "refs/tags/$tag" >/dev/null; then
+            git fetch --no-tags origin "refs/tags/$tag"
+            test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$GITHUB_SHA"
+          else
+            status=$?
+            [[ "$status" == 2 ]] || exit "$status"
+            git tag "$tag" "$GITHUB_SHA"
+            git push origin "refs/tags/$tag"
+          fi
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --verify-tag --draft --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" "$DMG" --clobber
+          gh release edit "$tag" --draft=false
 
   # Windows build is a compile/bundle check only until majd/ipatool#637 is fixed; never released
   windows:
